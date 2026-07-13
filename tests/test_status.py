@@ -1,26 +1,21 @@
-from netdnsmonitor.status import build_title, next_status
+from netdnsmonitor.status import build_title
 
 
-def test_next_status_unchanged_when_no_report():
-    assert next_status("healthy", None) == "healthy"
-    assert next_status("degraded", None) == "degraded"
+def test_healthy_state_shows_healthy_regardless_of_past_classification():
+    assert "healthy" in build_title("healthy", None).lower()
+    assert "healthy" in build_title("healthy", "dns").lower()
 
 
-def test_next_status_healthy_when_report_resolved():
-    assert next_status("degraded", {"resolved": True, "classification": "dns"}) == "healthy"
+def test_healthy_state_never_mentions_issue():
+    assert "issue" not in build_title("healthy", "dns").lower()
 
 
-def test_next_status_degraded_when_report_unresolved():
-    assert next_status("healthy", {"resolved": False, "classification": "network"}) == "degraded"
-
-
-def test_build_title_healthy_has_no_classification():
-    title = build_title("healthy", None)
-    assert "healthy" in title.lower()
-    assert "issue" not in title.lower()
-
-
-def test_build_title_degraded_includes_classification():
-    report = {"resolved": False, "classification": "dns"}
-    title = build_title("degraded", report)
+def test_incident_state_includes_last_classification():
+    title = build_title("incident", "dns")
     assert "dns" in title.lower()
+    assert "issue" in title.lower()
+
+
+def test_incident_state_with_no_classification_yet_says_unknown():
+    title = build_title("incident", None)
+    assert "unknown" in title.lower()

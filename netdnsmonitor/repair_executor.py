@@ -40,7 +40,14 @@ def make_repair_executor(
             return f"failed: {flush.stderr.strip()}"
         hup = run(["killall", "-HUP", "mDNSResponder"])
         if hup.returncode != 0:
-            return f"failed: {hup.stderr.strip()}"
+            # dscacheutil succeeds unprivileged, but mDNSResponder is owned by
+            # another user (root/_mdnsresponder) -- signaling it without
+            # elevated privilege reliably fails. Report what actually
+            # happened rather than a blanket failure.
+            return (
+                "partial: dscacheutil cache flushed, but mDNSResponder HUP "
+                f"failed ({hup.stderr.strip()}) -- likely requires elevated privilege"
+            )
         return "ok"
 
     def needs_privilege_stub(step_name: str) -> str:

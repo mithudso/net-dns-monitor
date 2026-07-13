@@ -15,7 +15,7 @@ from netdnsmonitor.prober import make_prober
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.state_machine import StateMachine
-from netdnsmonitor.status import build_title, next_status
+from netdnsmonitor.status import build_title
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 
@@ -55,7 +55,7 @@ class NetDnsMonitorApp(rumps.App):
         super().__init__(name="net-dns-monitor", title="Net/DNS: starting...")
         self.config = load_config(config_path)
         self.state_machine = build_state_machine(self.config)
-        self.status = "healthy"
+        self.last_classification = None
         self.last_report_path = None
         self.menu = ["Open last report"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
@@ -66,8 +66,8 @@ class NetDnsMonitorApp(rumps.App):
         if report is not None:
             paths = save_report(report, self.config["reports_dir"])
             self.last_report_path = paths["markdown_path"]
-        self.status = next_status(self.status, report)
-        self.title = build_title(self.status, report)
+            self.last_classification = report["classification"]
+        self.title = build_title(self.state_machine.flap_gate.state, self.last_classification)
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

@@ -31,6 +31,23 @@ def test_flush_dns_cache_reports_failure_on_nonzero_returncode():
     assert "permission denied" in outcome
 
 
+def test_flush_dns_cache_reports_partial_when_only_hup_lacks_privilege():
+    # Empirically confirmed: dscacheutil -flushcache succeeds unprivileged, but
+    # killall -HUP mDNSResponder can't signal a daemon owned by another user.
+    def run_fn(args, **kwargs):
+        if args[0] == "dscacheutil":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(
+            returncode=1, stdout="", stderr="No matching processes belonging to you were found"
+        )
+
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
+    assert outcome.startswith("partial")
+    assert "flushed" in outcome.lower()
+    assert "privilege" in outcome.lower()
+
+
 def test_privileged_repair_steps_are_stubbed_and_never_shell_out():
     run_fn, calls = fake_run_factory()
     executor = make_repair_executor(run_fn=run_fn)
