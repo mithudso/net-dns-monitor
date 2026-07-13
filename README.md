@@ -7,8 +7,13 @@ required to detect, diagnose, or report an issue.
 
 ## Honest scope
 
-This app can genuinely fix a small set of local problems (flushing the DNS
-cache) and diagnose a great many more. It cannot fix an ISP outage, a
+This app can genuinely fix a small set of local problems and diagnose a
+great many more -- but even that small set is partial. `dscacheutil
+-flushcache` runs fine unprivileged; the `killall -HUP mDNSResponder` half
+of a full DNS cache flush does not, since mDNSResponder runs as a different
+user and a signal to a process you don't own is rejected regardless of the
+command's own permissions (confirmed empirically, not assumed). The app
+reports that case as `partial` rather than claiming success. It cannot fix an ISP outage, a
 misconfigured upstream DNS server, or a captive portal -- those need a
 human. The diagnostic report is the primary deliverable for most real
 incidents, not a fallback.
