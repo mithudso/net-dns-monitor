@@ -1,0 +1,29 @@
+# Copy to ~/.config/net-dns-monitor/config.yaml and edit.
+# Any key you omit falls back to the default in netdnsmonitor/config.py.
+
+external_targets:
+  - ["1.1.1.1", 443]
+  - ["8.8.8.8", 443]
+
+internal_targets: []
+  # - ["192.168.1.1", 443]   # e.g. your router
+
+# Domains to resolve each check. Left empty by default -- the app does NOT
+# auto-detect "most visited sites" from browser history (that would need
+# reading another app's data, a separate opt-in, not a silent default).
+# Add the handful of sites you actually care about:
+domains: []
+  # - "example.com"
+
+poll_interval_seconds: 30
+failure_threshold: 2   # consecutive failed checks before declaring an incident
+success_threshold: 2   # consecutive healthy checks before clearing one
+
+log_lookback: "5m"
+
+# Strings to strip from any bundle sent to the Anthropic API on escalation
+# (internal hostnames, VPN ranges, anything you don't want leaving the box).
+sensitive_strings: []
+  # - "corp.local"
+
+reports_dir: "~/Library/Application Support/net-dns-monitor/reports"
