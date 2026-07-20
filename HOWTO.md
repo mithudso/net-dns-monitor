@@ -126,19 +126,33 @@ launches with the recommended settings in one step.
 ./scripts/start.sh
 ```
 
-It launches the app as a proper `.app` bundle (built fresh each run at
-`build/Net-DNS-Monitor.app`) rather than a bare `python3` process, so the
-Dock icon, Force Quit dialog, and Cmd-Tab switcher correctly show
-"Net-DNS-Monitor" instead of "Python" -- a bare interpreter process
-otherwise inherits Apple's built-in "Python" identity, which no
-in-process API call can override (confirmed empirically: overriding
-`CFBundleName`/`NSProcessInfo.processName` changed the app-menu title but
-not the Dock name). Two consequences of launching this way:
+It launches the app as a real, frozen `.app` bundle
+(`dist/Net-DNS-Monitor.app`, built via `py2app` -- installed on demand,
+rebuilt only when missing or when `netdnsmonitor/`, `setup.py`, or
+`requirements.txt` changed since the last build) rather than a bare
+`python3` process, so the Dock icon, Force Quit dialog, and Cmd-Tab
+switcher correctly show "Net-DNS-Monitor" instead of "Python".
+
+That took three attempts to get right, confirmed empirically each time:
+overriding `CFBundleName` fixed the app-menu title only; also overriding
+`NSProcessInfo.processName` still didn't touch the Dock; a hand-built
+lightweight wrapper `.app` around `exec python3 -m netdnsmonitor.app`
+didn't work either, because framework Python re-execs itself into its own
+bundled `Python.app` stub the instant rumps creates the GUI (confirmed via
+`ps aux` -- the running binary was Python.framework's own
+`Resources/Python.app/Contents/MacOS/Python`, not anything of ours), and
+that stub's `Info.plist` says "Python" regardless of what launched it.
+Only a real frozen build -- py2app embeds its own private interpreter
+copy that never touches that shared re-exec path -- actually works
+(confirmed: the embedded interpreter's own `NSBundle.mainBundle()`
+resolves to this project's bundle path and name, not Python.framework's).
+
+Two consequences of launching this way:
 
 - **The terminal detaches once launched.** The app becomes an
   independent process, not a child of your shell -- Ctrl-C in the
   terminal no longer stops it. Quit via the menu bar item's Quit control,
-  or `pkill -f netdnsmonitor.app`.
+  or `pkill -f Net-DNS-Monitor`.
 - **Output goes to `net-dns-monitor.log`** in the repo root (`tail -f` it)
   instead of your terminal.
 
@@ -370,7 +384,8 @@ tested separately, on its own). The rest needs a real macOS run loop.
 | Resolution log file never appears | No queries seen in `resolution_lookback` window, or `log show` needs a permission grant | Check Full Disk Access; try a larger `resolution_lookback` |
 | Escalation field shows an error instead of an analysis | `ANTHROPIC_API_KEY` not set, or the API call failed | Export the key; check the error string in the report's escalation field for the underlying cause |
 | `flush_dns_cache` reports `partial` | `dscacheutil -flushcache` succeeded but `killall -HUP mDNSResponder` was rejected | Expected and documented -- mDNSResponder runs as a different user; a signal from an unprivileged process is rejected regardless of the command's own permissions |
-| `scripts/start.sh` finishes with no visible menu bar icon | `open -n build/Net-DNS-Monitor.app` failed silently, or the bundle launcher script errored before reaching rumps | Check `net-dns-monitor.log` in the repo root for the actual error; `chmod +x build/Net-DNS-Monitor.app/Contents/MacOS/NetDNSMonitor` if it lost its executable bit |
+| `scripts/start.sh` finishes with no visible menu bar icon | `open -n dist/Net-DNS-Monitor.app` failed silently, or the app errored before reaching rumps | Check `net-dns-monitor.log` in the repo root for the actual error |
+| `python setup.py py2app` fails with `[Errno 66] Directory not empty` | py2app's intermediate `build/` staging dir from a previous run wasn't cleaned (seen intermittently) | `scripts/start.sh` already does this before every build; if running the command by hand, `rm -rf build dist` first |
 | Ctrl-C in the terminal doesn't stop the app | Expected once launched via `scripts/start.sh`'s `.app` bundle -- it's an independent process, not a child of the shell | Quit via the menu bar's Quit item, or `pkill -f netdnsmonitor.app`; use `python -m netdnsmonitor.app` directly instead if you want Ctrl-C to work |
 | Repair steps report `NEEDS_PRIVILEGE` | DHCP renewal / interface toggling need elevated rights this sandboxed app doesn't have | Not implemented in this MVP; see Honest scope below |
 
@@ -394,7 +409,8 @@ tested separately, on its own). The rest needs a real macOS run loop.
 - `state_machine.py` -- orchestrates incident detection end to end
 - `config.py` -- YAML config loading with defaults
 - `app.py` -- the rumps menu bar shell wiring everything together
-- `scripts/start.sh` -- install check + component verification + launches the app as a `.app` bundle (generated fresh each run at `build/Net-DNS-Monitor.app`, gitignored)
+- `scripts/start.sh` -- install check + component verification + builds/launches the frozen `.app` bundle
+- `setup.py` -- py2app build spec (run `python setup.py py2app`; output at `dist/Net-DNS-Monitor.app`, gitignored)
 
 ## Honest scope / known limitations
 

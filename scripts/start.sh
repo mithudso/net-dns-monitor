@@ -102,49 +102,50 @@ else
     ok "ANTHROPIC_API_KEY set, escalation enabled"
 fi
 
-BUNDLE_DIR="$REPO_DIR/build/Net-DNS-Monitor.app"
+APP_BUNDLE="$REPO_DIR/dist/Net-DNS-Monitor.app"
+APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/Net-DNS-Monitor"
+
+# A bare `python3 -m ...` process shares Apple's framework Python runtime,
+# which re-execs itself into its own bundled Python.app the instant rumps
+# creates an NSApplication -- that stub's Info.plist says "Python" and wins
+# regardless of any wrapper .app around the outer script (confirmed
+# empirically via `ps aux`: the running binary was
+# .../Python.framework/.../Resources/Python.app/Contents/MacOS/Python, not
+# anything of ours). py2app embeds a private interpreter copy that never
+# touches that shared re-exec path -- confirmed empirically too: the
+# embedded interpreter's own NSBundle.mainBundle() resolves to this
+# project's bundle path and CFBundleName, not Python.framework's.
+#
+# Rebuilt only when missing or stale (py2app freezes the whole interpreter
+# + dependencies, so it's much slower than a plain launch) -- stale means
+# any tracked source file changed since the last build.
+NEEDS_BUILD=0
+if [[ ! -x "$APP_EXECUTABLE" ]]; then
+    NEEDS_BUILD=1
+elif [[ -n "$(find "$REPO_DIR/netdnsmonitor" "$REPO_DIR/setup.py" "$REPO_DIR/requirements.txt" -newer "$APP_EXECUTABLE" 2>/dev/null)" ]]; then
+    NEEDS_BUILD=1
+fi
+
+if [[ "$NEEDS_BUILD" == "1" ]]; then
+    info "building $APP_BUNDLE (py2app) -- this is slower than a plain launch, only happens when the bundle is missing or source has changed"
+    python -c "import py2app" >/dev/null 2>&1 || pip install -q "py2app>=0.28"
+    # py2app's intermediate build/ staging dir isn't safe to reuse across
+    # runs (confirmed empirically: a second py2app invocation failed with
+    # "[Errno 66] Directory not empty" against a stale one) -- clear it,
+    # not dist/, so a failed rebuild doesn't destroy the last-known-good app.
+    rm -rf "$REPO_DIR/build"
+    (cd "$REPO_DIR" && python setup.py py2app >/dev/null)
+    [[ -x "$APP_EXECUTABLE" ]] || fail "py2app build did not produce $APP_EXECUTABLE"
+    ok "built $APP_BUNDLE"
+else
+    ok "$APP_BUNDLE is up to date, skipping rebuild"
+fi
+
 LOG_FILE="$REPO_DIR/net-dns-monitor.log"
-
-# A bare `python3 -m ...` process inherits Apple's built-in "Python"
-# LaunchServices identity -- no in-process API call can override that (the
-# Dock tile *image* is live-settable via NSApplication, confirmed working;
-# the *name* the Dock/Force-Quit/Cmd-Tab show is not). A minimal .app
-# bundle with its own Info.plist gives the process its own identity
-# instead. Regenerated every run so it always points at this checkout's
-# venv, in case the repo was moved or the venv was rebuilt.
-mkdir -p "$BUNDLE_DIR/Contents/MacOS"
-
-cat > "$BUNDLE_DIR/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key><string>Net-DNS-Monitor</string>
-    <key>CFBundleDisplayName</key><string>Net-DNS-Monitor</string>
-    <key>CFBundleExecutable</key><string>NetDNSMonitor</string>
-    <key>CFBundleIdentifier</key><string>com.net-dns-monitor.app</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
-    <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
-PLIST
-
-cat > "$BUNDLE_DIR/Contents/MacOS/NetDNSMonitor" <<LAUNCHER
-#!/bin/bash
-# open launches the bundle with a working directory that is NOT the repo
-# root (confirmed empirically: python -m netdnsmonitor.app failed with
-# ModuleNotFoundError when launched via open without this cd), so netdnsmonitor
-# isn't importable from cwd the way it is when run directly from the repo.
-cd "$REPO_DIR"
-exec "$VENV_DIR/bin/python3" -m netdnsmonitor.app >> "$LOG_FILE" 2>&1
-LAUNCHER
-chmod +x "$BUNDLE_DIR/Contents/MacOS/NetDNSMonitor"
 
 echo "== starting net-dns-monitor =="
 info "launching as a .app bundle so the Dock/Force-Quit/Cmd-Tab name reads"
 info "'Net-DNS-Monitor' instead of 'Python' -- this terminal is no longer"
 info "attached to the app once launched. Output goes to: $LOG_FILE"
-info "Quit it from the menu bar's Quit item (or: pkill -f netdnsmonitor.app)"
-open -n "$BUNDLE_DIR"
+info "Quit it from the menu bar's Quit item (or: pkill -f Net-DNS-Monitor)"
+open -n "$APP_BUNDLE" --stdout "$LOG_FILE" --stderr "$LOG_FILE"
