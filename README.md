@@ -54,16 +54,27 @@ written -- it just won't have an LLM analysis section.
 ## Run
 
 ```bash
+./scripts/start.sh
+```
+
+Checks the install and launches the app as a proper `.app` bundle (so the
+Dock/Force-Quit/Cmd-Tab name correctly reads "Net-DNS-Monitor" instead of
+"Python") -- output goes to `net-dns-monitor.log`, and the terminal
+detaches once it's running; quit via the menu bar's Quit item. For direct
+foreground debugging instead (Ctrl-C works, but the Dock/Force-Quit name
+falls back to "Python"):
+
+```bash
 source .venv/bin/activate
 python -m netdnsmonitor.app
 ```
 
-This puts a status icon in the menu bar (🟢 healthy / 🟡 flaky -- a probe
-just started failing but hasn't crossed the incident threshold yet / 🔴
-incident) and polls on the configured interval. Click the menu bar item
-and choose "Open last report" to see the most recent incident report. See
-`HOWTO.md`'s Menu bar reference section for the full status-icon and
-resolution-monitor-badge behavior.
+Either way, a status icon appears in the menu bar (🟢 healthy / 🟡 flaky --
+a probe just started failing but hasn't crossed the incident threshold
+yet / 🔴 incident) and polls on the configured interval. Click the menu
+bar item and choose "Open last report" to see the most recent incident
+report. See `HOWTO.md`'s Menu bar reference section for the full
+status-icon and resolution-monitor-badge behavior.
 
 ## Permissions
 

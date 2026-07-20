@@ -117,25 +117,51 @@ resolution_max_workers: 10
 
 ## Running the app
 
+Recommended: `scripts/start.sh` -- it checks the install (macOS, Python
+3.9+, required system tools, venv), verifies every component imports and
+the config loads, materializes a default config if none exists, then
+launches with the recommended settings in one step.
+
+```bash
+./scripts/start.sh
+```
+
+It launches the app as a proper `.app` bundle (built fresh each run at
+`build/Net-DNS-Monitor.app`) rather than a bare `python3` process, so the
+Dock icon, Force Quit dialog, and Cmd-Tab switcher correctly show
+"Net-DNS-Monitor" instead of "Python" -- a bare interpreter process
+otherwise inherits Apple's built-in "Python" identity, which no
+in-process API call can override (confirmed empirically: overriding
+`CFBundleName`/`NSProcessInfo.processName` changed the app-menu title but
+not the Dock name). Two consequences of launching this way:
+
+- **The terminal detaches once launched.** The app becomes an
+  independent process, not a child of your shell -- Ctrl-C in the
+  terminal no longer stops it. Quit via the menu bar item's Quit control,
+  or `pkill -f netdnsmonitor.app`.
+- **Output goes to `net-dns-monitor.log`** in the repo root (`tail -f` it)
+  instead of your terminal.
+
+For direct foreground debugging where Ctrl-C should still work (at the
+cost of the Dock/Force-Quit name issue), run the module directly instead:
+
 ```bash
 source .venv/bin/activate
 python -m netdnsmonitor.app
 ```
 
-A status icon appears in the menu bar: 🟢 healthy / 🔴 degraded. **This
-needs at least one entry in `domains` to work correctly** -- see the
-callout under [incident detection](#feature-incident-detection-and-auto-repair)
-below; with the shipped default (`domains: []`) the icon gets stuck on 🔴
-within a couple of poll cycles even when the network is fine. Two
-independent timers start immediately:
+A status icon appears in the menu bar: 🟢 healthy / 🟡 flaky / 🔴 incident
+(see [Menu bar reference](#menu-bar-reference)). **This needs at least
+one entry in `domains` to work correctly** -- see the callout under
+[incident detection](#feature-incident-detection-and-auto-repair) below;
+with the shipped default (`domains: []`) the icon latches to a false
+incident within a couple of poll cycles even when the network is fine.
+Two independent timers start immediately:
 
 1. **Connectivity poll** (`poll_interval_seconds`, default 30s) -- feeds
    incident detection.
 2. **Resolution monitor** (`resolution_interval_seconds`, default 300s /
    5 min) -- feeds the top-domain resolution log.
-
-Quit via the menu bar item's standard Quit control (rumps provides this
-automatically).
 
 ## Feature: incident detection and auto-repair
 
@@ -279,9 +305,15 @@ Each report is self-contained:
 
 ## Menu bar reference
 
-- **App name:** shows as "Net-DNS-Monitor" in the app menu, Force Quit, and
-  Dock (overridden at runtime -- without a real `.app` bundle, a bare
-  `python3` process would otherwise show up as "Python").
+- **App name:** shows as "Net-DNS-Monitor" everywhere -- app menu, Dock,
+  Force Quit, Cmd-Tab -- when launched via `scripts/start.sh`'s `.app`
+  bundle. Launched directly via `python -m netdnsmonitor.app` instead, the
+  app-menu title still says "Net-DNS-Monitor" (a runtime override), but
+  the Dock/Force-Quit/Cmd-Tab name falls back to "Python" -- that specific
+  fix needs the real bundle's own `Info.plist` identity, which only the
+  `.app` launch path provides.
+- **Dock icon:** a 📶-style network glyph tinted green/yellow/red for the
+  same three status states below, replacing the generic Python rocket.
 - **Status icon, three states from two small heuristics:**
   - 🟢 healthy -- no recent probe failures.
   - 🟡 flaky -- at least one consecutive probe failure, but still below
@@ -338,6 +370,8 @@ tested separately, on its own). The rest needs a real macOS run loop.
 | Resolution log file never appears | No queries seen in `resolution_lookback` window, or `log show` needs a permission grant | Check Full Disk Access; try a larger `resolution_lookback` |
 | Escalation field shows an error instead of an analysis | `ANTHROPIC_API_KEY` not set, or the API call failed | Export the key; check the error string in the report's escalation field for the underlying cause |
 | `flush_dns_cache` reports `partial` | `dscacheutil -flushcache` succeeded but `killall -HUP mDNSResponder` was rejected | Expected and documented -- mDNSResponder runs as a different user; a signal from an unprivileged process is rejected regardless of the command's own permissions |
+| `scripts/start.sh` finishes with no visible menu bar icon | `open -n build/Net-DNS-Monitor.app` failed silently, or the bundle launcher script errored before reaching rumps | Check `net-dns-monitor.log` in the repo root for the actual error; `chmod +x build/Net-DNS-Monitor.app/Contents/MacOS/NetDNSMonitor` if it lost its executable bit |
+| Ctrl-C in the terminal doesn't stop the app | Expected once launched via `scripts/start.sh`'s `.app` bundle -- it's an independent process, not a child of the shell | Quit via the menu bar's Quit item, or `pkill -f netdnsmonitor.app`; use `python -m netdnsmonitor.app` directly instead if you want Ctrl-C to work |
 | Repair steps report `NEEDS_PRIVILEGE` | DHCP renewal / interface toggling need elevated rights this sandboxed app doesn't have | Not implemented in this MVP; see Honest scope below |
 
 ## Project layout
@@ -355,10 +389,12 @@ tested separately, on its own). The rest needs a real macOS run loop.
 - `escalation.py` -- redaction + the escalate-or-not gate
 - `anthropic_escalator.py` -- the Claude API call itself
 - `report.py` / `report_storage.py` -- incident report schema + persistence
-- `status.py` -- menu bar title/icon logic
+- `status.py` -- menu bar title logic + the shared healthy/flaky/incident status decision
+- `dock_icon.py` -- renders the tinted network-glyph Dock icon
 - `state_machine.py` -- orchestrates incident detection end to end
 - `config.py` -- YAML config loading with defaults
 - `app.py` -- the rumps menu bar shell wiring everything together
+- `scripts/start.sh` -- install check + component verification + launches the app as a `.app` bundle (generated fresh each run at `build/Net-DNS-Monitor.app`, gitignored)
 
 ## Honest scope / known limitations
 

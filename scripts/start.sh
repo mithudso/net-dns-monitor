@@ -102,5 +102,44 @@ else
     ok "ANTHROPIC_API_KEY set, escalation enabled"
 fi
 
+BUNDLE_DIR="$REPO_DIR/build/Net-DNS-Monitor.app"
+LOG_FILE="$REPO_DIR/net-dns-monitor.log"
+
+# A bare `python3 -m ...` process inherits Apple's built-in "Python"
+# LaunchServices identity -- no in-process API call can override that (the
+# Dock tile *image* is live-settable via NSApplication, confirmed working;
+# the *name* the Dock/Force-Quit/Cmd-Tab show is not). A minimal .app
+# bundle with its own Info.plist gives the process its own identity
+# instead. Regenerated every run so it always points at this checkout's
+# venv, in case the repo was moved or the venv was rebuilt.
+mkdir -p "$BUNDLE_DIR/Contents/MacOS"
+
+cat > "$BUNDLE_DIR/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>Net-DNS-Monitor</string>
+    <key>CFBundleDisplayName</key><string>Net-DNS-Monitor</string>
+    <key>CFBundleExecutable</key><string>NetDNSMonitor</string>
+    <key>CFBundleIdentifier</key><string>com.net-dns-monitor.app</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+
+cat > "$BUNDLE_DIR/Contents/MacOS/NetDNSMonitor" <<LAUNCHER
+#!/bin/bash
+exec "$VENV_DIR/bin/python3" -m netdnsmonitor.app >> "$LOG_FILE" 2>&1
+LAUNCHER
+chmod +x "$BUNDLE_DIR/Contents/MacOS/NetDNSMonitor"
+
 echo "== starting net-dns-monitor =="
-exec python -m netdnsmonitor.app
+info "launching as a .app bundle so the Dock/Force-Quit/Cmd-Tab name reads"
+info "'Net-DNS-Monitor' instead of 'Python' -- this terminal is no longer"
+info "attached to the app once launched. Output goes to: $LOG_FILE"
+info "Quit it from the menu bar's Quit item (or: pkill -f netdnsmonitor.app)"
+open -n "$BUNDLE_DIR"
