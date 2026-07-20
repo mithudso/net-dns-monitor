@@ -122,7 +122,8 @@ APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/Net-DNS-Monitor"
 NEEDS_BUILD=0
 if [[ ! -x "$APP_EXECUTABLE" ]]; then
     NEEDS_BUILD=1
-elif [[ -n "$(find "$REPO_DIR/netdnsmonitor" "$REPO_DIR/setup.py" "$REPO_DIR/requirements.txt" -newer "$APP_EXECUTABLE" 2>/dev/null)" ]]; then
+elif [[ -n "$(find "$REPO_DIR/netdnsmonitor" "$REPO_DIR/setup.py" "$REPO_DIR/requirements.txt" \
+        -name '__pycache__' -prune -o -newer "$APP_EXECUTABLE" -print 2>/dev/null)" ]]; then
     NEEDS_BUILD=1
 fi
 
