@@ -133,6 +133,11 @@ PLIST
 
 cat > "$BUNDLE_DIR/Contents/MacOS/NetDNSMonitor" <<LAUNCHER
 #!/bin/bash
+# open launches the bundle with a working directory that is NOT the repo
+# root (confirmed empirically: python -m netdnsmonitor.app failed with
+# ModuleNotFoundError when launched via open without this cd), so netdnsmonitor
+# isn't importable from cwd the way it is when run directly from the repo.
+cd "$REPO_DIR"
 exec "$VENV_DIR/bin/python3" -m netdnsmonitor.app >> "$LOG_FILE" 2>&1
 LAUNCHER
 chmod +x "$BUNDLE_DIR/Contents/MacOS/NetDNSMonitor"
