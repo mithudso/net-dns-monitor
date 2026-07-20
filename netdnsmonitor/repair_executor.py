@@ -30,8 +30,10 @@ def make_repair_executor(
 ):
     def run(args: list[str]) -> object:
         try:
-            return run_fn(args, capture_output=True, text=True, timeout=5)
-        except (subprocess.SubprocessError, OSError) as exc:
+            return run_fn(
+                args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
+            )
+        except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
             return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
 
     def flush_dns_cache() -> str:

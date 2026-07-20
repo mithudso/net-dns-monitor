@@ -26,9 +26,11 @@ def make_log_watcher(
                 ["log", "show", "--style", "compact", "--last", lookback, "--predicate", predicate],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
-        except (subprocess.SubprocessError, OSError):
+        except (subprocess.SubprocessError, OSError, UnicodeError):
             return []
         if result.returncode != 0:
             return []

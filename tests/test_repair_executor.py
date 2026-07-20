@@ -118,3 +118,25 @@ def test_missing_binary_is_reported_not_raised():
     executor = make_repair_executor(run_fn=missing_binary)
     outcome = executor(LadderStep("check_interface_state", "check", needs_privilege=False))
     assert "no such file" in outcome.lower()
+
+
+def test_requests_explicit_utf8_decoding_instead_of_relying_on_locale():
+    captured = {}
+
+    def run_fn(args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    executor = make_repair_executor(run_fn=run_fn)
+    executor(LadderStep("check_interface_state", "check", needs_privilege=False))
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
+def test_unicode_decode_error_is_reported_not_raised():
+    def bad_decode(args, **kwargs):
+        raise UnicodeDecodeError("ascii", b"\xe2", 0, 1, "ordinal not in range(128)")
+
+    executor = make_repair_executor(run_fn=bad_decode)
+    outcome = executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
+    assert outcome.startswith("failed")

@@ -49,3 +49,28 @@ def test_returns_empty_list_on_subprocess_timeout_instead_of_raising():
 
     watcher = make_log_watcher(run_fn=timing_out)
     assert watcher() == []
+
+
+def test_requests_explicit_utf8_decoding_instead_of_relying_on_locale():
+    # A frozen .app launched via `open` doesn't inherit the shell's locale
+    # env vars, so Python's default text-mode decoding falls back to ASCII
+    # and `log show` output containing non-ASCII bytes crashes -- confirmed
+    # empirically (UnicodeDecodeError from a real run). Decoding must be
+    # pinned explicitly, not left to the ambient locale.
+    captured = {}
+
+    def run_fn(args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    make_log_watcher(run_fn=run_fn)()
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
+def test_returns_empty_list_on_unicode_decode_error_instead_of_raising():
+    def bad_decode(args, **kwargs):
+        raise UnicodeDecodeError("ascii", b"\xe2", 0, 1, "ordinal not in range(128)")
+
+    watcher = make_log_watcher(run_fn=bad_decode)
+    assert watcher() == []

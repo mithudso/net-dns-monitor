@@ -72,3 +72,23 @@ def test_query_log_reader_returns_empty_list_on_subprocess_timeout():
 
     reader = make_query_log_reader(run_fn=timing_out)
     assert reader() == []
+
+
+def test_requests_explicit_utf8_decoding_instead_of_relying_on_locale():
+    captured = {}
+
+    def run_fn(args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    make_query_log_reader(run_fn=run_fn)()
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
+def test_returns_empty_list_on_unicode_decode_error_instead_of_raising():
+    def bad_decode(args, **kwargs):
+        raise UnicodeDecodeError("ascii", b"\xe2", 0, 1, "ordinal not in range(128)")
+
+    reader = make_query_log_reader(run_fn=bad_decode)
+    assert reader() == []
