@@ -7,6 +7,7 @@ tick() must read the state machine's LIVE flap_gate.state every call.
 from types import SimpleNamespace
 
 from netdnsmonitor.app import NetDnsMonitorApp
+from netdnsmonitor.status import NETWORK_GLYPH
 
 
 class FakeFlapGate:
@@ -35,6 +36,11 @@ def test_title_reflects_live_recovery_even_with_no_report(tmp_path):
     app.tick()
     assert "healthy" in app.title.lower()
     assert "issue" not in app.title.lower()
+
+
+def test_initial_title_before_any_tick_already_shows_the_network_glyph(tmp_path):
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    assert app.title.startswith(NETWORK_GLYPH)
 
 
 def test_title_shows_flaky_on_a_single_failure_below_threshold(tmp_path):

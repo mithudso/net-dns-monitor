@@ -19,7 +19,7 @@ from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.resolution_log import append_resolution_findings
 from netdnsmonitor.resolution_prober import resolve_domains_parallel
 from netdnsmonitor.state_machine import StateMachine
-from netdnsmonitor.status import build_title
+from netdnsmonitor.status import NETWORK_GLYPH, build_title
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 DISPLAY_NAME = "Net-DNS-Monitor"
@@ -94,7 +94,7 @@ def build_resolution_job(config: dict) -> Callable[[], list[dict]]:
 class NetDnsMonitorApp(rumps.App):
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH):
         set_app_display_name(DISPLAY_NAME)
-        super().__init__(name=DISPLAY_NAME, title="Net/DNS: starting...")
+        super().__init__(name=DISPLAY_NAME, title=f"{NETWORK_GLYPH} Net/DNS: starting...")
         self.config = load_config(config_path)
         self.state_machine = build_state_machine(self.config)
         self.resolution_job = build_resolution_job(self.config)
