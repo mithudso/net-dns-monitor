@@ -22,6 +22,22 @@ from netdnsmonitor.state_machine import StateMachine
 from netdnsmonitor.status import build_title
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
+DISPLAY_NAME = "Net-DNS-Monitor"
+
+
+def set_app_display_name(name: str) -> None:
+    """Without a real .app bundle, macOS shows the bare interpreter's
+    CFBundleName ("Python") in the app menu, Force Quit, and Dock -- this
+    overrides it at runtime. Cosmetic only, so a failure here must never
+    take the monitor down with it.
+    """
+    try:
+        from Foundation import NSBundle
+
+        info = NSBundle.mainBundle().infoDictionary()
+        info["CFBundleName"] = name
+    except Exception:  # noqa: BLE001 - cosmetic, never fatal
+        pass
 
 
 def build_state_machine(config: dict) -> StateMachine:
@@ -77,12 +93,14 @@ def build_resolution_job(config: dict) -> Callable[[], list[dict]]:
 
 class NetDnsMonitorApp(rumps.App):
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH):
-        super().__init__(name="net-dns-monitor", title="Net/DNS: starting...")
+        set_app_display_name(DISPLAY_NAME)
+        super().__init__(name=DISPLAY_NAME, title="Net/DNS: starting...")
         self.config = load_config(config_path)
         self.state_machine = build_state_machine(self.config)
         self.resolution_job = build_resolution_job(self.config)
         self.last_classification = None
         self.last_report_path = None
+        self.last_resolution_findings: list[dict] = []
         self.menu = ["Open last report"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
@@ -97,10 +115,26 @@ class NetDnsMonitorApp(rumps.App):
             paths = save_report(report, self.config["reports_dir"])
             self.last_report_path = paths["markdown_path"]
             self.last_classification = report["classification"]
-        self.title = build_title(self.state_machine.flap_gate.state, self.last_classification)
+        self._refresh_title()
 
     def resolution_tick(self, _sender=None):
-        self.resolution_job()
+        self.last_resolution_findings = self.resolution_job()
+        self._refresh_title()
+
+    def _refresh_title(self):
+        resolution_failed = resolution_total = None
+        if self.last_resolution_findings:
+            resolution_total = len(self.last_resolution_findings)
+            resolution_failed = sum(
+                1 for finding in self.last_resolution_findings if not finding["resolved"]
+            )
+        self.title = build_title(
+            self.state_machine.flap_gate.state,
+            self.last_classification,
+            self.state_machine.flap_gate.consecutive_failures,
+            resolution_failed,
+            resolution_total,
+        )
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

@@ -279,8 +279,21 @@ Each report is self-contained:
 
 ## Menu bar reference
 
-- **Status icon:** 🟢 = healthy, 🔴 = incident (with the layer, e.g.
-  "🔴 Net/DNS: dns issue")
+- **App name:** shows as "Net-DNS-Monitor" in the app menu, Force Quit, and
+  Dock (overridden at runtime -- without a real `.app` bundle, a bare
+  `python3` process would otherwise show up as "Python").
+- **Status icon, three states from two small heuristics:**
+  - 🟢 healthy -- no recent probe failures.
+  - 🟡 flaky -- at least one consecutive probe failure, but still below
+    `failure_threshold`, so no incident has been declared yet. An early
+    warning the binary healthy/incident split wouldn't otherwise show.
+  - 🔴 incident -- the anti-flap gate has declared one (with the layer,
+    e.g. "🔴 Net/DNS: dns issue").
+  - Independent of all three: if the most recent resolution-monitor batch
+    (see [resolution monitor](#feature-dns-resolution-monitor-top-50-query-log))
+    had any failed domain, the title gets a `N/total resolution fails`
+    suffix -- since a top-queried domain can stop resolving without
+    tripping the single configured `domains` check.
 - **"Open last report"** -- opens the most recent incident report's
   Markdown file in your default browser. Shows a notification instead if
   no incident has occurred yet.

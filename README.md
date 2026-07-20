@@ -58,9 +58,12 @@ source .venv/bin/activate
 python -m netdnsmonitor.app
 ```
 
-This puts a status icon in the menu bar (🟢 healthy / 🔴 degraded) and
-polls on the configured interval. Click the menu bar item and choose
-"Open last report" to see the most recent incident report.
+This puts a status icon in the menu bar (🟢 healthy / 🟡 flaky -- a probe
+just started failing but hasn't crossed the incident threshold yet / 🔴
+incident) and polls on the configured interval. Click the menu bar item
+and choose "Open last report" to see the most recent incident report. See
+`HOWTO.md`'s Menu bar reference section for the full status-icon and
+resolution-monitor-badge behavior.
 
 ## Permissions
 
