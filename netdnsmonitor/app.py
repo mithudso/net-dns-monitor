@@ -5,6 +5,7 @@ this file only wires them to a rumps timer and a status-item title.
 
 import os
 import webbrowser
+from typing import Callable
 
 import rumps
 
@@ -12,8 +13,11 @@ from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.config import load_config
 from netdnsmonitor.log_watcher import make_log_watcher
 from netdnsmonitor.prober import make_prober
+from netdnsmonitor.query_log import extract_top_domains, make_query_log_reader
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
+from netdnsmonitor.resolution_log import append_resolution_findings
+from netdnsmonitor.resolution_prober import resolve_domains_parallel
 from netdnsmonitor.state_machine import StateMachine
 from netdnsmonitor.status import build_title
 
@@ -50,16 +54,42 @@ def build_state_machine(config: dict) -> StateMachine:
     )
 
 
+def build_resolution_job(config: dict) -> Callable[[], list[dict]]:
+    """Returns a callable that mines the local DNS query log for the top
+    `resolution_top_n` queried domains, resolves each in parallel, and
+    appends the outcome to the resolution log -- the 5-minute cadence job,
+    separate from the incident-detection poll loop above.
+    """
+    query_log_reader = make_query_log_reader(lookback=config["resolution_lookback"])
+
+    def job() -> list[dict]:
+        domains = extract_top_domains(query_log_reader(), limit=config["resolution_top_n"])
+        findings = resolve_domains_parallel(
+            domains,
+            timeout=config["resolution_timeout_seconds"],
+            max_workers=config["resolution_max_workers"],
+        )
+        append_resolution_findings(findings, config["resolution_log_path"])
+        return findings
+
+    return job
+
+
 class NetDnsMonitorApp(rumps.App):
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH):
         super().__init__(name="net-dns-monitor", title="Net/DNS: starting...")
         self.config = load_config(config_path)
         self.state_machine = build_state_machine(self.config)
+        self.resolution_job = build_resolution_job(self.config)
         self.last_classification = None
         self.last_report_path = None
         self.menu = ["Open last report"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
+        self.resolution_timer = rumps.Timer(
+            self.resolution_tick, self.config["resolution_interval_seconds"]
+        )
+        self.resolution_timer.start()
 
     def tick(self, _sender=None):
         report = self.state_machine.tick()
@@ -68,6 +98,9 @@ class NetDnsMonitorApp(rumps.App):
             self.last_report_path = paths["markdown_path"]
             self.last_classification = report["classification"]
         self.title = build_title(self.state_machine.flap_gate.state, self.last_classification)
+
+    def resolution_tick(self, _sender=None):
+        self.resolution_job()
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

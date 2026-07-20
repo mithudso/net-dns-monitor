@@ -5,10 +5,30 @@ from netdnsmonitor.config import DEFAULT_CONFIG, load_config
 
 def test_missing_file_returns_defaults(tmp_path):
     cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
-    non_path_keys = {k: v for k, v in cfg.items() if k != "reports_dir"}
-    expected = {k: v for k, v in DEFAULT_CONFIG.items() if k != "reports_dir"}
+    path_keys = {"reports_dir", "resolution_log_path"}
+    non_path_keys = {k: v for k, v in cfg.items() if k not in path_keys}
+    expected = {k: v for k, v in DEFAULT_CONFIG.items() if k not in path_keys}
     assert non_path_keys == expected
     assert cfg["reports_dir"] == os.path.expanduser(DEFAULT_CONFIG["reports_dir"])
+    assert cfg["resolution_log_path"] == os.path.expanduser(
+        DEFAULT_CONFIG["resolution_log_path"]
+    )
+
+
+def test_resolution_monitor_defaults_present(tmp_path):
+    cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
+    assert cfg["resolution_interval_seconds"] == 300
+    assert cfg["resolution_top_n"] == 50
+    assert cfg["resolution_lookback"] == "1h"
+    assert cfg["resolution_timeout_seconds"] == 2.0
+    assert cfg["resolution_max_workers"] == 10
+
+
+def test_resolution_log_path_is_tilde_expanded(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("resolution_log_path: '~/somewhere/resolution-log.jsonl'\n")
+    cfg = load_config(str(config_path))
+    assert not cfg["resolution_log_path"].startswith("~")
 
 
 def test_partial_yaml_overrides_only_given_keys(tmp_path):

@@ -27,3 +27,14 @@ sensitive_strings: []
   # - "corp.local"
 
 reports_dir: "~/Library/Application Support/net-dns-monitor/reports"
+
+# Separately from the `domains` incident-detection list above: every
+# resolution_interval_seconds, the app mines the local DNS query log for the
+# resolution_top_n busiest domains and re-resolves each in parallel, logging
+# the outcome as JSONL to resolution_log_path.
+resolution_log_path: "~/Library/Application Support/net-dns-monitor/resolution-log.jsonl"
+resolution_interval_seconds: 300
+resolution_lookback: "1h"
+resolution_top_n: 50
+resolution_timeout_seconds: 2.0
+resolution_max_workers: 10

@@ -79,6 +79,19 @@ self-contained: classification, probe results, log excerpts, every ladder
 step attempted and its outcome, the repair outcome, the recheck result, and
 the Claude escalation response if one occurred. Hand the `.md` file to IT.
 
+## Resolution monitor
+
+Independent of incident detection, the app mines the local DNS query log
+(`log show`) every `resolution_interval_seconds` (default 300 = 5 minutes)
+for the `resolution_top_n` (default 50) most-frequently-queried domains,
+attempts to resolve each in parallel, and appends the outcome to
+`resolution_log_path` (default:
+`~/Library/Application Support/net-dns-monitor/resolution-log.jsonl`) as one
+JSON object per line: `domain`, `resolved`, `error`, `elapsed_seconds`,
+`checked_at`. This is a standing health record of the domains this machine
+actually uses, separate from the `domains` list that drives incident
+detection.
+
 ## Tests
 
 ```bash
@@ -102,6 +115,9 @@ test suite, since it needs a real macOS run loop.
 - `dns_query.py` -- raw UDP query against a specific public resolver
 - `prober.py` -- TCP-connect reachability + DNS resolution aggregation
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
+- `query_log.py` -- `log show` reading + top-queried-domain extraction for the resolution monitor
+- `resolution_prober.py` -- parallel DNS resolution of a domain batch
+- `resolution_log.py` -- JSONL append for resolution-monitor findings
 - `escalation.py` -- redaction + the escalate-or-not gate
 - `anthropic_escalator.py` -- the Claude API call itself
 - `report.py` / `report_storage.py` -- incident report schema + persistence

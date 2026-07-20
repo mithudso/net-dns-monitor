@@ -19,6 +19,15 @@ DEFAULT_CONFIG = {
     "log_lookback": "5m",
     "sensitive_strings": [],
     "reports_dir": "~/Library/Application Support/net-dns-monitor/reports",
+    # Top-queried-domain resolution monitor: mine the local DNS query log for
+    # the busiest domains and re-resolve them on a fixed cadence, independent
+    # of the `domains` list above (which drives incident detection).
+    "resolution_log_path": "~/Library/Application Support/net-dns-monitor/resolution-log.jsonl",
+    "resolution_interval_seconds": 300,
+    "resolution_lookback": "1h",
+    "resolution_top_n": 50,
+    "resolution_timeout_seconds": 2.0,
+    "resolution_max_workers": 10,
 }
 
 
@@ -29,4 +38,5 @@ def load_config(path: str) -> dict:
             user_config = yaml.safe_load(f) or {}
         config.update(user_config)
     config["reports_dir"] = os.path.expanduser(config["reports_dir"])
+    config["resolution_log_path"] = os.path.expanduser(config["resolution_log_path"])
     return config
