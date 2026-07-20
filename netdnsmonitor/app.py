@@ -28,15 +28,19 @@ DISPLAY_NAME = "Net-DNS-Monitor"
 
 def set_app_display_name(name: str) -> None:
     """Without a real .app bundle, macOS shows the bare interpreter's
-    CFBundleName ("Python") in the app menu, Force Quit, and Dock -- this
-    overrides it at runtime. Cosmetic only, so a failure here must never
-    take the monitor down with it.
+    default name ("Python") in several places, each sourced differently:
+    CFBundleName drives the bold app-menu title, while NSProcessInfo's
+    processName is what the Dock tooltip, Force Quit, and Activity Monitor
+    actually read -- overriding only one leaves "Python" showing in the
+    other (confirmed empirically: the Dock tooltip still said "Python"
+    after the CFBundleName-only fix). Cosmetic only, so a failure here
+    must never take the monitor down with it.
     """
     try:
-        from Foundation import NSBundle
+        from Foundation import NSBundle, NSProcessInfo
 
-        info = NSBundle.mainBundle().infoDictionary()
-        info["CFBundleName"] = name
+        NSBundle.mainBundle().infoDictionary()["CFBundleName"] = name
+        NSProcessInfo.processInfo().setProcessName_(name)
     except Exception:  # noqa: BLE001 - cosmetic, never fatal
         pass
 
