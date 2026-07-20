@@ -11,6 +11,7 @@ import rumps
 
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.config import load_config
+from netdnsmonitor.dock_icon import set_dock_icon
 from netdnsmonitor.log_watcher import make_log_watcher
 from netdnsmonitor.prober import make_prober
 from netdnsmonitor.query_log import extract_top_domains, make_query_log_reader
@@ -19,7 +20,7 @@ from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.resolution_log import append_resolution_findings
 from netdnsmonitor.resolution_prober import resolve_domains_parallel
 from netdnsmonitor.state_machine import StateMachine
-from netdnsmonitor.status import NETWORK_GLYPH, build_title
+from netdnsmonitor.status import NETWORK_GLYPH, build_title, status_state
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 DISPLAY_NAME = "Net-DNS-Monitor"
@@ -108,6 +109,7 @@ class NetDnsMonitorApp(rumps.App):
             self.resolution_tick, self.config["resolution_interval_seconds"]
         )
         self.resolution_timer.start()
+        set_dock_icon("healthy")
 
     def tick(self, _sender=None):
         report = self.state_machine.tick()
@@ -128,13 +130,15 @@ class NetDnsMonitorApp(rumps.App):
             resolution_failed = sum(
                 1 for finding in self.last_resolution_findings if not finding["resolved"]
             )
+        flap_gate = self.state_machine.flap_gate
         self.title = build_title(
-            self.state_machine.flap_gate.state,
+            flap_gate.state,
             self.last_classification,
-            self.state_machine.flap_gate.consecutive_failures,
+            flap_gate.consecutive_failures,
             resolution_failed,
             resolution_total,
         )
+        set_dock_icon(status_state(flap_gate.state, flap_gate.consecutive_failures))
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

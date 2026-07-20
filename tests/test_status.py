@@ -1,4 +1,17 @@
-from netdnsmonitor.status import build_title
+from netdnsmonitor.status import build_title, status_state
+
+
+def test_status_state_incident_takes_priority():
+    assert status_state("incident", consecutive_failures=0) == "incident"
+    assert status_state("incident", consecutive_failures=5) == "incident"
+
+
+def test_status_state_flaky_on_nonzero_failures_below_threshold():
+    assert status_state("healthy", consecutive_failures=1) == "flaky"
+
+
+def test_status_state_healthy_when_no_failures():
+    assert status_state("healthy", consecutive_failures=0) == "healthy"
 
 
 def test_healthy_state_shows_healthy_regardless_of_past_classification():

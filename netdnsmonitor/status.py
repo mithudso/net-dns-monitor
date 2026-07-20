@@ -24,13 +24,24 @@ healthy/incident split, both from data the app already computes:
 state, standing in for a real bundled .app icon (there isn't one -- this
 app ships as a plain script, not an .app bundle). The colored circle after
 it is the part that changes with status, the way a badge overlays an icon
-rather than replacing it.
+rather than replacing it. `status_state` is the single place the
+healthy/flaky/incident decision is made; both the menu bar title here and
+the Dock icon in dock_icon.py call it, so the two indicators can't drift
+out of sync with each other.
 """
 
 from typing import Optional
 
 NETWORK_GLYPH = "\U0001F4F6"  # 📶 signal bars -- reads as "network" at a glance
 ICONS = {"healthy": "\U0001F7E2", "flaky": "\U0001F7E1", "incident": "\U0001F534"}
+
+
+def status_state(flap_state: str, consecutive_failures: int = 0) -> str:
+    if flap_state == "incident":
+        return "incident"
+    if consecutive_failures > 0:
+        return "flaky"
+    return "healthy"
 
 
 def build_title(
@@ -40,9 +51,10 @@ def build_title(
     resolution_failed: Optional[int] = None,
     resolution_total: Optional[int] = None,
 ) -> str:
-    if flap_state == "incident":
+    state = status_state(flap_state, consecutive_failures)
+    if state == "incident":
         title = f"{NETWORK_GLYPH}{ICONS['incident']} Net/DNS: {last_classification or 'unknown'} issue"
-    elif consecutive_failures > 0:
+    elif state == "flaky":
         title = f"{NETWORK_GLYPH}{ICONS['flaky']} Net/DNS: flaky"
     else:
         title = f"{NETWORK_GLYPH}{ICONS['healthy']} Net/DNS: healthy"
