@@ -4,6 +4,7 @@ this file only wires them to a rumps timer and a status-item title.
 """
 
 import os
+import threading
 import webbrowser
 from typing import Callable
 
@@ -14,11 +15,11 @@ from netdnsmonitor.config import load_config
 from netdnsmonitor.dock_icon import set_dock_icon
 from netdnsmonitor.log_watcher import make_log_watcher
 from netdnsmonitor.prober import make_prober
-from netdnsmonitor.query_log import extract_top_domains, make_query_log_reader
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.resolution_log import append_resolution_findings
 from netdnsmonitor.resolution_prober import resolve_domains_parallel
+from netdnsmonitor.stall_log import select_stalled_domains
 from netdnsmonitor.state_machine import StateMachine
 from netdnsmonitor.status import NETWORK_GLYPH, build_title, status_state
 
@@ -76,19 +77,26 @@ def build_state_machine(config: dict) -> StateMachine:
 
 
 def build_resolution_job(config: dict) -> Callable[[], list[dict]]:
-    """Returns a callable that mines the local DNS query log for the top
-    `resolution_top_n` queried domains, resolves each in parallel, and
-    appends the outcome to the resolution log -- the 5-minute cadence job,
-    separate from the incident-detection poll loop above.
+    """Returns a callable that reads back every domain that has ever stalled
+    (per this machine's own resolution log), re-resolves them in parallel, and
+    appends the outcome to that same log -- the 5-minute cadence job, separate
+    from the incident-detection poll loop above.
+
+    This replaces the previous "top-N busiest domains from the query log"
+    selection. See `stall_log.py` for what counts as a stall and why the
+    query-log mining path was retired.
     """
-    query_log_reader = make_query_log_reader(lookback=config["resolution_lookback"])
 
     def job() -> list[dict]:
-        domains = extract_top_domains(query_log_reader(), limit=config["resolution_top_n"])
+        domains = select_stalled_domains(
+            config["resolution_log_path"],
+            stall_seconds=config["resolution_stall_seconds"],
+        )
         findings = resolve_domains_parallel(
             domains,
             timeout=config["resolution_timeout_seconds"],
             max_workers=config["resolution_max_workers"],
+            deadline_seconds=config["resolution_batch_deadline_seconds"],
         )
         append_resolution_findings(findings, config["resolution_log_path"])
         return findings
@@ -106,6 +114,7 @@ class NetDnsMonitorApp(rumps.App):
         self.last_classification = None
         self.last_report_path = None
         self.last_resolution_findings: list[dict] = []
+        self._resolution_thread: threading.Thread = None
         self.menu = ["Open last report"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
@@ -124,8 +133,29 @@ class NetDnsMonitorApp(rumps.App):
         self._refresh_title()
 
     def resolution_tick(self, _sender=None):
+        """Runs the resolution batch on a worker thread, not the run loop.
+
+        `getaddrinfo` is not interruptible and the stall list only grows, so a
+        batch can outlast its own 5-minute cadence. Running it inline here (as
+        this did previously) would block the run loop -- and with it the 30s
+        incident tick, which is the app's primary job. If the previous batch is
+        still going, skip this cycle rather than piling threads up.
+
+        The worker deliberately does not touch the title: AppKit status-item
+        updates are not thread-safe. The next incident tick picks the findings
+        up and repaints on the main thread.
+        """
+        if self._resolution_thread is not None and self._resolution_thread.is_alive():
+            return
+        self._resolution_thread = threading.Thread(
+            target=self._run_resolution, name="resolution-batch", daemon=True
+        )
+        self._resolution_thread.start()
+
+    def _run_resolution(self):
+        # Single attribute rebind, so the main thread only ever observes the
+        # old list or the new one -- never a partially built one.
         self.last_resolution_findings = self.resolution_job()
-        self._refresh_title()
 
     def _refresh_title(self):
         resolution_failed = resolution_total = None

@@ -50,6 +50,17 @@ def test_title_shows_flaky_on_a_single_failure_below_threshold(tmp_path):
     assert "flaky" in app.title.lower()
 
 
+def _run_resolution_to_completion(app):
+    """resolution_tick hands the batch to a worker thread and returns, so the
+    title cannot be asserted until that thread finishes and a main-thread tick
+    repaints. That split is deliberate -- see NetDnsMonitorApp.resolution_tick.
+    """
+    app.resolution_tick()
+    app._resolution_thread.join(timeout=5)
+    assert not app._resolution_thread.is_alive()
+    app.tick()
+
+
 def test_title_appends_resolution_failure_count_after_resolution_tick(tmp_path):
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
     app.state_machine = FakeStateMachine("healthy")
@@ -57,7 +68,7 @@ def test_title_appends_resolution_failure_count_after_resolution_tick(tmp_path):
         {"domain": "a.example", "resolved": True, "error": None, "elapsed_seconds": 0.01},
         {"domain": "b.example", "resolved": False, "error": "timed out", "elapsed_seconds": 2.0},
     ]
-    app.resolution_tick()
+    _run_resolution_to_completion(app)
     assert "1/2" in app.title
 
 
@@ -67,5 +78,59 @@ def test_title_has_no_resolution_suffix_when_batch_all_resolved(tmp_path):
     app.resolution_job = lambda: [
         {"domain": "a.example", "resolved": True, "error": None, "elapsed_seconds": 0.01},
     ]
-    app.resolution_tick()
+    _run_resolution_to_completion(app)
     assert "resolution fails" not in app.title
+
+
+def test_resolution_tick_does_not_block_the_run_loop(tmp_path):
+    """The incident tick is the app's primary job and shares the run loop with
+    resolution_tick. A slow batch must not hold it up.
+    """
+    import time
+
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    app.state_machine = FakeStateMachine("healthy")
+
+    def slow_job():
+        time.sleep(10)
+        return []
+
+    app.resolution_job = slow_job
+
+    started = time.monotonic()
+    app.resolution_tick()
+    assert time.monotonic() - started < 1.0
+
+    # The incident tick still runs while the batch is in flight.
+    app.tick()
+    assert "healthy" in app.title.lower()
+
+
+def test_overlapping_resolution_cycle_is_skipped_not_stacked(tmp_path):
+    """The stall list only grows, so a batch can outlast its own cadence.
+    Starting a second thread on top of a running one would compound the load.
+    """
+    import threading
+    import time
+
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    app.state_machine = FakeStateMachine("healthy")
+    release = threading.Event()
+    calls = []
+
+    def blocking_job():
+        calls.append(1)
+        release.wait(timeout=5)
+        return []
+
+    app.resolution_job = blocking_job
+
+    app.resolution_tick()
+    first_thread = app._resolution_thread
+    time.sleep(0.1)
+    app.resolution_tick()  # should be a no-op while the first is alive
+
+    assert app._resolution_thread is first_thread
+    release.set()
+    first_thread.join(timeout=5)
+    assert len(calls) == 1

@@ -60,6 +60,7 @@ modules = [
     "netdnsmonitor.ladder", "netdnsmonitor.repair_executor", "netdnsmonitor.dns_query",
     "netdnsmonitor.prober", "netdnsmonitor.log_watcher", "netdnsmonitor.query_log",
     "netdnsmonitor.resolution_prober", "netdnsmonitor.resolution_log",
+    "netdnsmonitor.stall_log",
     "netdnsmonitor.escalation", "netdnsmonitor.anthropic_escalator",
     "netdnsmonitor.report", "netdnsmonitor.report_storage", "netdnsmonitor.status",
     "netdnsmonitor.state_machine", "netdnsmonitor.app",
@@ -78,8 +79,35 @@ except Exception as exc:
 print(
     "OK   config loaded: poll_interval_seconds={poll_interval_seconds}s, "
     "resolution_interval_seconds={resolution_interval_seconds}s, "
-    "resolution_top_n={resolution_top_n}".format(**config)
+    "resolution_stall_seconds={resolution_stall_seconds}s, "
+    "resolution_batch_deadline_seconds={resolution_batch_deadline_seconds}s".format(**config)
 )
+if config["resolution_batch_deadline_seconds"] >= config["resolution_interval_seconds"]:
+    print(
+        "WARN resolution_batch_deadline_seconds >= resolution_interval_seconds -- a batch "
+        "can still be running when the next cycle is due. The overlapping cycle is skipped "
+        "rather than stacked, so this costs coverage, not stability. Lower the deadline."
+    )
+
+# The retry list is read from the resolution log, and the only writer of that
+# log is the job that consumes the list -- so an absent log cannot bootstrap
+# itself. Worth saying at launch rather than leaving the user to wonder why
+# nothing is ever appended. See HOWTO.md "The monitor needs a seeded log".
+from netdnsmonitor.stall_log import select_stalled_domains
+
+stalled = select_stalled_domains(
+    config["resolution_log_path"], stall_seconds=config["resolution_stall_seconds"]
+)
+if stalled:
+    print(f"OK   resolution monitor will re-check {len(stalled)} ever-stalled domain(s)")
+else:
+    print(
+        "WARN no stalled domains found in "
+        f"{config['resolution_log_path']} -- the resolution monitor will be a no-op. "
+        "It reads that log to decide what to retry, and it is also the only thing that "
+        "writes it, so an empty log stays empty. See HOWTO.md "
+        '"The monitor needs a seeded log".'
+    )
 if not config["domains"]:
     print(
         "WARN domains: is empty -- dns_ok will always be unknown, classify() will "

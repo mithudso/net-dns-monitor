@@ -95,16 +95,35 @@ the Claude escalation response if one occurred. Hand the `.md` file to IT.
 
 ## Resolution monitor
 
-Independent of incident detection, the app mines the local DNS query log
-(`log show`) every `resolution_interval_seconds` (default 300 = 5 minutes)
-for the `resolution_top_n` (default 50) most-frequently-queried domains,
-attempts to resolve each in parallel, and appends the outcome to
+Independent of incident detection, every `resolution_interval_seconds`
+(default 300 = 5 minutes) the app re-resolves **every domain that has ever
+stalled on this machine**, in parallel, and appends the outcome to
 `resolution_log_path` (default:
 `~/Library/Application Support/net-dns-monitor/resolution-log.jsonl`) as one
 JSON object per line: `domain`, `resolved`, `error`, `elapsed_seconds`,
-`checked_at`. This is a standing health record of the domains this machine
-actually uses, separate from the `domains` list that drives incident
-detection.
+`outcome`, `checked_at`. The stall list is read back out of that same log, so
+the feature builds its own watch list over time.
+
+"Stalled" means the lookup *took* at least `resolution_stall_seconds`
+(default 1.0) -- not that it failed. An instant `NXDOMAIN` is a fast,
+definitive answer and is not a stall. This distinction matters more than it
+sounds: the query-log mining this replaced swept up non-domains (bundle IDs
+like `com.apple.mDNSResponder`, truncated tokens like `com.code42.agen`), and
+14,845 of 16,282 observed records were those failing instantly. Keying on
+elapsed time excludes them without needing a "is this a real domain" guess.
+
+Because the list only grows, each cycle is bounded by
+`resolution_batch_deadline_seconds` (default 240, which must stay under the
+interval). Domains still outstanding at the deadline are logged with
+`outcome: "abandoned"`, and abandoned records are deliberately **not** treated
+as stall evidence -- otherwise a slow batch would enlarge the list, which
+would make batches slower still. The batch runs on a worker thread so it can
+never delay the 30-second incident poll.
+
+Note that `resolution_timeout_seconds` is not enforceable per lookup:
+`socket.setdefaulttimeout()` does not bound `socket.getaddrinfo()`, which is a
+blocking call into the system resolver. Measured on macOS, a missing `.local`
+name took 5.01s against a 2.0 setting. The batch deadline is the real ceiling.
 
 ## Tests
 
@@ -129,8 +148,9 @@ test suite, since it needs a real macOS run loop.
 - `dns_query.py` -- raw UDP query against a specific public resolver
 - `prober.py` -- TCP-connect reachability + DNS resolution aggregation
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
-- `query_log.py` -- `log show` reading + top-queried-domain extraction for the resolution monitor
-- `resolution_prober.py` -- parallel DNS resolution of a domain batch
+- `stall_log.py` -- selects every ever-stalled domain from the resolution log
+- `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)
+- `resolution_prober.py` -- parallel, deadline-bounded DNS resolution of a domain batch
 - `resolution_log.py` -- JSONL append for resolution-monitor findings
 - `escalation.py` -- redaction + the escalate-or-not gate
 - `anthropic_escalator.py` -- the Claude API call itself

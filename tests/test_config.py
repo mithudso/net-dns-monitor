@@ -18,10 +18,19 @@ def test_missing_file_returns_defaults(tmp_path):
 def test_resolution_monitor_defaults_present(tmp_path):
     cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
     assert cfg["resolution_interval_seconds"] == 300
-    assert cfg["resolution_top_n"] == 50
-    assert cfg["resolution_lookback"] == "1h"
+    assert cfg["resolution_stall_seconds"] == 1.0
+    assert cfg["resolution_batch_deadline_seconds"] == 240
     assert cfg["resolution_timeout_seconds"] == 2.0
     assert cfg["resolution_max_workers"] == 10
+
+
+def test_batch_deadline_fits_inside_the_poll_cadence(tmp_path):
+    """A batch that outlasts its own interval would queue cycles back to back;
+    the deadline is the only thing preventing that, so assert the relationship
+    rather than just the literal value.
+    """
+    cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
+    assert cfg["resolution_batch_deadline_seconds"] < cfg["resolution_interval_seconds"]
 
 
 def test_resolution_log_path_is_tilde_expanded(tmp_path):

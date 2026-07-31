@@ -29,12 +29,30 @@ sensitive_strings: []
 reports_dir: "~/Library/Application Support/net-dns-monitor/reports"
 
 # Separately from the `domains` incident-detection list above: every
-# resolution_interval_seconds, the app mines the local DNS query log for the
-# resolution_top_n busiest domains and re-resolves each in parallel, logging
-# the outcome as JSONL to resolution_log_path.
+# resolution_interval_seconds, the app re-resolves every domain that has ever
+# stalled -- read back out of resolution_log_path itself -- in parallel, and
+# appends the outcome to that same log as JSONL.
 resolution_log_path: "~/Library/Application Support/net-dns-monitor/resolution-log.jsonl"
 resolution_interval_seconds: 300
-resolution_lookback: "1h"
-resolution_top_n: 50
+
+# A lookup counts as "stalled" at or above this many seconds. This keys on how
+# long the lookup took, not on whether it failed: an instant NXDOMAIN is a
+# fast definitive answer, not a stall. Raise this if the retry list is larger
+# than you want (1.0 -> 5.0 keeps only the badly hung lookups).
+resolution_stall_seconds: 1.0
+
+# Wall-clock ceiling on one batch; anything still outstanding is logged as
+# "abandoned" and the batch returns. Keep it below
+# resolution_interval_seconds. This is the real cap on a cycle -- see the note
+# on resolution_timeout_seconds below.
+resolution_batch_deadline_seconds: 240
+
+# NOT enforceable per lookup: socket.setdefaulttimeout() does not bound
+# socket.getaddrinfo(), which is a blocking call into the system resolver.
+# Measured on macOS, a missing .local name took 5.01s against this 2.0 value.
+# resolution_batch_deadline_seconds is what actually bounds a cycle.
 resolution_timeout_seconds: 2.0
 resolution_max_workers: 10
+
+# Retired keys (ignored if present): resolution_lookback, resolution_top_n --
+# the monitor no longer mines the query log for the busiest domains.

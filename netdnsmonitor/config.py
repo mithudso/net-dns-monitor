@@ -19,13 +19,25 @@ DEFAULT_CONFIG = {
     "log_lookback": "5m",
     "sensitive_strings": [],
     "reports_dir": "~/Library/Application Support/net-dns-monitor/reports",
-    # Top-queried-domain resolution monitor: mine the local DNS query log for
-    # the busiest domains and re-resolve them on a fixed cadence, independent
-    # of the `domains` list above (which drives incident detection).
+    # Stalled-domain resolution monitor: re-resolve every domain that has ever
+    # stalled (per the resolution log itself) on a fixed cadence, independent
+    # of the `domains` list above (which drives incident detection). This
+    # replaced an earlier "top-N busiest domains from the query log" selection;
+    # `resolution_lookback` / `resolution_top_n` are therefore retired.
     "resolution_log_path": "~/Library/Application Support/net-dns-monitor/resolution-log.jsonl",
     "resolution_interval_seconds": 300,
-    "resolution_lookback": "1h",
-    "resolution_top_n": 50,
+    # A lookup counts as a stall at or above this many seconds. Keys on elapsed
+    # time, not on failure: an instant NXDOMAIN is a fast definitive answer,
+    # not a stall.
+    "resolution_stall_seconds": 1.0,
+    # Wall-clock ceiling for one batch. Must stay under
+    # resolution_interval_seconds -- the stall list only grows and getaddrinfo
+    # cannot be bounded per lookup, so this is what actually caps a cycle.
+    "resolution_batch_deadline_seconds": 240,
+    # Not enforceable per lookup: socket.setdefaulttimeout() does not bound
+    # getaddrinfo. Kept because it is honoured by injected resolvers in tests
+    # and documents intent; resolution_batch_deadline_seconds is the real
+    # ceiling.
     "resolution_timeout_seconds": 2.0,
     "resolution_max_workers": 10,
 }

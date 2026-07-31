@@ -2,8 +2,8 @@
 
 macOS menu bar app that watches network + DNS connectivity, auto-diagnoses
 via an offline troubleshooting ladder, escalates to Claude when the ladder
-can't resolve it, saves an IT-ready incident report, and separately tracks
-resolution health for the domains this machine actually queries most.
+can't resolve it, saves an IT-ready incident report, and separately re-checks
+every DNS lookup that has ever stalled on this machine.
 
 ## Table of contents
 
@@ -12,7 +12,7 @@ resolution health for the domains this machine actually queries most.
 - [Configuration](#configuration)
 - [Running the app](#running-the-app)
 - [Feature: incident detection and auto-repair](#feature-incident-detection-and-auto-repair)
-- [Feature: DNS resolution monitor (top-50 query log)](#feature-dns-resolution-monitor-top-50-query-log)
+- [Feature: DNS resolution monitor (every ever-stalled domain)](#feature-dns-resolution-monitor-every-ever-stalled-domain)
 - [Feature: Claude escalation](#feature-claude-escalation)
 - [Feature: incident reports](#feature-incident-reports)
 - [Menu bar reference](#menu-bar-reference)
@@ -77,11 +77,15 @@ below (from `netdnsmonitor/config.py`). Config file lives at
 | `sensitive_strings` | `[]` | escalation | Strings (internal hostnames, VPN ranges, etc.) redacted before anything is sent to the Anthropic API |
 | `reports_dir` | `~/Library/Application Support/net-dns-monitor/reports` | report storage | Where incident `.json`/`.md` reports are written |
 | `resolution_log_path` | `~/Library/Application Support/net-dns-monitor/resolution-log.jsonl` | resolution monitor | Where resolution-check findings are appended |
-| `resolution_interval_seconds` | `300` | resolution monitor | How often (seconds) the top-domain resolution check runs |
-| `resolution_lookback` | `"1h"` | resolution monitor | Window of unified log scanned to find the busiest queried domains |
-| `resolution_top_n` | `50` | resolution monitor | How many top-queried domains to resolve each cycle |
-| `resolution_timeout_seconds` | `2.0` | resolution monitor | Per-domain resolution timeout |
+| `resolution_interval_seconds` | `300` | resolution monitor | How often (seconds) the stalled-domain resolution check runs |
+| `resolution_stall_seconds` | `1.0` | resolution monitor | A lookup at or above this elapsed time counts as a stall and joins the retry list permanently |
+| `resolution_batch_deadline_seconds` | `240` | resolution monitor | Wall-clock ceiling on one batch; must stay below `resolution_interval_seconds` |
+| `resolution_timeout_seconds` | `2.0` | resolution monitor | Intended per-domain timeout. **Not enforceable** -- see [the note below](#the-timeout-that-isnt) |
 | `resolution_max_workers` | `10` | resolution monitor | Thread pool size for parallel resolution |
+
+Retired keys, ignored if still present in your `config.yaml`:
+`resolution_lookback`, `resolution_top_n` (the monitor no longer mines the
+query log for the busiest domains).
 
 Example `config.yaml`:
 
@@ -109,8 +113,8 @@ reports_dir: "~/Library/Application Support/net-dns-monitor/reports"
 
 resolution_log_path: "~/Library/Application Support/net-dns-monitor/resolution-log.jsonl"
 resolution_interval_seconds: 300
-resolution_lookback: "1h"
-resolution_top_n: 50
+resolution_stall_seconds: 1.0
+resolution_batch_deadline_seconds: 240
 resolution_timeout_seconds: 2.0
 resolution_max_workers: 10
 ```
@@ -175,7 +179,46 @@ Two independent timers start immediately:
 1. **Connectivity poll** (`poll_interval_seconds`, default 30s) -- feeds
    incident detection.
 2. **Resolution monitor** (`resolution_interval_seconds`, default 300s /
-   5 min) -- feeds the top-domain resolution log.
+   5 min) -- re-checks every ever-stalled domain. Runs on a worker thread, so
+   a long batch never delays timer 1.
+
+### Starting automatically at login
+
+Install the LaunchAgent template at
+`scripts/com.mitchhudson.net-dns-monitor.plist` (edit the paths inside it to
+match your checkout):
+
+```bash
+cp scripts/com.mitchhudson.net-dns-monitor.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mitchhudson.net-dns-monitor.plist
+launchctl list | grep net-dns    # confirm it registered
+```
+
+To stop it starting at login again:
+
+```bash
+launchctl bootout gui/$(id -u)/com.mitchhudson.net-dns-monitor
+```
+
+Three things about that plist are deliberate:
+
+- **`LaunchAgent`, not `LaunchDaemon`.** This is a GUI menu bar app and needs
+  the logged-in user's session. A daemon runs before login with no window
+  server access and could never draw a status item.
+- **`ProgramArguments` points at the executable inside the `.app` bundle**, not
+  at `python -m netdnsmonitor.app`. A bare module launch reintroduces the
+  "Python" Dock/Force-Quit name that the frozen bundle exists to fix.
+- **No `KeepAlive`.** With it, quitting from the menu bar's Quit item would
+  immediately relaunch the app, so you could never turn it off without
+  unloading the agent.
+
+`launchctl bootstrap` runs the agent immediately as well as at login, so quit
+any copy you started by hand first or you'll get two menu bar items.
+
+Note that the path inside the plist points at wherever you built the bundle. If
+you move or delete that checkout -- including removing this git worktree after
+merging -- login startup breaks silently. Fix by editing the path in the plist
+and running `launchctl bootout` then `bootstrap` again.
 
 ## Feature: incident detection and auto-repair
 
@@ -213,36 +256,48 @@ Every `poll_interval_seconds`:
 7. **Report** -- an incident report is written; see
    [incident reports](#feature-incident-reports).
 
-## Feature: DNS resolution monitor (top-50 query log)
+## Feature: DNS resolution monitor (every ever-stalled domain)
 
 Independent of incident detection. Every `resolution_interval_seconds`
 (default 5 minutes):
 
-1. **Read the query log** -- runs `log show` over the last
-   `resolution_lookback` (default `1h`), filtered to `mDNSResponder` /
-   `"DNS"` entries.
-2. **Extract top domains** -- regex-extracts dotted hostnames from the raw
-   log text and counts frequency (IP addresses like `10.0.0.1` are excluded
-   by requiring a non-numeric final label). Returns the `resolution_top_n`
-   (default 50) most-frequently-queried domains.
-3. **Resolve in parallel** -- resolves all of them concurrently via a
-   thread pool (`resolution_max_workers`, default 10) instead of serially,
-   so a batch of 50 domains with a couple of slow/unreachable ones still
-   finishes in roughly one timeout period, not minutes.
+1. **Select the stalled domains** -- streams `resolution_log_path` and picks
+   every domain whose lookup has *ever* taken at least
+   `resolution_stall_seconds` (default 1.0). "Ever" is literal: one clean fast
+   run afterwards does not drop a domain off the list. The list is ordered
+   least-recently-checked first, so a deadline-truncated cycle can't starve the
+   tail of the list forever.
+2. **Resolve in parallel** -- resolves all of them concurrently via a thread
+   pool (`resolution_max_workers`, default 10) instead of serially, so a batch
+   with several slow/unreachable entries still finishes in roughly one timeout
+   period per worker-load, not minutes.
+3. **Stop at the batch deadline** -- anything still outstanding after
+   `resolution_batch_deadline_seconds` (default 240) is recorded as
+   `outcome: "abandoned"` and the batch returns. Lookups that never started are
+   cancelled; ones already inside `getaddrinfo` are left to finish on their own
+   rather than holding up the app.
 4. **Log the findings** -- appends one JSON object per domain to
    `resolution_log_path` as JSON Lines (one record per line, not one big
    array, so a crash mid-write can't corrupt earlier entries and the file
    can be tailed/grepped like a normal log).
 
+The batch runs on a worker thread, not the menu bar run loop, so a long cycle
+can never delay the 30-second incident poll. If a cycle is still running when
+the next one is due, the new one is skipped rather than stacked. Findings are
+picked up and shown in the title by the next incident tick (AppKit status-item
+updates aren't thread-safe, so the worker never touches the title itself).
+
 Each record looks like:
 
 ```json
-{"domain": "example.com", "resolved": true, "error": null, "elapsed_seconds": 0.031, "checked_at": "2026-07-20T09:00:00+00:00"}
+{"domain": "example.com", "resolved": true, "error": null, "elapsed_seconds": 0.031, "outcome": "completed", "checked_at": "2026-07-20T09:00:00+00:00"}
 ```
 
 - `resolved` -- `true`/`false`
 - `error` -- the resolver error string, or `null` on success
 - `elapsed_seconds` -- how long that one resolution took
+- `outcome` -- `"completed"` if the lookup returned, `"abandoned"` if the batch
+  deadline passed first
 - `checked_at` -- UTC ISO-8601 timestamp for the whole batch that record
   belongs to
 
@@ -336,7 +391,7 @@ Each report is self-contained:
   - 🔴 incident -- the anti-flap gate has declared one (with the layer,
     e.g. "🔴 Net/DNS: dns issue").
   - Independent of all three: if the most recent resolution-monitor batch
-    (see [resolution monitor](#feature-dns-resolution-monitor-top-50-query-log))
+    (see [resolution monitor](#feature-dns-resolution-monitor-every-ever-stalled-domain))
     had any failed domain, the title gets a `N/total resolution fails`
     suffix -- since a top-queried domain can stop resolving without
     tripping the single configured `domains` check.
@@ -381,7 +436,9 @@ tested separately, on its own). The rest needs a real macOS run loop.
 | Menu bar title stuck on "starting..." | App hasn't completed its first poll tick yet | Wait one `poll_interval_seconds` cycle |
 | Menu bar stuck on 🔴 "unclassified issue" forever, even though the network is fine | `domains` is empty (the default) -- `dns_ok` is always unknown, `classify()` returns `unclassified` (never `healthy`), and the anti-flap gate latches into a permanent incident it can never clear | Add at least one real domain to `domains` in `config.yaml` |
 | No incident reports ever appear | `failure_threshold` not yet reached, or connectivity is actually fine (with `domains` populated) | Lower `failure_threshold` temporarily to test, or check `reports_dir` permissions |
-| Resolution log file never appears | No queries seen in `resolution_lookback` window, or `log show` needs a permission grant | Check Full Disk Access; try a larger `resolution_lookback` |
+| Resolution log never appears at all on a fresh install | Expected, and it will not self-correct: the selector reads the resolution log, and the only thing that writes that log is the job consuming the selector's output. No log means no domains, which means no findings, which means nothing is appended | See [the seeding limitation](#the-monitor-needs-a-seeded-log) -- the log has to be seeded once by something else |
+| Resolution log has no new entries | Nothing has crossed `resolution_stall_seconds` yet, so the retry list is empty | Lower `resolution_stall_seconds` to widen what counts as a stall |
+| Resolution records all say `outcome: "abandoned"` | The batch is hitting `resolution_batch_deadline_seconds` before the lookups return | Raise `resolution_max_workers`, raise `resolution_stall_seconds` to shrink the list, or raise the deadline (keeping it under `resolution_interval_seconds`) |
 | Escalation field shows an error instead of an analysis | `ANTHROPIC_API_KEY` not set, or the API call failed | Export the key; check the error string in the report's escalation field for the underlying cause |
 | `flush_dns_cache` reports `partial` | `dscacheutil -flushcache` succeeded but `killall -HUP mDNSResponder` was rejected | Expected and documented -- mDNSResponder runs as a different user; a signal from an unprivileged process is rejected regardless of the command's own permissions |
 | `scripts/start.sh` finishes with no visible menu bar icon | `open -n dist/Net-DNS-Monitor.app` failed silently, or the app errored before reaching rumps | Check `net-dns-monitor.log` in the repo root for the actual error |
@@ -398,7 +455,8 @@ tested separately, on its own). The rest needs a real macOS run loop.
 - `dns_query.py` -- raw UDP query against a specific public resolver
 - `prober.py` -- TCP-connect reachability + DNS resolution aggregation
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
-- `query_log.py` -- `log show` reading + top-queried-domain extraction for the resolution monitor
+- `stall_log.py` -- selects every ever-stalled domain from the resolution log
+- `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)
 - `resolution_prober.py` -- parallel DNS resolution of a domain batch
 - `resolution_log.py` -- JSONL append for resolution-monitor findings
 - `escalation.py` -- redaction + the escalate-or-not gate
@@ -426,8 +484,53 @@ tested separately, on its own). The rest needs a real macOS run loop.
   network interface) are stubbed as `NEEDS_PRIVILEGE` rather than executed,
   since a sandboxed menu-bar app doesn't have the rights to do them. Adding
   a proper `SMAppService` privileged helper would remove this limitation.
-- Domain extraction in the resolution monitor is a regex over raw `log
-  show` text, not a parse of mDNSResponder's internal log schema (which
-  isn't stable across macOS versions and isn't independently documented by
-  Apple) -- treat the top-50 list as a good-faith approximation of query
-  volume, not an exact count.
+- The resolution monitor's stall list is seeded from records the app wrote
+  itself, which were originally produced by a regex over raw `log show` text
+  rather than a parse of mDNSResponder's internal log schema (not stable
+  across macOS versions, not independently documented by Apple). So the list
+  can contain entries that were never really hostnames. They are kept rather
+  than filtered: something that took 30s to answer is a real observation about
+  this machine, and inventing an "is this a real domain" predicate would throw
+  away true stalls as readily as false ones.
+- On the observed log this selects a list dominated by `.local` mDNS names
+  (UUID-named Bonjour/AirPlay devices) and reverse `in-addr.arpa` lookups.
+  That is genuine local-network slowness, not a bug, but it does mean the list
+  is more about LAN discovery than about internet DNS.
+
+### The monitor needs a seeded log
+
+The retry list is "every domain that has ever stalled", read out of the
+resolution log. The only writer of that log is the resolution job that consumes
+the list. Those two facts together make the set **closed**:
+
+- On a **fresh install** the monitor is a permanent no-op. Empty log to `[]`
+  domains to no findings to nothing appended to still-empty log, every cycle,
+  forever. Verified against an empty directory: the log is never even created.
+- Even with a primed log, a domain that is not already in it can never enter
+  the set, because only domains already selected are ever re-resolved.
+
+This is a property of the requested design ("retry everything that ever
+stalled"), not a bug in it -- but it does mean the feature reports on a fixed
+population. On this machine that population is the 16k-record history left by
+the retired query-log path, which yields 91 domains.
+
+`query_log.extract_top_domains` -- which used to do the discovery -- is still
+present and still unit-tested, just not wired into `app.py`. Re-adding a
+discovery pass to `build_resolution_job` is about a five-line change if you
+later want new stalls to be found automatically.
+
+### The timeout that isn't
+
+`resolution_timeout_seconds` does not bound a lookup. `socket.getaddrinfo()`
+is a blocking call into the system resolver and is not interruptible from
+Python; `socket.setdefaulttimeout()` has no effect on it. Measured on this
+machine: a missing `.local` name took **5.01s** against a 2.0 setting, and the
+resolution log contains real lookups at 30s and 35s under the same setting.
+
+The key is kept because injected resolvers in the tests honour it and it
+documents intent, but the thing that actually bounds a cycle is
+`resolution_batch_deadline_seconds`. Bounding a single lookup properly would
+mean either resolving out-of-process or issuing raw DNS queries instead of
+using the system resolver -- and the latter would stop testing the code path
+that actually matters (`.local` mDNS names don't resolve over plain UDP DNS at
+all).

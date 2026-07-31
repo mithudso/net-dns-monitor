@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.mitchhudson.net-dns-monitor</string>
+
+	<!-- A LaunchAgent, not a LaunchDaemon, on purpose: this is a rumps menu bar
+	     app and needs the logged-in user's GUI session. A daemon runs before
+	     login with no window server access and could never draw a status item.
+
+	     ProgramArguments points at the executable *inside* the .app bundle
+	     rather than at `python -m netdnsmonitor.app`. That matters: framework
+	     Python re-execs itself into its own bundled Python.app the instant
+	     rumps creates the GUI, so a bare module launch shows "Python" in the
+	     Dock / Force Quit / Cmd-Tab. The py2app-frozen bundle embeds a private
+	     interpreter that never takes that path. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/PATH/TO/YOUR/net-dns-monitor/dist/Net-DNS-Monitor.app/Contents/MacOS/Net-DNS-Monitor</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Deliberately no KeepAlive. With it, quitting from the menu bar's Quit
+	     item would just relaunch the app, so the user could never turn it off
+	     without unloading the agent. -->
+
+	<key>ProcessType</key>
+	<string>Interactive</string>
+
+	<key>StandardOutPath</key>
+	<string>/PATH/TO/YOUR/HOME/Library/Logs/net-dns-monitor.launchd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/PATH/TO/YOUR/HOME/Library/Logs/net-dns-monitor.launchd.log</string>
+</dict>
+</plist>
