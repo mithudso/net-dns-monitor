@@ -31,8 +31,14 @@ def test_invokes_log_show_with_lookback_window():
 
     watcher = make_log_watcher(run_fn=run_fn, lookback="10m")
     watcher()
-    assert captured["args"][:2] == ["log", "show"]
-    assert "10m" in captured["args"]
+    args = captured["args"]
+    assert args[:2] == ["log", "show"]
+    # Assert the flag/value pair, not bare membership: "10m" is still "in" the
+    # arg list when it trails a different flag, so `--last` could become
+    # `--start` unnoticed. `log show` then exits 64 on the malformed window and
+    # this reader turns any nonzero return into [] -- every incident report
+    # silently carrying zero log evidence.
+    assert args[args.index("--last") + 1] == "10m"
 
 
 def test_returns_empty_list_when_command_fails():
@@ -74,3 +80,36 @@ def test_returns_empty_list_on_unicode_decode_error_instead_of_raising():
 
     watcher = make_log_watcher(run_fn=bad_decode)
     assert watcher() == []
+
+
+def test_returns_empty_list_when_the_log_binary_is_missing_instead_of_raising():
+    """The OSError arm of `except (SubprocessError, OSError, UnicodeError)` --
+    the only one of the three with no coverage. FileNotFoundError is what
+    subprocess.run raises when the executable isn't on PATH, and the frozen
+    .app does not inherit the shell's environment (the same root cause as the
+    explicit-encoding fix), so it is the reachable case.
+    """
+
+    def missing_binary(args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "log")
+
+    watcher = make_log_watcher(run_fn=missing_binary)
+    assert watcher() == []
+
+
+def test_bounds_the_log_show_call_and_captures_its_output():
+    """Two kwargs every fake in this file supplies for free, so nothing else
+    pins them: without `timeout=` a wedged `log show` hangs the menu bar poll
+    loop with no upper bound, and without `capture_output=` subprocess leaves
+    result.stdout as None and the marker filter raises AttributeError.
+    """
+    captured = {}
+
+    def run_fn(args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    make_log_watcher(run_fn=run_fn)()
+    assert captured.get("timeout") == 10
+    assert captured.get("capture_output") is True
+    assert captured.get("text") is True

@@ -11,7 +11,7 @@ tools and report their output; none of them mutate system state.
 import os
 import subprocess
 from types import SimpleNamespace
-from typing import Callable, Optional
+from typing import Callable
 
 from netdnsmonitor.dns_query import query_public_dns
 from netdnsmonitor.ladder import LadderStep
@@ -70,7 +70,16 @@ def make_repair_executor(
     def check_resolver_overrides() -> str:
         if not resolver_dir_exists_fn(RESOLVER_DIR):
             return f"no {RESOLVER_DIR} overrides configured"
-        entries = resolver_listdir_fn(RESOLVER_DIR)
+        try:
+            entries = resolver_listdir_fn(RESOLVER_DIR)
+        except OSError as exc:
+            # Every subprocess path here is wrapped by run(); this one was not.
+            # os.listdir can raise PermissionError, or FileNotFoundError via a
+            # TOCTOU race with the isdir check above. state_machine has no
+            # per-step guard, so an escape kills the whole incident and no
+            # report gets written -- the opposite of this module's contract of
+            # reporting each step's outcome as a string.
+            return f"failed: could not read {RESOLVER_DIR} ({exc})"
         if not entries:
             return f"no {RESOLVER_DIR} overrides configured"
         return f"{RESOLVER_DIR} overrides present for: {', '.join(entries)}"

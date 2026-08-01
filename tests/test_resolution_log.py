@@ -5,9 +5,24 @@ from netdnsmonitor.resolution_log import append_resolution_findings
 
 
 def _findings():
+    # Shape must match what resolution_prober.resolve_domains_parallel actually
+    # emits -- every finding it returns carries `outcome`, so a fixture without
+    # it models a record the only producer cannot produce.
     return [
-        {"domain": "a.example", "resolved": True, "error": None, "elapsed_seconds": 0.01},
-        {"domain": "b.example", "resolved": False, "error": "timed out", "elapsed_seconds": 2.0},
+        {
+            "domain": "a.example",
+            "resolved": True,
+            "error": None,
+            "elapsed_seconds": 0.01,
+            "outcome": "completed",
+        },
+        {
+            "domain": "b.example",
+            "resolved": False,
+            "error": "timed out",
+            "elapsed_seconds": 2.0,
+            "outcome": "completed",
+        },
     ]
 
 
@@ -42,3 +57,38 @@ def test_no_op_for_empty_findings(tmp_path):
     path = tmp_path / "resolution-log.jsonl"
     append_resolution_findings([], str(path))
     assert not path.exists()
+
+
+def test_every_field_the_reader_depends_on_survives_the_round_trip(tmp_path):
+    """stall_log.select_stalled_domains reads these records back: it needs
+    `elapsed_seconds` to decide what counts as a stall and `outcome` to drop
+    abandoned lookups. Nothing asserted the writer preserves them, so a writer
+    that dropped either would break stall detection silently -- dropping
+    `outcome` makes deadline-abandoned lookups count as stall evidence, which
+    is exactly the runaway feedback loop stall_log exists to avoid.
+    """
+    path = tmp_path / "resolution-log.jsonl"
+    finding = {
+        "domain": "queued.example",
+        "resolved": False,
+        "error": "batch deadline exceeded before this lookup finished",
+        "elapsed_seconds": 240.0,
+        "outcome": "abandoned",
+    }
+    append_resolution_findings(
+        [finding], str(path), checked_at=datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc)
+    )
+    record = json.loads(path.read_text().splitlines()[0])
+    assert record == dict(finding, checked_at="2026-07-20T09:00:00+00:00")
+
+
+def test_one_checked_at_is_shared_by_every_record_in_a_batch(tmp_path):
+    """Load-bearing, not an optimization: stall_log's
+    least-recently-checked-first ordering is defined against a per-batch
+    timestamp. Stamping per record would give a deadline-truncated cycle a
+    different timestamp than the completions in the same cycle.
+    """
+    path = tmp_path / "resolution-log.jsonl"
+    append_resolution_findings(_findings(), str(path))
+    stamps = {json.loads(line)["checked_at"] for line in path.read_text().splitlines()}
+    assert len(stamps) == 1

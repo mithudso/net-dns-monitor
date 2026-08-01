@@ -63,7 +63,7 @@ modules = [
     "netdnsmonitor.stall_log",
     "netdnsmonitor.escalation", "netdnsmonitor.anthropic_escalator",
     "netdnsmonitor.report", "netdnsmonitor.report_storage", "netdnsmonitor.status",
-    "netdnsmonitor.state_machine", "netdnsmonitor.app",
+    "netdnsmonitor.state_machine", "netdnsmonitor.dock_icon", "netdnsmonitor.app",
 ]
 for name in modules:
     importlib.import_module(name)

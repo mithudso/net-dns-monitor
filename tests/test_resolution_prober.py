@@ -74,8 +74,15 @@ def test_batch_deadline_returns_without_waiting_for_hung_lookups():
     """getaddrinfo cannot be bounded per lookup, so the deadline is the only
     real ceiling on a cycle. It must return early, not block for the full hang.
     """
+    # 5.0 and 2.5 are a pair: the sleep must stay well above the assertion, or
+    # a deadline that no longer bounds anything would still finish inside it
+    # and this would pass on a broken prober. 2.5s is still >8x the 0.3s
+    # deadline. Both are as small as that relationship allows, because whatever
+    # is still sleeping here gets joined at interpreter exit and charged to
+    # every pytest run in the repo -- this file alone was 0.85s of tests and
+    # 30.8s of wall clock before these were shortened.
     def hangs(domain, timeout):
-        time.sleep(30)
+        time.sleep(5.0)
         return (True, None)
 
     started = time.monotonic()
@@ -84,15 +91,18 @@ def test_batch_deadline_returns_without_waiting_for_hung_lookups():
     )
     elapsed = time.monotonic() - started
 
-    assert elapsed < 5, f"deadline did not bound the batch (took {elapsed:.1f}s)"
+    assert elapsed < 2.5, f"deadline did not bound the batch (took {elapsed:.1f}s)"
     assert findings[0]["outcome"] == "abandoned"
     assert findings[0]["resolved"] is False
 
 
 def test_deadline_still_returns_one_finding_per_domain_in_order():
     def slow_for_one(domain, timeout):
+        # Only has to still be unfinished when the 0.3s deadline is checked.
+        # Anything longer is pure interpreter-exit join time; no elapsed
+        # assertion here, so there is nothing to keep in sync.
         if domain == "hung.example":
-            time.sleep(30)
+            time.sleep(3.0)
         return (True, None)
 
     findings = resolve_domains_parallel(
@@ -110,6 +120,42 @@ def test_deadline_still_returns_one_finding_per_domain_in_order():
     by_domain = {f["domain"]: f for f in findings}
     assert by_domain["fast.example"]["outcome"] == "completed"
     assert by_domain["hung.example"]["outcome"] == "abandoned"
+
+
+def test_non_positive_deadline_abandons_without_running_any_lookup():
+    """`resolution_batch_deadline_seconds` is user-settable YAML with no
+    validation, so `0` is a plausible typo. Deciding after submission made the
+    outcome a race a fast resolver could win -- the same input returned
+    "completed" on one run and "abandoned" on the next -- while every lookup
+    still ran and had its result discarded.
+    """
+    attempted = []
+
+    def resolve_fn(domain, timeout):
+        attempted.append(domain)
+        return (True, None)
+
+    for deadline in (0, -5):
+        findings = resolve_domains_parallel(
+            ["a.example", "b.example"], resolve_fn=resolve_fn, deadline_seconds=deadline
+        )
+        assert [f["domain"] for f in findings] == ["a.example", "b.example"]
+        assert all(f["outcome"] == "abandoned" for f in findings)
+        assert all(f["resolved"] is False for f in findings)
+
+    assert attempted == []
+
+
+def test_abandoned_findings_carry_the_same_keys_as_completed_ones():
+    """These records are persisted and read back by stall_log, so every return
+    path has to emit the same schema -- an abandoned record missing a key the
+    reader depends on would break stall detection silently.
+    """
+    completed = resolve_domains_parallel(["a.example"], resolve_fn=lambda d, t: (True, None))
+    abandoned = resolve_domains_parallel(
+        ["a.example"], resolve_fn=lambda d, t: (True, None), deadline_seconds=0
+    )
+    assert set(completed[0]) == set(abandoned[0])
 
 
 def test_fast_batch_under_its_deadline_is_unaffected():

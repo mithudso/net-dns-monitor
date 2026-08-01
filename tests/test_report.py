@@ -42,6 +42,11 @@ def test_summary_mentions_classification_and_resolution():
     unresolved = build_report(**_base_kwargs(recheck_ok=False))
     assert "dns" in resolved["summary"].lower()
     assert "resolved" in resolved["summary"].lower()
+    # "unresolved" contains "resolved", so the line above alone holds for a
+    # summary that says the exact opposite of what happened -- hardcoding
+    # `resolution_word = "unresolved"` kept the whole suite green while every
+    # incident report claimed the incident was never fixed.
+    assert "unresolved" not in resolved["summary"].lower()
     assert "unresolved" in unresolved["summary"].lower()
 
 

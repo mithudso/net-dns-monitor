@@ -23,6 +23,19 @@
 	<key>RunAtLoad</key>
 	<true/>
 
+	<!-- launchd starts processes with no LANG/LC_* at all, which makes the
+	     frozen app's locale encoding US-ASCII. That is what caused incident
+	     reports to be written as 0-byte .md files: an unencoded open() raised
+	     UnicodeEncodeError on the first curly quote. report_storage now pins
+	     encoding="utf-8" explicitly, so this is belt-and-braces rather than
+	     the fix -- but a UTF-8 locale is what the app would get from a normal
+	     shell, and matching that removes a whole class of surprise. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+
 	<!-- Deliberately no KeepAlive. With it, quitting from the menu bar's Quit
 	     item would just relaunch the app, so the user could never turn it off
 	     without unloading the agent. -->

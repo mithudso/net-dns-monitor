@@ -1,4 +1,17 @@
+# Runtime deps for the frozen app. Pinned exactly on purpose: this is a
+# remote-less, CI-less desktop app whose launcher re-runs `pip install -r` on
+# every start (scripts/start.sh), so two people installing weeks apart would
+# otherwise freeze different versions into their bundles. The old
+# `anthropic>=0.40.0` floor had already drifted to 0.117.0, across many
+# pre-1.0 breaking releases. Reproducibility beats auto-upgrades here; bump
+# these deliberately.
 rumps==0.4.0
-anthropic>=0.40.0
-PyYAML>=6.0
-pytest>=8.0
+anthropic==0.117.0
+PyYAML==6.0.3
+# Directly imported -- AppKit/Foundation in app.py and dock_icon.py -- but
+# previously present only transitively via rumps. Declared so a future rumps
+# dependency change cannot silently remove it.
+pyobjc-framework-Cocoa==12.2.1
+
+# Test and tooling deps live in requirements-dev.txt. pytest used to be listed
+# here, which meant start.sh pip-installed it onto every end user's machine.

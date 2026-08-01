@@ -30,3 +30,34 @@ def test_dns_layer_ladder_checks_resolver_config_before_flushing():
 def test_unclassified_and_healthy_have_no_ladder_steps():
     assert ladder_for(Classification.UNCLASSIFIED) == []
     assert ladder_for(Classification.HEALTHY) == []
+
+
+def test_no_check_step_claims_to_need_privilege():
+    """`kind` and `needs_privilege` are independent fields, and only three of
+    the eight steps had their flag asserted. A check is read-only with no side
+    effect, so flagging one privileged makes repair_executor stub out a step it
+    could always have run.
+    """
+    for classification in (Classification.NETWORK, Classification.DNS):
+        for step in ladder_for(classification):
+            if step.kind == "check":
+                assert step.needs_privilege is False, step.name
+
+
+def test_every_step_is_either_a_check_or_a_repair():
+    for classification in (Classification.NETWORK, Classification.DNS):
+        for step in ladder_for(classification):
+            assert step.kind in ("check", "repair"), step.name
+
+
+def test_ladder_for_returns_a_fresh_list_the_caller_cannot_corrupt():
+    """state_machine iterates the returned list once per incident. Returning
+    the module-level list itself would let one caller's mutation change every
+    later incident's ladder, and the defensive `list(...)` copy was unpinned.
+    """
+    first = ladder_for(Classification.NETWORK)
+    original_length = len(first)
+    first.clear()
+    steps = ladder_for(Classification.NETWORK)
+    assert len(steps) == original_length
+    assert steps[0].name == "check_interface_state"

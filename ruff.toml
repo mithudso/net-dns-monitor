@@ -1,0 +1,20 @@
+target-version = "py39"
+line-length = 100
+
+[lint]
+# E/F pycodestyle+pyflakes, I import-sort, UP pyupgrade, B bugbear, SIM
+# simplify, BLE blind-except -- BLE is included deliberately so the existing
+# `# noqa: BLE001` markers keep meaning something. Each one of those marks a
+# place where swallowing is the considered choice (cosmetic Dock calls, a
+# failed batch that must not kill the worker); silencing the rule globally
+# would erase that distinction.
+select = ["E", "F", "I", "UP", "B", "SIM", "BLE"]
+# The formatter owns wrapping, and it deliberately leaves long strings and
+# URLs intact rather than mangling them.
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+# Lambda test-doubles (`resolve_fn = lambda d, t: (True, None)`) are the
+# idiom this suite is built on -- every external effect is injected as a
+# Callable -- and they read better inline than as named defs.
+"tests/**" = ["E731"]

@@ -5,8 +5,9 @@ this file only wires them to a rumps timer and a status-item title.
 
 import os
 import threading
+import traceback
 import webbrowser
-from typing import Callable
+from typing import Callable, Optional
 
 import rumps
 
@@ -114,7 +115,7 @@ class NetDnsMonitorApp(rumps.App):
         self.last_classification = None
         self.last_report_path = None
         self.last_resolution_findings: list[dict] = []
-        self._resolution_thread: threading.Thread = None
+        self._resolution_thread: Optional[threading.Thread] = None
         self.menu = ["Open last report"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
@@ -153,17 +154,30 @@ class NetDnsMonitorApp(rumps.App):
         self._resolution_thread.start()
 
     def _run_resolution(self):
-        # Single attribute rebind, so the main thread only ever observes the
-        # old list or the new one -- never a partially built one.
-        self.last_resolution_findings = self.resolution_job()
+        try:
+            # Single attribute rebind, so the main thread only ever observes
+            # the old list or the new one -- never a partially built one.
+            self.last_resolution_findings = self.resolution_job()
+        except Exception:  # noqa: BLE001 - a batch failure must surface, not die silently
+            # Without this, a job that raises every cycle (an unwritable
+            # resolution_log_path, say) leaves last_resolution_findings at its
+            # initial [] forever. _refresh_title then renders no resolution
+            # suffix at all -- visually identical to "every domain resolved
+            # fine". The monitor would be dead and the menu bar would look
+            # clean.
+            traceback.print_exc()
 
     def _refresh_title(self):
+        # Snapshot once. The resolution worker rebinds this attribute
+        # concurrently, and reading it three separate times (confirmed via
+        # `dis`) lets one batch's total splice with a newer batch's failure
+        # count -- rendering e.g. "7/2 resolution fails". The rebind itself is
+        # atomic; a reader that reads three times is not.
+        findings = self.last_resolution_findings
         resolution_failed = resolution_total = None
-        if self.last_resolution_findings:
-            resolution_total = len(self.last_resolution_findings)
-            resolution_failed = sum(
-                1 for finding in self.last_resolution_findings if not finding["resolved"]
-            )
+        if findings:
+            resolution_total = len(findings)
+            resolution_failed = sum(1 for finding in findings if not finding["resolved"])
         flap_gate = self.state_machine.flap_gate
         self.title = build_title(
             flap_gate.state,

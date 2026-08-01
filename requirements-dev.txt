@@ -1,0 +1,10 @@
+# Development and test tooling. Not installed on end-user machines --
+# scripts/start.sh installs requirements.txt only.
+#
+#   pip install -r requirements-dev.txt
+#
+# Verify loop:
+#   ruff check . && ruff format --check . && python -m pytest -q
+-r requirements.txt
+pytest==9.1.1
+ruff==0.16.1

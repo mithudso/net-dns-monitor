@@ -34,9 +34,23 @@ def test_extract_top_domains_respects_limit():
 
 
 def test_extract_top_domains_ignores_ip_addresses():
-    lines = ["reply from 10.0.0.1 for example.com."]
+    # The final label must be all-alphabetic; that is what keeps an IPv4
+    # address out of the counts. Exercising it needs a final octet of two or
+    # more digits: with a single-digit octet ("10.0.0.1") the {2,63} length
+    # floor rejects the address on its own, so the character class could be
+    # loosened to [a-zA-Z0-9] -- deleting exactly the rule the module docstring
+    # advertises -- and this test could not fail. Real mDNSResponder lines
+    # carry resolver addresses, and a leaked IP enters the ever-growing stall
+    # set permanently.
+    lines = [
+        "reply from 10.0.0.1 for example.com.",
+        "reply from 192.168.1.10 for example.com.",
+        "reply from 172.16.254.100 for example.com.",
+    ]
     top = extract_top_domains(lines, limit=50)
     assert "10.0.0.1" not in top
+    assert "192.168.1.10" not in top
+    assert "172.16.254.100" not in top
     assert "example.com" in top
 
 
@@ -53,8 +67,10 @@ def test_query_log_reader_invokes_log_show_with_lookback_window():
 
     reader = make_query_log_reader(run_fn=run_fn, lookback="1h")
     lines = reader()
-    assert captured["args"][:2] == ["log", "show"]
-    assert "1h" in captured["args"]
+    args = captured["args"]
+    assert args[:2] == ["log", "show"]
+    # Flag/value pair, not bare membership -- see test_log_watcher.py for why.
+    assert args[args.index("--last") + 1] == "1h"
     assert any("example.com" in line for line in lines)
 
 
@@ -92,3 +108,31 @@ def test_returns_empty_list_on_unicode_decode_error_instead_of_raising():
 
     reader = make_query_log_reader(run_fn=bad_decode)
     assert reader() == []
+
+
+def test_returns_empty_list_when_the_log_binary_is_missing_instead_of_raising():
+    """The OSError arm of the except clause. See the matching test in
+    test_log_watcher.py.
+    """
+
+    def missing_binary(args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "log")
+
+    reader = make_query_log_reader(run_fn=missing_binary)
+    assert reader() == []
+
+
+def test_bounds_the_log_show_call_and_captures_its_output():
+    """timeout= and capture_output= are supplied for free by every fake here,
+    so nothing else pins them. See test_log_watcher.py for what each prevents.
+    """
+    captured = {}
+
+    def run_fn(args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    make_query_log_reader(run_fn=run_fn)()
+    assert captured.get("timeout") == 10
+    assert captured.get("capture_output") is True
+    assert captured.get("text") is True

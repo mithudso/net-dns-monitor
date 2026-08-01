@@ -19,8 +19,21 @@ def test_flush_dns_cache_runs_flush_and_hup_and_reports_ok():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
     assert outcome == "ok"
-    assert any("dscacheutil" in c[0] for c in calls)
-    assert any("killall" in c[0] for c in calls)
+    # Exact argv, not a substring of argv[0]. A membership check on c[0] also
+    # accepts `dscacheutil -statistics` (flushes nothing, still reports "ok")
+    # and `killall -9 mDNSResponder` (kills the resolver daemon outright
+    # instead of signalling it). Both mutations passed the old assertions.
+    assert ["dscacheutil", "-flushcache"] in calls
+    assert ["killall", "-HUP", "mDNSResponder"] in calls
+
+
+def test_flush_dns_cache_flushes_the_cache_before_signalling_the_resolver():
+    run_fn, calls = fake_run_factory(returncode=0)
+    executor = make_repair_executor(run_fn=run_fn)
+    executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
+    assert calls.index(["dscacheutil", "-flushcache"]) < calls.index(
+        ["killall", "-HUP", "mDNSResponder"]
+    )
 
 
 def test_flush_dns_cache_reports_failure_on_nonzero_returncode():
@@ -61,7 +74,48 @@ def test_check_interface_state_shells_out_to_scutil():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_interface_state", "check", needs_privilege=False))
     assert "Network reachable via Wi-Fi" in outcome
-    assert calls[0][0] == "scutil"
+    # `calls[0][0] == "scutil"` also lets this step silently become
+    # `scutil --dns`, i.e. a different check entirely.
+    assert calls == [["scutil", "--nwi"]]
+
+
+def test_check_default_route_shells_out_to_netstat():
+    """Untested until now, and its output is egressed to the Anthropic API
+    inside ladder_results: replacing the command with `true` kept the suite
+    green while the ladder reported nothing at all.
+    """
+    run_fn, calls = fake_run_factory(stdout="default 192.0.2.1 UGScg en0")
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
+    assert "default 192.0.2.1" in outcome
+    assert calls == [["netstat", "-rn", "-f", "inet"]]
+
+
+def test_check_configured_dns_servers_shells_out_to_scutil_dns():
+    run_fn, calls = fake_run_factory(stdout="nameserver[0] : 192.0.2.53")
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("check_configured_dns_servers", "check", needs_privilege=False))
+    assert "192.0.2.53" in outcome
+    assert calls == [["scutil", "--dns"]]
+
+
+def test_check_resolver_overrides_reports_failure_instead_of_raising(tmp_path):
+    """os.listdir can raise PermissionError, or FileNotFoundError via a TOCTOU
+    race with the isdir check. state_machine has no per-step guard, so an
+    escape aborts the incident and no report is written at all.
+    """
+
+    def boom(path):
+        raise PermissionError(13, "Permission denied", path)
+
+    executor = make_repair_executor(
+        run_fn=fake_run_factory()[0],
+        resolver_dir_exists_fn=lambda path: True,
+        resolver_listdir_fn=boom,
+    )
+    outcome = executor(LadderStep("check_resolver_overrides", "check", needs_privilege=False))
+    assert outcome.startswith("failed")
+    assert "/etc/resolver" in outcome
 
 
 def test_check_resolver_overrides_reports_none_when_dir_absent():
@@ -94,10 +148,15 @@ def test_resolve_against_public_resolver_reflects_query_result():
 
 
 def test_unknown_step_name_returns_a_clear_message_instead_of_raising():
-    run_fn, _ = fake_run_factory()
+    run_fn, calls = fake_run_factory()
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("not_a_real_step", "check", needs_privilege=False))
     assert "unknown step" in outcome.lower()
+    # An unrecognised step name must never reach argv. This is the only
+    # dispatch path that handles an unmapped name, so it is the one place
+    # untrusted data could reach a command; the privileged-stub test asserts
+    # `calls == []` and this one did not.
+    assert calls == []
 
 
 def test_subprocess_timeout_is_reported_not_raised():

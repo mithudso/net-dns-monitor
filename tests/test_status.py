@@ -64,3 +64,42 @@ def test_no_resolution_suffix_when_nothing_failed():
 def test_no_resolution_suffix_when_no_data_yet():
     title = build_title("healthy", None)
     assert "resolution fails" not in title
+
+
+# Literals on purpose: asserting `ICONS["healthy"] in title` would read the
+# same dict the code reads, so it holds even when the mapping is inverted.
+GREEN, YELLOW, RED = "\U0001f7e2", "\U0001f7e1", "\U0001f534"
+
+
+def test_title_glyph_colour_matches_the_state_it_reports():
+    """The coloured circle is the signal; the word beside it is secondary --
+    and no test in the repo asserted ICONS at all. Swapping the healthy and
+    incident entries ships a red dot on a healthy network with the whole suite
+    green. test_dock_icon.py already pins this same property for the Dock by
+    sampling pixels, so the project treats it as worth testing.
+    """
+    healthy = build_title("healthy", None)
+    assert GREEN in healthy
+    assert RED not in healthy and YELLOW not in healthy
+
+    incident = build_title("incident", "dns")
+    assert RED in incident
+    assert GREEN not in incident
+
+    flaky = build_title("healthy", None, consecutive_failures=1)
+    assert YELLOW in flaky
+    assert GREEN not in flaky and RED not in flaky
+
+    assert len({GREEN, YELLOW, RED}) == 3
+
+
+def test_unknown_flap_state_is_treated_as_healthy_not_as_an_incident():
+    """flap_state is a bare string, not an enum, so any renamed or future
+    state lands here. Falling through to healthy is the deliberate fail-open
+    choice, matching dock_icon's default, and nothing pinned it: replacing
+    `== "incident"` with `!= "healthy"` passes the rest of this file.
+    """
+    assert status_state("degraded", consecutive_failures=0) == "healthy"
+    assert status_state("", consecutive_failures=0) == "healthy"
+    assert status_state("degraded", consecutive_failures=1) == "flaky"
+    assert "issue" not in build_title("degraded", "dns").lower()

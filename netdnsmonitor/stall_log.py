@@ -36,6 +36,19 @@ Least-recently-checked-first rotates coverage across cycles. (Never shrinking
 is not the same as growing without bound; see the seeding section below for
 what can actually enter the set.)
 
+That rotation holds only while something in a cycle still completes. It is
+built out of completions advancing `checked_at` and abandonments not, so once
+at least `resolution_max_workers` domains hang past the batch deadline, every
+record in a cycle is an abandonment, no `checked_at` advances anywhere, every
+sort key freezes at once, and the name tiebreak below re-picks the same head of
+the list every cycle -- the alphabetical freeze this section treats as the
+thing to avoid. That is a real ceiling, not a hypothesis: 91 domains against 10
+workers on this machine, and the set is mostly `.local` and `in-addr.arpa`
+names, which are the ones that hang. It has not been reached yet (no
+`outcome: "abandoned"` record exists in the log so far). Nothing here can
+prevent it either -- the fix would have to cap how much of the list a single
+cycle claims, which is the caller's decision, not the selector's.
+
 That rotation is why abandoned records are skipped *before* the
 `checked_at` bookkeeping and not just before the elapsed-time test.
 `resolution_log.append_resolution_findings` stamps one `checked_at` for the
@@ -72,7 +85,9 @@ the caller. Nothing can be done about it from in here, since "no history" and
 """
 
 import json
-from typing import Callable, ContextManager, Iterable, Optional
+from collections.abc import Iterable
+from contextlib import AbstractContextManager
+from typing import Callable, Optional
 
 # Injection seam, matching the ResolveFn/ConnectFn/RunFn idiom the sibling
 # modules use. Anything that opens `log_path` as a context manager yielding
@@ -85,7 +100,7 @@ from typing import Callable, ContextManager, Iterable, Optional
 # pinned by `test_read_failure_part_way_through_keeps_the_records_already_parsed`,
 # whose opener is only observable if lines are consumed lazily. Don't drop that
 # test on the belief that the type covers it.
-LogOpener = Callable[[str], ContextManager[Iterable[str]]]
+LogOpener = Callable[[str], AbstractContextManager[Iterable[str]]]
 
 
 def _open_lenient(log_path: str):
@@ -162,7 +177,17 @@ def select_stalled_domains(
                         last_checked[domain] = checked_at
 
                 elapsed = record.get("elapsed_seconds")
-                if isinstance(elapsed, (int, float)) and elapsed >= stall_seconds:
+                # `bool` is a subclass of `int`, so a hand-edited or externally
+                # written `"elapsed_seconds": true` would otherwise read as 1,
+                # clear the 1.0s default threshold, and admit a domain to a set
+                # that is closed and never shrinks -- one bad line buys a
+                # permanent re-probe. (`NaN` needs no guard: `nan >= x` is
+                # False. `Infinity` is admitted, which is correct.)
+                if (
+                    isinstance(elapsed, (int, float))
+                    and not isinstance(elapsed, bool)
+                    and elapsed >= stall_seconds
+                ):
                     stalled.add(domain)
     except (OSError, UnicodeError):
         # Two different cases land here, and neither should raise.

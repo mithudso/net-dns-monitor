@@ -4,7 +4,6 @@ recovery edge) left it stuck on red forever after the network recovered.
 tick() must read the state machine's LIVE flap_gate.state every call.
 """
 
-from types import SimpleNamespace
 
 from netdnsmonitor.app import NetDnsMonitorApp
 from netdnsmonitor.status import NETWORK_GLYPH
@@ -59,6 +58,56 @@ def _run_resolution_to_completion(app):
     app._resolution_thread.join(timeout=5)
     assert not app._resolution_thread.is_alive()
     app.tick()
+
+
+def test_finished_resolution_thread_is_respawned_next_cycle(tmp_path):
+    """The overlap guard keys on `is_alive()`, not on is-not-None: a FINISHED
+    thread must be replaced so a batch runs on every cadence. Weakening the
+    guard to `if self._resolution_thread is not None: return` runs exactly one
+    batch for the whole process lifetime and leaves the rest of the suite
+    green -- the cadence would silently stop being a cadence.
+    """
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    app.state_machine = FakeStateMachine("healthy")
+    calls = []
+    app.resolution_job = lambda: calls.append(1) or []
+
+    app.resolution_tick()
+    first_thread = app._resolution_thread
+    first_thread.join(timeout=5)
+
+    app.resolution_tick()  # prior thread has finished -> a new one must start
+    second_thread = app._resolution_thread
+    second_thread.join(timeout=5)
+
+    assert second_thread is not first_thread
+    assert len(calls) == 2
+
+
+def test_a_raising_resolution_job_does_not_kill_the_worker_silently(tmp_path):
+    """Without the guard in _run_resolution, a job that raises every cycle
+    leaves last_resolution_findings at its initial [] forever, so the title
+    shows no resolution suffix at all -- indistinguishable from "everything
+    resolved fine" while the monitor is dead.
+    """
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    app.state_machine = FakeStateMachine("healthy")
+
+    def boom():
+        raise RuntimeError("resolution log is unwritable")
+
+    app.resolution_job = boom
+
+    app.resolution_tick()
+    app._resolution_thread.join(timeout=5)
+    assert not app._resolution_thread.is_alive()
+
+    # The next cycle still runs rather than the app wedging.
+    app.resolution_job = lambda: []
+    app.resolution_tick()
+    app._resolution_thread.join(timeout=5)
+    app.tick()
+    assert "healthy" in app.title.lower()
 
 
 def test_title_appends_resolution_failure_count_after_resolution_tick(tmp_path):

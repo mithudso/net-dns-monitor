@@ -16,8 +16,8 @@ healthy/incident split, both from data the app already computes:
   a yellow "flaky" state -- an early warning before the anti-flap gate
   would otherwise stay silent.
 - a nonzero failure count from the most recent resolution-monitor batch ->
-  an appended "N/total" suffix, independent of incident status, since a
-  top-queried domain can stop resolving without external_reachable/dns_ok
+  an appended "N/total" suffix, independent of incident status, since an
+  ever-stalled domain can stop resolving without external_reachable/dns_ok
   (checked against a single configured domain list) ever flipping.
 
 `NETWORK_GLYPH` is a constant network/signal symbol prefixed to every

@@ -19,6 +19,22 @@ deadline passes is recorded as `outcome: "abandoned"` and the batch returns.
 Not-yet-started lookups are cancelled; already-running ones are left to finish
 on their own rather than blocking the caller.
 
+"Not blocking the caller" is not the same as not blocking the process.
+`concurrent.futures.thread` registers a `threading._register_atexit` hook that
+joins every live pool worker at interpreter exit -- daemon or not, and
+regardless of `shutdown(wait=False)`. An abandoned worker still inside
+`getaddrinfo` therefore delays process exit by the rest of its hang. Measured
+in this repo: `pytest tests/test_resolution_prober.py` reports 0.85s of tests
+and took 30.8s of wall clock, all of it that join, until the sentinel sleeps in
+those tests were shortened.
+
+Abandoned workers also outlive the batch that gave up on them. A fresh pool is
+built per cycle, so up to `max_workers` threads can overlap the next cycle
+whenever a lookup outlasts the slack between the cadence and the deadline (60s
+at the shipped 300/240). It is self-limiting -- each exits as soon as its
+lookup returns -- but it is not zero, and the regime where it happens is
+exactly the DNS stall this app exists to watch.
+
 Abandoned records deliberately do NOT feed back into stall detection -- see
 the module docstring in `stall_log.py` for why that would be a runaway loop.
 
@@ -73,6 +89,24 @@ def resolve_domains_parallel(
     """
     if not domains:
         return []
+    if deadline_seconds is not None and deadline_seconds <= 0:
+        # Decide this before submitting. `wait(..., timeout=0.0)` below is a
+        # race a fast resolver can win, so the same config yields "completed"
+        # on one run and "abandoned" on the next; and every submitted lookup
+        # still runs to completion in a worker while its result is discarded.
+        # resolution_batch_deadline_seconds is user-settable YAML, so a `0`
+        # typo would otherwise mean every cycle performs all the real lookups
+        # and throws all of them away, forever.
+        return [
+            {
+                "domain": domain,
+                "resolved": False,
+                "error": "non-positive deadline_seconds; no lookup attempted",
+                "elapsed_seconds": 0.0,
+                "outcome": "abandoned",
+            }
+            for domain in domains
+        ]
     resolve_fn = resolve_fn or default_resolve
 
     started = time.monotonic()
