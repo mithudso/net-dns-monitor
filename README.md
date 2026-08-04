@@ -36,9 +36,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 mkdir -p ~/.config/net-dns-monitor
-cp config.example.yaml ~/.config/net-dns-monitor/config.yaml
-# edit config.yaml: add the domains you actually care about, any internal
-# targets, and (optionally) sensitive_strings to redact before LLM escalation
+cp config.yaml ~/.config/net-dns-monitor/config.yaml
+# edit ~/.config/net-dns-monitor/config.yaml: add the domains you actually
+# care about, any internal targets, and (optionally) sensitive_strings to
+# redact before LLM escalation
 ```
 
 To enable the Claude escalation step (used only when the offline ladder +
@@ -108,16 +109,73 @@ What it shows:
   into current / recent / other.
 - **Settings in force** -- every cadence and threshold actually in effect, so
   the app's behaviour is explicable without opening the config file.
+- **Permissions** -- what the app may do as root, what each right unlocks, and
+  what stays impossible either way. See [Permissions](#permissions).
 - **A button per troubleshooting step** -- ping now, check interface state,
   check the default route, check the configured DNS servers, check
   `/etc/resolver` overrides, resolve via a public resolver, flush the DNS cache,
   or run the full ladder for the current classification. Results appear in the
   pane at the bottom, each with the reason the step exists. Steps that mutate
   system state say so on the button.
+- **A system log pane down the right-hand side** -- see
+  [System log viewer](#system-log-viewer).
 
 Steps run on a worker thread, never on the run loop: `repair_executor` allows 5s
 per step and a full ladder is four of them, so running one inline would freeze
 the window and every timer for up to half a minute.
+
+The window is two columns wide rather than taller because it was already 950px
+high and the display it opens on is 1080 logical pixels: there was nowhere to
+stack a log pane underneath. Log lines need the width anyway.
+
+## System log viewer
+
+The right-hand column shows what macOS itself says about the network -- the
+error and fault entries from `mDNSResponder`, `configd`, the Wi-Fi stack, and
+anything logging through `com.apple.network`. Nothing has to be clicked: it
+backfills 15 minutes at launch, then re-reads the last minute every 30 seconds.
+
+**New network errors are reported automatically.** They are echoed into the
+results pane on the left (capped at `log_view_announce_limit` per poll), counted
+in the Monitor section, and -- while an outage episode is open -- written into
+that episode, so the forensic record carries what the OS said at the time and
+not only what this app measured.
+
+**Search** ANDs its terms and treats a leading `-` as an exclusion:
+
+```
+dns -crowdstrike      DNS lines that are not from CrowdStrike
+[C134.1.1:3]          substring, not a regex, so a connection id pastes straight in
+```
+
+Four controls sit above the pane: **Refresh now**, **Errors only / All levels**
+(the label states the filter in force, not the action), **Clear search**, and
+**Empty buffer**. The status line under them tells "nothing captured" apart from
+"nothing matched your search" and from "the read failed" -- all three otherwise
+look like a quiet network.
+
+Four measurements shaped the defaults, all `log show` on a real machine:
+
+| Query | Time | Lines |
+|---|---|---|
+| network errors/faults, last 1m | 1.4s | 44 |
+| network errors/faults, last 15m | 4.2s | 919 |
+| network errors/faults, last 60m | **16.9s** | 16,354 |
+| *all levels*, same subsystems, last 30m | -- | **192,901** |
+
+Hence: a small window polled often rather than a large one re-read; errors-only
+by default; a 45-second timeout instead of the 10s used elsewhere for `log show`;
+and identical repeated messages coalesced into one row with an `(xN)` count.
+
+That last one is load-bearing rather than cosmetic. On this machine hundreds of
+those "errors" were a single repeated CrowdStrike line, and coalescing is what
+made the one entry that mattered -- `Socket SO_ERROR [51: Network is
+unreachable]` -- visible at all. `log_view_noise_patterns` drops entries not
+worth a row in the first place.
+
+One thing the viewer cannot fix: macOS redacts private data, so DNS queries
+arrive as `qname: <mask.hash: '...'>` rather than as a hostname. That needs a
+logging configuration profile, and no amount of privilege changes it.
 
 ## Graphs, the mini window, settings, and prewarming
 
@@ -241,9 +299,53 @@ prober deliberately uses TCP-connect; see `netdnsmonitor/ping.py` for why.
 
 Reading system logs (`log show`) may require the "Full Disk Access" or
 log-access permission the first time it runs, depending on macOS version --
-macOS will prompt if so. No other special entitlements are needed for the
-diagnose-only build; see the README section above for what changes if you
-add privileged repair actions.
+macOS will prompt if so.
+
+Two repair steps need root, and until now the app could only report that it did
+not have it. The dashboard has a **Grant elevated permissions** button, and a
+**Revoke** button beside it. The window prints exactly what the grant permits
+before macOS raises its authentication dialog, so it can still be cancelled after
+reading.
+
+**What the grant installs.** One file, `/etc/sudoers.d/net-dns-monitor`, owned by
+`root:wheel`, mode 0440, listing your account and these complete commands:
+
+```
+/usr/bin/killall -HUP mDNSResponder        restart the system DNS responder
+/usr/sbin/ipconfig set <interface> DHCP     re-request a DHCP lease
+```
+
+**What that means.** This is a real, persistent widening of what the Mac will do
+without authenticating. Once the file exists, any process running as you -- not
+only this app, including software you did not install deliberately -- can run
+those specific commands as root with no prompt. Weigh that before clicking.
+
+What limits the exposure: both entries are complete command lines, and sudo
+matches the arguments, so the grant does not extend to `killall` or `ipconfig` in
+general. There is no wildcard in the file and no shell entry (either would be
+equivalent to granting unrestricted root), which is why the interfaces are
+enumerated at grant time and validated before being written. Neither command
+takes a file path, reads or writes your data, or can be made to run another
+program; the worst either can do is briefly interrupt this machine's own network.
+sudo logs every use. Revoke deletes the file.
+
+Before installing anything, the grant checks that `/etc/sudoers` actually
+includes `/etc/sudoers.d` (otherwise the file would be ignored and the button
+would be lying) and validates the file with `visudo -cf` -- an invalid file in
+`sudoers.d` breaks `sudo` for the whole machine. It never edits `/etc/sudoers`
+itself; if the include line is missing it says so and stops.
+
+**What it changes.** With the grant, "Flush DNS cache" also restarts
+mDNSResponder instead of reporting a partial result, and `renew_dhcp_lease` runs
+on the default-route interface instead of returning `NEEDS_PRIVILEGE`.
+
+**What is deliberately still not automated.** `toggle_network_service`. Taking an
+interface down and back up cannot be done in one command, and the only way to
+make it one is to allow a shell to run as root -- unrestricted root, in effect.
+Two commands is worse than the problem: if anything interrupts the second one,
+the machine is offline with no network to fix it over. The step reports that
+rather than pretending a permission is missing. Toggle Wi-Fi or the cable by hand
+if the other steps have not helped.
 
 ## Reports
 

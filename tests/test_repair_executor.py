@@ -69,6 +69,121 @@ def test_privileged_repair_steps_are_stubbed_and_never_shell_out():
     assert calls == []
 
 
+# --- with elevated permissions granted -------------------------------------
+#
+# `is_granted_fn` defaults to "no", so every test above describes an ungranted
+# machine and none of them acquired a new subprocess when the grant landed. These
+# pass it explicitly. See privileges.py for how narrow the grant is.
+
+
+def granted_executor(run_fn, interface="en0"):
+    return make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: interface,
+    )
+
+
+def test_the_ungranted_stub_says_how_to_grant_it():
+    """Otherwise the outcome is a dead end: it names a missing capability and no
+    way to acquire it, which is what this whole feature was about.
+    """
+    run_fn, _calls = fake_run_factory()
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert "Grant elevated permissions" in outcome
+
+
+def test_flush_dns_cache_retries_the_resolver_restart_with_sudo_when_granted():
+    calls = []
+
+    def run_fn(args, **kwargs):
+        calls.append(args)
+        # The unprivileged HUP still fails; the sudo one succeeds.
+        if args[0] == "killall":
+            return SimpleNamespace(returncode=1, stdout="", stderr="not permitted")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    outcome = granted_executor(run_fn)(
+        LadderStep("flush_dns_cache", "repair", needs_privilege=False)
+    )
+    assert outcome.startswith("ok")
+    assert ["/usr/bin/sudo", "-n", "/usr/bin/killall", "-HUP", "mDNSResponder"] in calls
+
+
+def test_flush_dns_cache_does_not_reach_for_sudo_when_the_plain_hup_worked():
+    """No point spending an elevated call on something that already succeeded, and
+    a spurious sudo invocation shows up in the system's own audit log.
+    """
+    run_fn, calls = fake_run_factory(returncode=0)
+    outcome = granted_executor(run_fn)(
+        LadderStep("flush_dns_cache", "repair", needs_privilege=False)
+    )
+    assert outcome == "ok"
+    assert not any("sudo" in " ".join(call) for call in calls)
+
+
+def test_a_granted_rule_that_still_fails_is_reported_differently_from_no_grant():
+    """The two situations need opposite fixes -- grant the permission, versus work
+    out why the rule does not match -- so they must not share a message.
+    """
+
+    def run_fn(args, **kwargs):
+        return SimpleNamespace(
+            returncode=0 if args[0] == "dscacheutil" else 1, stdout="", stderr=""
+        )
+
+    outcome = granted_executor(run_fn)(
+        LadderStep("flush_dns_cache", "repair", needs_privilege=False)
+    )
+    assert outcome.startswith("partial")
+    assert "granted sudo rule did not" in outcome
+    assert "Grant elevated permissions" not in outcome
+
+
+def test_renewing_a_lease_targets_the_default_route_interface():
+    run_fn, calls = fake_run_factory(returncode=0)
+    outcome = granted_executor(run_fn, interface="en9")(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("ok")
+    assert "en9" in outcome
+    assert ["/usr/bin/sudo", "-n", "/usr/sbin/ipconfig", "set", "en9", "DHCP"] in calls
+
+
+def test_renewing_a_lease_with_no_default_route_does_not_shell_out():
+    run_fn, calls = fake_run_factory(returncode=0)
+    outcome = granted_executor(run_fn, interface=None)(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert "cannot renew" in outcome
+    assert calls == []
+
+
+def test_a_failed_renewal_reports_the_command_and_the_error():
+    run_fn, _calls = fake_run_factory(returncode=1, stderr="no such interface")
+    outcome = granted_executor(run_fn)(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("failed")
+    assert "no such interface" in outcome
+
+
+def test_toggling_the_interface_is_never_automated_even_when_granted():
+    """Down and up cannot be one command, and two means a crash in between leaves
+    the machine offline with no network to fix it over. Reported as its own outcome
+    rather than as a missing privilege, so granting permissions does not leave
+    someone waiting for a step that will never run.
+    """
+    run_fn, calls = fake_run_factory(returncode=0)
+    outcome = granted_executor(run_fn)(
+        LadderStep("toggle_network_service", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("NOT_AUTOMATED")
+    assert "NEEDS_PRIVILEGE" not in outcome
+    assert calls == []
+
+
 def test_check_interface_state_shells_out_to_scutil():
     run_fn, calls = fake_run_factory(stdout="Network reachable via Wi-Fi")
     executor = make_repair_executor(run_fn=run_fn)

@@ -185,11 +185,17 @@ def test_saving_preserves_keys_the_window_does_not_send(tmp_path):
 
 
 def test_the_written_file_points_at_the_documentation_it_replaced(tmp_path):
-    """Comments are lost, so the file has to say where the explanations went."""
+    """Comments are lost, so the file has to say where the explanations went.
+
+    The pointer used to name `config.example.yaml`. That file is now just
+    `config.yaml` -- the same basename as the file this header is written into --
+    so the header has to distinguish them, and this asserts it still points
+    somewhere rather than at itself.
+    """
     path = tmp_path / "config.yaml"
     save_config(str(path), {"ping_host": "1.1.1.1"})
     body = path.read_text(encoding="utf-8")
-    assert "config.example.yaml" in body
+    assert "tracked default config.yaml" in body
     assert "NOT preserved" in body
 
 

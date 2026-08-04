@@ -1,8 +1,15 @@
 import os
+import pathlib
 
 import pytest
+import yaml
 
 from netdnsmonitor.config import DEFAULT_CONFIG, load_config
+
+# The repo's own tracked config.yaml -- the shipped default config, not a sample
+# of one. The three tests at the bottom of this file are what make that claim
+# true rather than aspirational.
+SHIPPED_CONFIG = pathlib.Path(__file__).resolve().parents[1] / "config.yaml"
 
 # Every key load_config runs through expanduser. Kept as one list so adding a
 # path default without expanding it fails the test below rather than shipping a
@@ -81,7 +88,7 @@ def test_incident_thresholds_default_to_the_documented_values(tmp_path):
     """test_missing_file_returns_defaults builds `expected` out of
     DEFAULT_CONFIG itself, so it holds for whatever value each key takes --
     changing failure_threshold to 7 keeps it green. These two gate incident
-    declaration and config.example.yaml documents both as 2, so pin the
+    declaration and config.yaml documents both as 2, so pin the
     literals the way the resolution defaults above already are.
     """
     cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
@@ -94,7 +101,7 @@ def test_incident_thresholds_default_to_the_documented_values(tmp_path):
 
 def test_empty_config_file_falls_back_to_defaults(tmp_path):
     """yaml.safe_load returns None for an empty or fully commented-out file --
-    realistic, since config.example.yaml is mostly comments. Without the
+    realistic, since config.yaml is mostly comments. Without the
     `or {}` that None reaches dict.update and raises TypeError during startup.
     """
     config_path = tmp_path / "config.yaml"
@@ -180,3 +187,52 @@ def test_the_shipped_alert_threshold_ignores_a_single_dropped_packet(tmp_path):
     assert cfg["ping_failure_threshold"] == 2
     # And a real outage still alerts fast: two ticks of the heartbeat.
     assert cfg["ping_failure_threshold"] * cfg["ping_interval_seconds"] <= 10
+
+
+# --- the shipped config.yaml IS the default config --------------------------
+#
+# It used to be config.example.yaml: a template to copy, free to drift from the
+# code because nothing compared them. Renaming it to config.yaml is a claim that
+# it states what the app actually does, and a comment cannot keep that claim
+# honest -- these three tests can. Together they force any new key to be declared
+# in both netdnsmonitor/config.py and config.yaml, at the same value.
+
+
+def test_the_shipped_config_parses_as_a_yaml_mapping():
+    """Ship a broken config and every install.sh run copies it into place, where
+    load_config raises during startup and the app just never appears.
+    """
+    loaded = yaml.safe_load(SHIPPED_CONFIG.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+
+
+def test_the_shipped_config_declares_every_default_at_its_real_value():
+    """Compared against DEFAULT_CONFIG rather than against load_config's output,
+    so the `~` paths line up: both sides are pre-expanduser here.
+    """
+    shipped = yaml.safe_load(SHIPPED_CONFIG.read_text(encoding="utf-8"))
+    missing = sorted(set(DEFAULT_CONFIG) - set(shipped))
+    assert not missing, (
+        f"config.yaml does not declare {missing}. It is the shipped default "
+        "config, so a key the app reads has to appear in it -- add the key with "
+        "its default and a comment saying what it does."
+    )
+    mismatched = {
+        key: {"config.py": DEFAULT_CONFIG[key], "config.yaml": shipped[key]}
+        for key in DEFAULT_CONFIG
+        if shipped[key] != DEFAULT_CONFIG[key]
+    }
+    assert not mismatched, f"config.yaml disagrees with DEFAULT_CONFIG: {mismatched}"
+
+
+def test_the_shipped_config_declares_nothing_the_app_ignores():
+    """The other direction. A key only in the file is documentation for
+    behaviour that does not exist -- which is how `resolution_top_n` outlived the
+    code that read it.
+    """
+    shipped = yaml.safe_load(SHIPPED_CONFIG.read_text(encoding="utf-8"))
+    unread = sorted(set(shipped) - set(DEFAULT_CONFIG))
+    assert not unread, (
+        f"config.yaml declares {unread}, which load_config never reads. Either "
+        "add them to DEFAULT_CONFIG or delete them from the file."
+    )

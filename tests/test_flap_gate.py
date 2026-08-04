@@ -58,7 +58,7 @@ def test_failure_and_success_thresholds_are_not_interchangeable():
 def test_default_thresholds_match_the_documented_config_defaults():
     """No test constructed a FlapGate without arguments, so the constructor
     defaults -- what StateMachine falls back to when a caller omits them --
-    were unpinned. config.py and config.example.yaml both document 2 and 2.
+    were unpinned. config.py and config.yaml both document 2 and 2.
     """
     gate = FlapGate()
     assert gate.failure_threshold == 2

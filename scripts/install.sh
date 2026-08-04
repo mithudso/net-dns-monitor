@@ -100,8 +100,8 @@ mkdir -p "$CONFIG_DIR"
 if [ -f "$CONFIG_FILE" ]; then
     ok "keeping your existing $CONFIG_FILE"
 else
-    cp "$REPO_DIR/config.example.yaml" "$CONFIG_FILE"
-    ok "created $CONFIG_FILE from config.example.yaml"
+    cp "$REPO_DIR/config.yaml" "$CONFIG_FILE"
+    ok "created $CONFIG_FILE from the repo's default config.yaml"
     warn "edit 'domains' in that file. Left empty, dns_ok is never measured and the"
     warn "anti-flap gate latches a permanent false incident -- see the comment there."
 fi

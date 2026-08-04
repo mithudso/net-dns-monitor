@@ -3,7 +3,7 @@
 # recommended config if none exists yet, then start the app.
 #
 # The app takes no CLI flags (see netdnsmonitor/app.py main()) -- the
-# "recommended options" are the shipped config.example.yaml defaults, so
+# "recommended options" are the shipped config.yaml defaults, so
 # "start with recommended options" means: make sure a config exists, then
 # launch it.
 set -euo pipefail
@@ -119,7 +119,7 @@ PYEOF
 
 mkdir -p "$CONFIG_DIR"
 if [[ ! -f "$CONFIG_FILE" ]]; then
-    cp "$REPO_DIR/config.example.yaml" "$CONFIG_FILE"
+    cp "$REPO_DIR/config.yaml" "$CONFIG_FILE"
     echo "..   wrote recommended defaults to $CONFIG_FILE -- edit 'domains:' before relying on health status"
 fi
 ok "config present at $CONFIG_FILE"

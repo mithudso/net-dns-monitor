@@ -9,6 +9,8 @@ import os
 
 import yaml
 
+from netdnsmonitor.system_log import DEFAULT_NOISE_PATTERNS
+
 DEFAULT_CONFIG = {
     "external_targets": [["1.1.1.1", 443], ["8.8.8.8", 443]],
     "internal_targets": [],
@@ -125,6 +127,42 @@ DEFAULT_CONFIG = {
     # when the file outgrows the window.
     "history_path": "~/Library/Application Support/net-dns-monitor/history.jsonl",
     "history_max_samples": 720,
+    # --- system log viewer -------------------------------------------------
+    # The window's right-hand column reads the network-related parts of macOS's
+    # unified log. Every number here came out of measuring `log show` on this
+    # machine; see system_log.py for the measurements themselves.
+    "log_view_enabled": True,
+    # Read once at launch so the pane is not empty for the first poll interval.
+    # 15 minutes measured 4.2s; 60 minutes measured 16.9s, which is why the
+    # backfill is bounded and the steady-state poll below is not.
+    "log_view_backfill_window": "15m",
+    # Deliberately longer than log_view_poll_seconds: the windows overlap so
+    # nothing falls between two polls, and LogBuffer de-duplicates the overlap.
+    "log_view_poll_window": "1m",
+    "log_view_poll_seconds": 30,
+    # Not the 10s used for the incident-report log excerpt. A 1-minute window
+    # measured 1.4s, but `log show` is scanning an archive and the machine is not
+    # always idle -- and a timeout here shows as text in the pane, not as an
+    # empty log.
+    "log_view_timeout_seconds": 45,
+    "log_view_max_entries": 3000,
+    # Error and fault only. All levels over the same subsystems measured 192,901
+    # lines in 30 minutes, which is not a thing anyone can read; the same window
+    # filtered to errors was 919. The button above the pane switches this at
+    # runtime.
+    "log_view_errors_only": True,
+    # Rows drawn into the pane. Identical messages are already collapsed into one
+    # counted row before this applies.
+    "log_view_row_limit": 400,
+    # How many new error lines per poll are announced into the results pane on the
+    # left. A cap, not a filter: everything still lands in the log pane. Without
+    # it, one repeating message would push every manual result out of the pane.
+    "log_view_announce_limit": 3,
+    # Substrings that drop an entry entirely. These four are high-frequency
+    # framework complaints from unrelated software on this machine, and they were
+    # burying the one line that mattered. Commas separate entries in the settings
+    # window, so a pattern containing a comma has to be edited in this file.
+    "log_view_noise_patterns": list(DEFAULT_NOISE_PATTERNS),
 }
 
 
@@ -155,7 +193,10 @@ def load_config(path: str) -> dict:
     # occurrence of each letter from the report. Neither raises on its own.
     # (external_targets/internal_targets need no check: app.py unpacks them and
     # raises loudly on a string.)
-    for list_key in ("domains", "sensitive_strings"):
+    # log_view_noise_patterns joins the same club for the same reason: as a bare
+    # string it is iterated character by character, every character becomes a
+    # suppression pattern, and the log pane silently shows nothing at all.
+    for list_key in ("domains", "sensitive_strings", "log_view_noise_patterns"):
         if isinstance(config[list_key], str):
             raise ValueError(
                 f"config key '{list_key}' must be a list of strings, not the "

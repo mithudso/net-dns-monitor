@@ -17,6 +17,7 @@ every DNS lookup that has ever stalled on this machine.
 - [Feature: incident reports](#feature-incident-reports)
 - [Feature: ping heartbeat and the network-failed alert](#feature-ping-heartbeat-and-the-network-failed-alert)
 - [Dashboard window](#dashboard-window)
+- [Feature: system log viewer and search](#feature-system-log-viewer-and-search)
 - [Feature: forensic log of every down/up episode](#feature-forensic-log-of-every-downup-episode)
 - [Feature: LAN peer discovery](#feature-lan-peer-discovery)
 - [Menu bar reference](#menu-bar-reference)
@@ -44,11 +45,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Create your config from the example template:
+Copy the shipped default config into place (`install.sh` does this for you):
 
 ```bash
 mkdir -p ~/.config/net-dns-monitor
-cp config.example.yaml ~/.config/net-dns-monitor/config.yaml
+cp config.yaml ~/.config/net-dns-monitor/config.yaml
 ```
 
 Edit `~/.config/net-dns-monitor/config.yaml` -- see
@@ -102,6 +103,16 @@ below (from `netdnsmonitor/config.py`). Config file lives at
 | `peer_current_seconds` | `600` | peer discovery | Heard from within this window counts as `current`. Two announce intervals, so one dropped broadcast is not a demotion |
 | `peer_recent_seconds` | `86400` | peer discovery | Heard from within this window but not the one above: `recent`. Older: `other` |
 | `peer_record_path` | `~/Library/Application Support/net-dns-monitor/peers.json` | peer discovery | File record of current / recent / other hosts, read back at startup |
+| `log_view_enabled` | `true` | system log viewer | Read the network parts of the unified log. `false` means no subprocess at all, not a hidden pane |
+| `log_view_backfill_window` | `"15m"` | system log viewer | Read once at launch so the pane is not blank for a poll interval. Measured 4.2s; a 60m window measured 16.9s |
+| `log_view_poll_window` | `"1m"` | system log viewer | The steady-state read. Deliberately longer than the interval below so nothing falls between two polls; the overlap is de-duplicated in memory |
+| `log_view_poll_seconds` | `30` | system log viewer | How often the log is re-read |
+| `log_view_timeout_seconds` | `45` | system log viewer | Not the 10s used for the incident-report excerpt. A timeout shows as a line in the pane, never as an empty pane |
+| `log_view_max_entries` | `3000` | system log viewer | Entries held in memory. Nothing is written to disk by the viewer |
+| `log_view_errors_only` | `true` | system log viewer | Start filtered to error/fault. All levels over the same subsystems measured 192,901 lines in 30 minutes; errors-only was 919 in 15. The button above the pane switches this at runtime |
+| `log_view_row_limit` | `400` | system log viewer | Rows drawn in the pane, after identical messages are collapsed into one `(xN)` row |
+| `log_view_announce_limit` | `3` | system log viewer | New error lines announced in the results pane per poll. A cap on the announcement only -- everything still lands in the log pane |
+| `log_view_noise_patterns` | 4 substrings | system log viewer | Entries containing any of these are dropped entirely. The shipped four are high-frequency framework complaints from unrelated software. `[]` shows everything |
 
 Retired keys, ignored if still present in your `config.yaml`:
 `resolution_lookback`, `resolution_top_n` (the monitor no longer mines the
@@ -460,6 +471,98 @@ is still running is refused rather than queued.
 Anything you run by hand is recorded in the forensic log too, tagged `manual`, so
 an episode's write-up shows human intervention alongside the automatic steps.
 
+## Feature: system log viewer and search
+
+The right-hand column of the window shows what macOS itself is saying about the
+network, rather than only what this app measured. It needs no clicking: 15
+minutes are backfilled at launch, then the last minute is re-read every 30
+seconds, on a worker thread.
+
+**What it reads.** Entries from `mDNSResponder`, `configd`, `symptomsd`,
+`airportd`, `networkd`, `nesessionmanager` and `socketfilterfw`, plus anything --
+any process -- logging under `com.apple.network`, `com.apple.mdns`,
+`com.apple.SystemConfiguration`, `com.apple.WiFiManager` or `com.apple.symptomsd`.
+That second half is where another app's failed connection shows up, and it is
+where the useful entries were found.
+
+**It reports automatically.** New error and fault lines are echoed into the
+results pane on the left, counted in the Monitor section of the stats, and --
+while a forensic episode is open -- written into that episode. So an outage's
+write-up carries what the OS said at the time, not just what the prober measured.
+The echo is capped by `log_view_announce_limit` per poll; the cap is on the
+announcement, not on capture.
+
+### Searching
+
+Terms are ANDed. A term starting with `-` excludes. Matching is case-insensitive
+substring over the time, level, process, subsystem and message:
+
+```
+dns                      every captured line mentioning DNS
+dns -crowdstrike         ...except CrowdStrike's
+configd dhcp             lines from configd that mention DHCP
+[C134.1.1:3]             a connection id, pasted straight in
+```
+
+Substring rather than regex on purpose: `[C134.1.1:3]` is the kind of thing
+someone pastes into a log search, and as a regex it would be an error instead of a
+search. The pane re-filters as you type, off the window's 1-second refresh.
+
+### The four controls
+
+| Control | What it does |
+|---|---|
+| Refresh now | Re-reads immediately instead of waiting for the next poll |
+| Errors only / All levels | The label states the filter **in force**, not the action. Switching re-reads, because the level is part of the `log show` predicate and other levels were never fetched |
+| Clear search | Empties the search box |
+| Empty buffer | Discards everything captured so far, and the since-launch error count |
+
+The status line under them distinguishes "nothing captured yet" from "nothing
+matched your search" from "the read failed" -- in an empty pane all three look
+identical, and only some of them say anything about the network.
+
+### Why the defaults are what they are
+
+Measured with `log show` on a real machine:
+
+| Query | Time | Lines |
+|---|---|---|
+| network errors/faults, last 1m | 1.4s | 44 |
+| network errors/faults, last 5m | 1.6s | 289 |
+| network errors/faults, last 15m | 4.2s | 919 |
+| network errors/faults, last 60m | **16.9s** | 16,354 |
+| *all levels*, same subsystems, last 30m | -- | **192,901** |
+
+Cost is dominated by the window, not the predicate, so this polls a small window
+often instead of re-reading a large one. Errors-only is the default because
+192,901 lines is not something anyone reads. And the timeout is 45 seconds rather
+than the 10 used elsewhere for `log show`, because 10 would silently return
+nothing on the very machine this was built for.
+
+**Coalescing is load-bearing, not cosmetic.** Of those 16,354 "errors", hundreds
+were one repeated CrowdStrike line and hundreds more were one repeated WeatherMenu
+line. Identical messages from the same process are collapsed into a single row
+carrying the most recent time and an `(xN)` count, which is what made the one
+entry that mattered visible at all:
+
+```
+12:48:56 ! identityservicesd: nw_socket_handle_socket_event [C134.1.1:3] Socket SO_ERROR [51: Network is unreachable]
+```
+
+`log_view_noise_patterns` goes further and drops entries not worth a row at all.
+
+### What it cannot show you
+
+macOS redacts private data in the unified log, so a DNS query arrives as:
+
+```
+getaddrinfo start -- hostname: <mask.hash: 'bUgVj5G8ik0EQt8fUVm4Fg=='>
+```
+
+Turning that back into a hostname needs a logging configuration profile. It is
+not a permission this app can request, and the elevated-permission grant does not
+affect it.
+
 ## Feature: forensic log of every down/up episode
 
 Every network down/up episode is written up automatically: what was detected,
@@ -660,15 +763,74 @@ batch already makes.
 
 ## Permissions
 
-Reading system logs (`log show`, used by both the incident log watcher and
-the resolution monitor's query-log reader) may require "Full Disk Access"
-or a log-access prompt the first time it runs, depending on macOS version.
-Grant it via **System Settings -> Privacy & Security -> Full Disk Access**
-if `log show` calls silently return no data.
+Reading system logs (`log show`, used by the incident log watcher, the
+resolution monitor's query-log reader, and the system log viewer in the window)
+may require "Full Disk Access" or a log-access prompt the first time it runs,
+depending on macOS version. Grant it via **System Settings -> Privacy &
+Security -> Full Disk Access** if `log show` calls silently return no data.
 
-No other special entitlements are needed for this diagnose-only build. See
-[Honest scope](#honest-scope--known-limitations) for what would change if
-you add privileged repair actions.
+### Elevated permissions for the two root-only repair steps
+
+Two repair steps need root. The dashboard has a **Grant elevated permissions**
+button and a **Revoke elevated permissions** button beside it. Clicking Grant
+prints exactly what it will permit into the results pane *before* macOS raises
+its authentication dialog, so it can still be cancelled after reading.
+
+It installs one file -- `/etc/sudoers.d/net-dns-monitor`, `root:wheel`, mode
+0440 -- listing your account and these complete commands:
+
+```
+/usr/bin/killall -HUP mDNSResponder         restart the system DNS responder
+/usr/sbin/ipconfig set <interface> DHCP     re-request a DHCP lease
+```
+
+This is a real and persistent change to what this Mac will do without
+authenticating. Once the file exists, **any** process running as you -- not only
+this app, and including software you did not install deliberately -- can run
+those specific commands as root with no prompt. Decide whether that trade is
+worth it before clicking; the app cannot make that call for you.
+
+What bounds the exposure:
+
+- Both are complete command lines, and sudo matches arguments, so the grant does
+  not extend to `killall` or `ipconfig` in general.
+- No wildcard anywhere in the file, and no shell entry. Either would amount to
+  unrestricted root, which is why interfaces are enumerated at grant time and
+  validated against `^en\d+$` before being written.
+- Neither command takes a file path, reads or writes your data, or can be made to
+  run another program. The worst either can do is briefly interrupt this
+  machine's own network.
+- sudo logs every use. **Revoke** deletes the file.
+
+Before installing anything, the grant verifies that `/etc/sudoers` really
+includes `/etc/sudoers.d` -- otherwise the file would be silently ignored and the
+button would be reporting success for nothing -- and validates the generated file
+with `visudo -cf`, because an invalid file in `sudoers.d` breaks `sudo` for the
+whole machine. It never edits `/etc/sudoers` itself; if the include line is
+missing it explains that and stops.
+
+The current state is shown in the window's **Permissions** section, checked with
+`sudo -n -l <command>`, which asks whether a command is permitted rather than
+running it. (Checking by running the real command would restart the DNS responder
+every time the window refreshed.)
+
+**With the grant:** "Flush DNS cache" restarts mDNSResponder instead of
+reporting a partial result, and `renew_dhcp_lease` runs on the default-route
+interface instead of returning `NEEDS_PRIVILEGE`.
+
+**Still not automated, by choice:** `toggle_network_service`. Down-then-up cannot
+be one command, and the only way to make it one would be to allow a shell as
+root. Two commands is worse than the problem it solves -- if anything interrupts
+the second, the machine is offline with no network to fix it over. The step
+reports `NOT_AUTOMATED` and says why, rather than implying a missing permission.
+Toggle Wi-Fi or the cable by hand if the rest of the ladder has not helped.
+
+**Not a permission at all:** macOS redacts private data in the unified log, so
+DNS names appear as `qname: <mask.hash: '...'>`. That needs a logging
+configuration profile; sudo does not affect it.
+
+See [Honest scope](#honest-scope--known-limitations) for the rest of what this
+build does and does not do.
 
 ## Running the tests
 

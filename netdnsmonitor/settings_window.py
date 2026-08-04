@@ -1,11 +1,11 @@
 """Edit every configurable option in a window, instead of in a text editor.
 
-**Saving rewrites config.yaml, and that loses its comments.** The shipped
-`config.example.yaml` carries ~80 lines of them, and they are not decoration --
-the note explaining that an empty `domains` list latches a permanent false
-incident is the kind of thing someone needs to read again a year later. YAML
-round-tripping with comments intact needs ruamel.yaml, a dependency this project
-does not have and would have to freeze into the bundle.
+**Saving rewrites the live config, and that loses its comments.** The repo's
+tracked default `config.yaml` carries ~100 lines of them, and they are not
+decoration -- the note explaining that an empty `domains` list latches a
+permanent false incident is the kind of thing someone needs to read again a year
+later. YAML round-tripping with comments intact needs ruamel.yaml, a dependency
+this project does not have and would have to freeze into the bundle.
 
 So instead:
 
@@ -13,8 +13,11 @@ So instead:
   timestamp is the important part. A single fixed `.bak` would be overwritten by
   the second save with the already-stripped version, and the only commented copy
   would be gone -- exactly when someone is clicking Save repeatedly.
-* The written file carries a header pointing at `config.example.yaml`, which is
-  in the repo and still has every explanation.
+* The written file carries a header pointing back at the repo's own tracked
+  `config.yaml`, which still has every explanation. That is a *different* file
+  from the one being overwritten: this window writes the per-machine copy at
+  `~/.config/net-dns-monitor/config.yaml`. Since both are now called config.yaml,
+  the header names each by full path rather than by filename alone.
 * The window says so before you click, not after.
 
 **Most changes need a restart**, because they are read once in `App.__init__` --
@@ -88,6 +91,21 @@ GROUPS = [
         ],
     ),
     (
+        "System log viewer",
+        [
+            ("log_view_enabled", "Enabled", "bool"),
+            ("log_view_errors_only", "Start with errors only", "bool"),
+            ("log_view_backfill_window", "Backfill window at launch", "str"),
+            ("log_view_poll_window", "Poll window", "str"),
+            ("log_view_poll_seconds", "Poll every (seconds)", "int"),
+            ("log_view_timeout_seconds", "Read timeout (seconds)", "int"),
+            ("log_view_max_entries", "Entries held in memory", "int"),
+            ("log_view_row_limit", "Rows drawn in the pane", "int"),
+            ("log_view_announce_limit", "New errors announced per poll", "int"),
+            ("log_view_noise_patterns", "Drop entries containing (comma separated)", "list"),
+        ],
+    ),
+    (
         "Files and folders",
         [
             ("reports_dir", "Incident reports", "str"),
@@ -127,15 +145,24 @@ NEEDS_RESTART = {
     "peer_announce_seconds",
     "peer_current_seconds",
     "peer_recent_seconds",
+    # The log viewer's timer, buffer, reader and starting filter are all built
+    # once in App.__init__. The window's own controls change the live filter; the
+    # config values behind them do not take effect until a restart.
+    "log_view_enabled",
+    "log_view_errors_only",
+    "log_view_backfill_window",
+    "log_view_poll_seconds",
+    "log_view_timeout_seconds",
+    "log_view_max_entries",
 }
 
 FIELDS = [(key, label, kind) for _group, fields in GROUPS for key, label, kind in fields]
 
 HEADER = """# Written by Net-DNS-Monitor's settings window.
 #
-# Comments from a hand-edited config are NOT preserved by that window -- see
-# config.example.yaml in the repo for the full explanation of every key below,
-# including the warning about leaving `domains` empty.
+# Comments from a hand-edited config are NOT preserved by that window. The repo's
+# tracked default config.yaml still carries the full explanation of every key
+# below, including the warning about leaving `domains` empty.
 #
 # The previous version of this file was saved alongside it as
 # config.yaml.bak-<timestamp>.
@@ -305,7 +332,7 @@ class SettingsWindow:
     def __init__(self, on_save: Callable[[dict], str]):
         import AppKit
 
-        from netdnsmonitor.dashboard import _make_button_target
+        from netdnsmonitor.dashboard import _label, _make_button_target
 
         self.on_save = on_save
         self.fields = {}
@@ -433,16 +460,3 @@ class SettingsWindow:
 
     def set_status(self, text: str):
         self.status.setStringValue_(text)
-
-
-def _label(AppKit, frame, text: str, point_size: float):
-    field = AppKit.NSTextField.alloc().initWithFrame_(frame)
-    field.setStringValue_(text)
-    field.setEditable_(False)
-    field.setSelectable_(False)
-    field.setBordered_(False)
-    field.setDrawsBackground_(False)
-    field.setFont_(
-        AppKit.NSFont.monospacedSystemFontOfSize_weight_(point_size, AppKit.NSFontWeightRegular)
-    )
-    return field

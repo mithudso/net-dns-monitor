@@ -9,8 +9,14 @@ would flash a window across the screen on every test run.
 
 from netdnsmonitor.dashboard import (
     ALL_ACTIONS,
+    LEFT_WIDTH,
+    LOG_ACTIONS,
+    LOG_WIDTH,
+    MARGIN,
     SECONDARY_ACTIONS,
     TROUBLESHOOTING_ACTIONS,
+    WINDOW_HEIGHT,
+    WINDOW_WIDTH,
     DashboardWindow,
     dashboard_sections,
     render_dashboard_text,
@@ -183,7 +189,21 @@ def test_rendered_text_labels_every_section():
 def test_window_is_titled_and_sized():
     window = DashboardWindow(on_action=lambda action: None)
     assert window.window.title() == "Net-DNS-Monitor"
-    assert window.window.frame().size.width == 640
+    assert window.window.frame().size.width == WINDOW_WIDTH
+    assert WINDOW_WIDTH == LEFT_WIDTH + LOG_WIDTH + MARGIN
+
+
+def test_the_window_still_fits_on_a_1080_high_display():
+    """Why the log pane went beside the existing content instead of below it.
+
+    The window was already 950 tall and the display it opens on is 1080 logical
+    pixels high; a pane stacked underneath would have run off the bottom of the
+    screen, where a window cannot be dragged back from. Growing sideways is the
+    only direction with room, so this pins the height against the constraint that
+    forced the two-column layout -- otherwise the next feature quietly adds 200px
+    and the window becomes unusable on the machine it was built for.
+    """
+    assert WINDOW_HEIGHT <= 1000
 
 
 def test_window_is_not_released_when_closed():
@@ -199,6 +219,92 @@ def test_every_declared_action_gets_a_button():
     window = DashboardWindow(on_action=lambda action: None)
     assert len(window.buttons) == len(ALL_ACTIONS)
     assert len(ALL_ACTIONS) == len(TROUBLESHOOTING_ACTIONS) + len(SECONDARY_ACTIONS)
+
+
+# --- the log column --------------------------------------------------------
+
+
+def test_the_log_controls_are_not_counted_as_troubleshooting_buttons():
+    """`self.buttons` is the troubleshooting grid and the test above counts it
+    against ALL_ACTIONS. Log controls live in their own dict so adding one cannot
+    break that count, and so the layout code cannot lay them out twice.
+    """
+    window = DashboardWindow(on_action=lambda action: None)
+    assert set(window.log_control_buttons) == {action_id for _, action_id in LOG_ACTIONS}
+    assert len(window.buttons) == len(ALL_ACTIONS)
+
+
+def test_every_log_control_carries_its_action_id_and_a_target():
+    """Same failure mode as the troubleshooting buttons: a nil target is a button
+    that looks normal and does nothing.
+    """
+    window = DashboardWindow(on_action=lambda action: None)
+    for action_id, button in window.log_control_buttons.items():
+        assert button.target() is not None
+        assert str(button.identifier()) == action_id
+
+
+def test_clicking_a_log_control_dispatches_its_action_id():
+    seen = []
+    window = DashboardWindow(on_action=seen.append)
+    window._handle(window.log_control_buttons["log_refresh"])
+    assert seen == ["log_refresh"]
+
+
+def test_the_search_field_reports_what_was_typed():
+    window = DashboardWindow(on_action=lambda action: None)
+    window.set_search_query("dns -crowdstrike")
+    assert window.search_query() == "dns -crowdstrike"
+
+
+def test_the_search_field_shares_the_one_button_target():
+    """Defining a second ObjC target class raises "_ButtonTarget is overriding
+    existing Objective-C class" the second time a window is built, and the second
+    window is the reopen path -- i.e. normal use. Return in the search field has
+    to go through the same shared target the buttons use.
+    """
+    window = DashboardWindow(on_action=lambda action: None)
+    assert window.log_search_field.target() is window._target
+    assert str(window.log_search_field.identifier()) == "log_search"
+
+
+def test_the_log_pane_does_not_overlap_its_controls():
+    """Pure frame arithmetic again, and the same failure the left column had: a
+    control added to the row above silently lands on top of the pane.
+    """
+    window = DashboardWindow(on_action=lambda action: None)
+    pane = window.log_view.enclosingScrollView()
+    pane_top = pane.frame().origin.y + pane.frame().size.height
+    assert pane_top <= window.log_status_label.frame().origin.y
+    lowest_control = min(b.frame().origin.y for b in window.log_control_buttons.values())
+    assert lowest_control >= pane_top
+
+
+def test_the_log_column_stays_beside_the_left_column_not_on_top_of_it():
+    window = DashboardWindow(on_action=lambda action: None)
+    left_edge = window.log_view.enclosingScrollView().frame().origin.x
+    stats = window.stats_view.enclosingScrollView().frame()
+    assert left_edge >= stats.origin.x + stats.size.width
+    assert left_edge + LOG_WIDTH <= WINDOW_WIDTH
+
+
+def test_the_log_pane_is_read_only_but_updatable():
+    window = DashboardWindow(on_action=lambda action: None)
+    window.set_log("12:00:00 ! configd: something\n")
+    assert "configd" in str(window.log_view.string())
+    assert window.log_view.isEditable() is False
+
+
+def test_the_log_status_line_is_updatable():
+    window = DashboardWindow(on_action=lambda action: None)
+    window.set_log_status("40 entries  |  3 error/fault")
+    assert "40 entries" in str(window.log_status_label.stringValue())
+
+
+def test_the_level_button_title_states_the_current_filter():
+    window = DashboardWindow(on_action=lambda action: None)
+    window.set_log_level_title("All levels")
+    assert str(window.log_control_buttons["log_toggle_level"].title()) == "All levels"
 
 
 def test_every_button_is_wired_to_a_target_and_carries_its_action_id():

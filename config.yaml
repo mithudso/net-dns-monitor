@@ -1,5 +1,12 @@
-# Copy to ~/.config/net-dns-monitor/config.yaml and edit.
-# Any key you omit falls back to the default in netdnsmonitor/config.py.
+# The default configuration for Net-DNS-Monitor. Every key the app reads is
+# declared here at its shipped value, and tests/test_config.py fails if any of
+# them drifts from DEFAULT_CONFIG in netdnsmonitor/config.py -- so this file is
+# the readable statement of what the app does by default, not a sample of one.
+#
+# The app reads the copy at ~/.config/net-dns-monitor/config.yaml. install.sh
+# puts this file there on first install; edit it there, or use the settings
+# window, then `net-dns-monitor-service restart`. Any key deleted from that copy
+# falls back to the value below.
 
 external_targets:
   - ["1.1.1.1", 443]
@@ -160,6 +167,71 @@ open_dashboard_at_launch: true
 # the file is compacted when it outgrows the window.
 history_path: "~/Library/Application Support/net-dns-monitor/history.jsonl"
 history_max_samples: 720
+
+# --- System log viewer ----------------------------------------------------
+# The right-hand column of the window shows what macOS itself is saying about
+# the network: the error and fault entries from mDNSResponder, configd, the
+# Wi-Fi stack, and anything logging through com.apple.network. It fills itself
+# in and refreshes on a cadence -- nothing has to be clicked -- and new error
+# lines are also announced in the results pane on the left, so a problem is
+# visible without watching the log.
+#
+# The search box above the pane ANDs its terms and treats a leading `-` as an
+# exclusion: `dns -crowdstrike` shows DNS lines that are not from CrowdStrike.
+# It is substring matching, not a regex, so a connection id like [C134.1.1:3]
+# can be pasted straight in.
+#
+# Every number below was measured on a real machine with `log show`; the notes
+# in netdnsmonitor/system_log.py record the measurements.
+log_view_enabled: true
+
+# Read once at launch, so the pane has history in it immediately instead of
+# starting blank for a poll interval. 15 minutes measured 4.2s. A 60-minute
+# window measured 16.9s, which is why this is bounded.
+log_view_backfill_window: "15m"
+
+# The steady-state poll. Deliberately a longer window than the interval below,
+# so nothing falls into the gap between two polls; the overlap is de-duplicated
+# in memory. 1 minute measured 1.4s.
+log_view_poll_window: "1m"
+log_view_poll_seconds: 30
+
+# Not the 10 seconds used for the incident-report log excerpt: `log show` is
+# scanning an archive and the machine is not always idle. Hitting this shows a
+# "took longer than" line in the pane rather than an empty pane, because an
+# empty pane reads as a quiet network.
+log_view_timeout_seconds: 45
+
+# Entries held in memory. Nothing is written to disk by the viewer.
+log_view_max_entries: 3000
+
+# Show only error and fault entries. All levels over the same subsystems
+# measured 192,901 lines in 30 minutes; filtered to errors, the same window was
+# 919. The "Errors only" button switches this while the app runs -- this key is
+# just what it starts as.
+log_view_errors_only: true
+
+# Rows drawn into the pane. Identical messages are collapsed into a single row
+# with an (xN) count before this limit applies.
+log_view_row_limit: 400
+
+# How many new error lines per poll are announced in the results pane on the
+# left. A cap on the announcements only -- everything still appears in the log
+# pane. Without it, one repeating message would push every manual result out.
+log_view_announce_limit: 3
+
+# Entries containing any of these substrings are dropped entirely. All four are
+# high-frequency framework complaints from unrelated software, and they were
+# burying the one line that mattered (a socket reporting "Network is
+# unreachable"). Set to [] to see everything.
+#
+# The settings window separates these with commas, so a pattern that contains a
+# comma has to be edited here instead.
+log_view_noise_patterns:
+  - "nw_endpoint_get_address called with null endpoint"
+  - "nw_protocol_instance_set_output_handler"
+  - "quic_crypto_queue_append not enqueing more packets"
+  - "Too many groups requested"
 
 # --- Peer-assisted fault localization -------------------------------------
 # When an outage starts, peers are probed immediately rather than at the next

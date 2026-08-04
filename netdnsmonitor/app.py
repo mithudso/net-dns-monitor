@@ -3,7 +3,7 @@ escalation gate, redaction, report contents, alerting policy) lives in
 already-tested modules; this file only wires them to rumps timers and a
 status-item title.
 
-Three timers, three different cadences, and they are deliberately not merged:
+Six timers, six different cadences, deliberately not merged:
 
   poll_interval_seconds (30)       incident detection. TCP reachability + DNS
                                    through the anti-flap gate; the only path
@@ -13,12 +13,21 @@ Three timers, three different cadences, and they are deliberately not merged:
                                    throughput reading; drives the menu bar
                                    stats, the Dock tile, and the alert.
   resolution_interval_seconds(300) the stalled-domain resolution batch.
+  ui_refresh_seconds (1)           repaint the window, drain worker queues.
+  peer_announce_seconds (300)      announce to and heartbeat LAN peers.
+  log_view_poll_seconds (30)       read the network parts of the unified log.
 
 The heartbeat is the fast one because an outage should be visible in seconds,
 and it is cheap enough to run at that rate. Incident detection stays slow and
 debounced because acting on it costs something -- flushed caches and API calls.
+The log poll is slow for the opposite reason to the heartbeat: nothing displayed
+depends on it, and `log show` measured 1.4s per read.
+
+Everything that shells out does so on a worker thread and returns through a
+queue, because the run loop this all hangs off is also what draws the window.
 """
 
+import getpass
 import os
 import queue
 import socket as socket_module
@@ -33,7 +42,7 @@ from typing import Callable, Optional
 
 import rumps
 
-from netdnsmonitor import alert, forensic_log, peer_net
+from netdnsmonitor import alert, forensic_log, peer_net, privileges, system_log
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.classifier import classify
 from netdnsmonitor.config import load_config
@@ -111,7 +120,13 @@ def build_state_machine(config: dict) -> StateMachine:
         internal_targets=internal_targets,
         domains=config["domains"],
     )
-    repair_executor = make_repair_executor()
+    # The real privilege probes are passed in here rather than defaulted inside
+    # make_repair_executor, so that every test constructing an executor with a fake
+    # run_fn keeps describing an ungranted machine and runs no extra subprocesses.
+    repair_executor = make_repair_executor(
+        is_granted_fn=privileges.is_granted,
+        primary_interface_fn=privileges.primary_interface,
+    )
     log_watcher = make_log_watcher(lookback=config["log_lookback"])
 
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -254,6 +269,37 @@ class NetDnsMonitorApp(rumps.App):
         self._settings: Optional[SettingsWindow] = None
         self.config_path = config_path
 
+        # --- system log viewer ---------------------------------------------
+        # Held in memory only. The buffer de-duplicates, because the poll window
+        # is longer than the poll interval on purpose (nothing falls in the gap
+        # between two reads, so everything arrives about twice).
+        self.log_buffer = system_log.LogBuffer(max_entries=self.config["log_view_max_entries"])
+        self.log_reader = system_log.make_log_reader(
+            timeout=self.config["log_view_timeout_seconds"]
+        )
+        # Runtime state, seeded from config: the button above the pane flips this,
+        # and it decides both the predicate and what the pane shows.
+        self.log_errors_only = self.config["log_view_errors_only"]
+        self.log_error: Optional[str] = None
+        self.new_log_errors = 0
+        # Last text pushed to each view, so the 1s refresh only calls setString_
+        # when something changed -- it resets the scroll position, which at 1s
+        # would fight anyone reading the pane.
+        self._log_pane_text = ""
+        self._log_status_text = ""
+        self._log_thread: Optional[threading.Thread] = None
+        self._log_results: queue.Queue = queue.Queue()
+
+        # --- elevated permissions ------------------------------------------
+        # Cached rather than probed on every repaint: the check shells out to
+        # `sudo -n -l`, and the window refreshes every second. Re-probed after a
+        # grant or revoke, and once at launch.
+        self.privileges_granted = False
+        self.dhcp_interfaces: list[str] = []
+        self.primary_dhcp_interface: Optional[str] = None
+        self._privilege_thread: Optional[threading.Thread] = None
+        self._privilege_results: queue.Queue = queue.Queue()
+
         self.menu = [
             "Open dashboard",
             "Toggle mini window",
@@ -272,6 +318,13 @@ class NetDnsMonitorApp(rumps.App):
         self.ui_timer.start()
         self.peer_timer = rumps.Timer(self.peer_tick, self.config["peer_announce_seconds"])
         self.peer_timer.start()
+        # Its own cadence again, and a slow one: this shells out to `log show`,
+        # which measured 1.4s for a 1-minute window. Nothing about the network
+        # display depends on it, so it is the one timer that can afford to be late.
+        self.log_timer: Optional[rumps.Timer] = None
+        if self.config["log_view_enabled"]:
+            self.log_timer = rumps.Timer(self.log_tick, self.config["log_view_poll_seconds"])
+            self.log_timer.start()
         # Runs once, then stops itself. Everything in it needs a live
         # NSApplication and a turning run loop, and none of it may happen in
         # __init__ where the tests would each get a window.
@@ -291,6 +344,11 @@ class NetDnsMonitorApp(rumps.App):
         except Exception:  # noqa: BLE001 - a missing menu must not stop the monitor
             traceback.print_exc()
         self._install_activation_observer()
+        # Backfill the log pane here rather than waiting for the first poll: at a
+        # 30-second cadence the pane would otherwise sit empty for half a minute
+        # after launch, which is exactly when someone is looking at it.
+        self._start_log_read(self.config["log_view_backfill_window"], announce=False)
+        self._refresh_privilege_status()
         if self.config["open_dashboard_at_launch"]:
             # activate=False: ordered front without stealing focus at login.
             self.open_dashboard(activate=False)
@@ -738,6 +796,331 @@ class NetDnsMonitorApp(rumps.App):
 
     # --- dashboard window --------------------------------------------------
 
+    # --- system log viewer -------------------------------------------------
+
+    def log_tick(self, _sender=None):
+        """Fold in the last read, then start the next. Same shape as ping_tick.
+
+        `log show` is a subprocess that measured 1.4s for a 1-minute window, so it
+        cannot run on the run loop -- that would stall the 5-second heartbeat and
+        the window for the duration of every poll.
+
+        `ui_tick` drains the same queue every second, which is what actually gets a
+        finished read on screen promptly; draining here as well keeps this method
+        correct on its own terms if the UI timer is ever not the faster of the two.
+        """
+        self._drain_log_results()
+        self._start_log_read(self.config["log_view_poll_window"])
+
+    def _start_log_read(self, window: str, announce: bool = True):
+        """Kick a read on a worker thread, unless one is already running.
+
+        Skipping rather than queueing, the same choice the ping and resolution
+        workers make: a read that outran its cadence means the machine is busy,
+        and stacking threads is the wrong response to that.
+
+        `announce=False` for the launch backfill. Everything it returns is up to
+        `log_view_backfill_window` old, so reporting it as new would be a lie in
+        three places at once: the results pane would open with a burst of "new"
+        errors from a quarter of an hour ago, the Monitor row would credit them to
+        "reported since launch" when nothing was reported, and with
+        `open_dashboard_at_launch: false` the count would climb while
+        `_append_output` no-ops into a window that does not exist. History, not
+        news.
+        """
+        if not self.config["log_view_enabled"]:
+            return
+        if self._log_thread is not None and self._log_thread.is_alive():
+            return
+        self._log_thread = threading.Thread(
+            target=self._run_log_read,
+            args=(window, announce),
+            name="system-log-read",
+            daemon=True,
+        )
+        self._log_thread.start()
+
+    def _run_log_read(self, window: str, announce: bool = True):
+        """Worker thread. Reads, parses, and hands the result over -- it touches
+        neither the buffer nor any view, because both belong to the main thread.
+        """
+        try:
+            result = dict(self.log_reader(window, self.log_errors_only))
+            result["announce"] = announce
+            self._log_results.put(result)
+        except Exception:  # noqa: BLE001 - a failed read must not kill the poller
+            # make_log_reader already turns every expected failure into an error
+            # string, so reaching here is something unforeseen. Without this the
+            # thread dies silently and the pane freezes at its last contents while
+            # looking perfectly normal.
+            traceback.print_exc()
+
+    def _drain_log_results(self):
+        """Main thread: store what is new, and report the new errors."""
+        while True:
+            try:
+                result = self._log_results.get_nowait()
+            except queue.Empty:
+                return
+            self.log_error = result["error"]
+            added = self.log_buffer.add(result["entries"])
+            # Stored either way -- the pane shows the backfill. Only the reporting
+            # is suppressed; see _start_log_read.
+            if result.get("announce", True):
+                self._announce_new_log_errors(added)
+
+    def _announce_new_log_errors(self, added: list):
+        """Report new network errors from the system log without being asked.
+
+        This is the automatic half of the feature, and the reason it exists: a log
+        pane only helps someone already looking at it, and the point of a monitor
+        is that nobody is. So new error and fault lines are also echoed into the
+        results pane on the left, counted for the Monitor section, and -- while an
+        outage episode is open -- written into that episode, so the forensic record
+        includes what the OS itself said at the time rather than only what this app
+        measured.
+
+        Capped by `log_view_announce_limit`. The cap is on the announcement only;
+        everything still lands in the log pane. Without it, one repeating message
+        would push every manual troubleshooting result out of the results pane.
+        """
+        noise = tuple(self.config["log_view_noise_patterns"] or ())
+        errors = [
+            entry
+            for entry in added
+            if system_log.is_error(entry) and not system_log.is_noise(entry, noise)
+        ]
+        if not errors:
+            return
+        self.new_log_errors += len(errors)
+
+        rows = system_log.coalesce(errors)
+        limit = max(0, int(self.config["log_view_announce_limit"]))
+        shown = rows[:limit]
+        lines = [f"\n>>> system log: {len(errors)} new network error line(s)"]
+        lines.extend("    " + system_log.format_entry(row) for row in shown)
+        if len(rows) > len(shown):
+            lines.append(f"    ...and {len(rows) - len(shown)} more -- see the log pane")
+        self._append_output("\n".join(lines) + "\n")
+
+        if self.forensic.is_open:
+            for row in shown:
+                self.forensic.note(
+                    forensic_log.OBSERVATION,
+                    "system_log",
+                    reason="macOS logged a network error while this episode was open",
+                    # Truncated: a folded multi-line framework message can run to
+                    # thousands of characters, and this lands in a markdown table.
+                    detail=f"{row.get('process') or '?'}: {row.get('message', '')[:200]}",
+                    result=f"{row.get('count', 1)}x, most recently {row.get('time', '')}",
+                )
+
+    def _refresh_log_pane(self):
+        """Re-filter and repaint the pane, from the search box's current contents.
+
+        The box is read every refresh rather than mirrored onto this object, so the
+        pane cannot disagree with what is typed in it. Both views are only pushed
+        when their text changed -- `setString_` resets scroll position.
+        """
+        if self._dashboard is None:
+            return
+        query = self._dashboard.search_query()
+        view = self.log_buffer.view(
+            query=query,
+            errors_only=self.log_errors_only,
+            noise_patterns=self.config["log_view_noise_patterns"] or (),
+            limit=self.config["log_view_row_limit"],
+        )
+        text = view["text"] or self._empty_log_pane_text(query)
+        if text != self._log_pane_text:
+            self._log_pane_text = text
+            self._dashboard.set_log(text)
+        status = system_log.summarize(
+            total=view["total"],
+            shown=view["shown"],
+            errors=view["errors"],
+            query=query,
+            error=self.log_error,
+        )
+        if status != self._log_status_text:
+            self._log_status_text = status
+            self._dashboard.set_log_status(status)
+
+    def _empty_log_pane_text(self, query: str) -> str:
+        """Say which kind of empty this is.
+
+        A blank pane otherwise means all of "the log is quiet", "your search
+        matched nothing", "the viewer is switched off", and "the read failed" --
+        and only some of those say anything about the network.
+        """
+        if not self.config["log_view_enabled"]:
+            return "The system log viewer is switched off (log_view_enabled).\n"
+        if self.log_error:
+            return self.log_error + "\n"
+        if query.strip():
+            return f"Nothing in the captured log matches {query.strip()!r}.\n"
+        if self.log_errors_only:
+            return (
+                "No network errors or faults in the system log yet.\n"
+                'Use "Errors only" to switch to every network log entry.\n'
+            )
+        return "No network entries captured from the system log yet.\n"
+
+    def _log_level_title(self) -> str:
+        return "Errors only" if self.log_errors_only else "All levels"
+
+    def _toggle_log_level(self):
+        """Switch between errors-and-faults and every network entry.
+
+        Re-reads rather than just re-filtering: the level is part of the predicate,
+        so entries at other levels were never fetched and are not in the buffer to
+        filter. The re-read covers the poll window only, so the pane fills forward
+        from now rather than retroactively.
+        """
+        self.log_errors_only = not self.log_errors_only
+        if self._dashboard is not None:
+            self._dashboard.set_log_level_title(self._log_level_title())
+        window = self.config["log_view_poll_window"]
+        self._start_log_read(window)
+        if self.log_errors_only:
+            self._append_output(
+                f"System log: errors and faults only, re-reading the last {window}.\n"
+            )
+        else:
+            self._append_output(
+                f"System log: all network levels, re-reading the last {window}. This is "
+                "noisy -- measured at roughly 6,000 entries a minute on this machine, so "
+                "older entries will be dropped as the buffer fills.\n"
+            )
+
+    # --- elevated permissions ----------------------------------------------
+
+    def _refresh_privilege_status(self):
+        """Re-probe what is granted, on a worker thread.
+
+        Two subprocesses (`sudo -n -l` and `ifconfig -l`), so not on the run loop,
+        and cached rather than repeated: the window repaints every second and this
+        answer changes only when someone clicks Grant or Revoke.
+        """
+        if self._privilege_thread is not None and self._privilege_thread.is_alive():
+            return
+        self._privilege_thread = threading.Thread(
+            target=self._run_privilege_status, name="privilege-status", daemon=True
+        )
+        self._privilege_thread.start()
+
+    def _run_privilege_status(self):
+        try:
+            self._privilege_results.put(
+                {
+                    "granted": privileges.is_granted(),
+                    "interfaces": privileges.dhcp_interfaces(),
+                    "primary": privileges.primary_interface(),
+                }
+            )
+        except Exception:  # noqa: BLE001 - a status probe must not kill anything
+            traceback.print_exc()
+
+    def _drain_privilege_results(self):
+        """Main thread: adopt the new status and print whatever it had to say.
+
+        The message is only present for a grant or revoke -- the launch-time probe
+        has nothing to report, and announcing "not granted" unprompted at every
+        login would be nagging.
+        """
+        while True:
+            try:
+                result = self._privilege_results.get_nowait()
+            except queue.Empty:
+                return
+            self.privileges_granted = result["granted"]
+            self.dhcp_interfaces = result["interfaces"]
+            # Absent from a grant/revoke result, which has no reason to re-probe the
+            # routing table; keep the last known answer rather than blanking it.
+            self.primary_dhcp_interface = result.get("primary", self.primary_dhcp_interface)
+            if result.get("message"):
+                self._append_output(result["message"] + "\n")
+
+    def _grant_privileges(self):
+        """Explain first, then ask macOS for authorisation, on a worker thread.
+
+        The explanation is printed before the prompt appears rather than after,
+        because afterwards is too late to decline. The prompt itself waits for a
+        human, which is precisely why this cannot run on the run loop -- it would
+        freeze the window and every timer until someone typed a password.
+        """
+        if self._privilege_thread is not None and self._privilege_thread.is_alive():
+            self._append_output("Still working on the previous permission change.\n")
+            return
+        # Last known list only -- deliberately NOT `or privileges.dhcp_interfaces()`.
+        # That fallback shelled out to `ifconfig -l` right here, and this method runs
+        # on the run loop: `self.dhcp_interfaces` is empty until the launch probe
+        # drains, so clicking Grant early (or on a machine with no en* interface)
+        # blocked the window and all six timers for up to the 5s subprocess timeout.
+        # The worker re-enumerates instead. Cost of doing it this way: in that early
+        # case the explanation below lists only the mDNSResponder command until the
+        # worker fills the rest in, which is a worse explanation but not a wrong one.
+        interfaces = list(self.dhcp_interfaces)
+        self._append_output("\n" + privileges.explanation(interfaces) + "\n")
+        self._privilege_thread = threading.Thread(
+            target=self._run_grant,
+            args=(interfaces,),
+            name="privilege-grant",
+            daemon=True,
+        )
+        self._privilege_thread.start()
+
+    def _run_grant(self, interfaces: list):
+        try:
+            # Enumerated here rather than on the run loop; see _grant_privileges.
+            interfaces = interfaces or privileges.dhcp_interfaces()
+            outcome = privileges.grant(getpass.getuser(), interfaces)
+            self._privilege_results.put(
+                {
+                    "granted": privileges.is_granted(),
+                    "interfaces": privileges.dhcp_interfaces(),
+                    "message": outcome["message"],
+                }
+            )
+        except Exception:  # noqa: BLE001 - never raise out of a worker
+            traceback.print_exc()
+            self._privilege_results.put(
+                {
+                    "granted": self.privileges_granted,
+                    "interfaces": self.dhcp_interfaces,
+                    "message": "Granting raised; see the app log for the traceback.",
+                }
+            )
+
+    def _revoke_privileges(self):
+        if self._privilege_thread is not None and self._privilege_thread.is_alive():
+            self._append_output("Still working on the previous permission change.\n")
+            return
+        self._privilege_thread = threading.Thread(
+            target=self._run_revoke, name="privilege-revoke", daemon=True
+        )
+        self._privilege_thread.start()
+
+    def _run_revoke(self):
+        try:
+            outcome = privileges.revoke()
+            self._privilege_results.put(
+                {
+                    "granted": privileges.is_granted(),
+                    "interfaces": self.dhcp_interfaces,
+                    "message": outcome["message"],
+                }
+            )
+        except Exception:  # noqa: BLE001 - never raise out of a worker
+            traceback.print_exc()
+            self._privilege_results.put(
+                {
+                    "granted": self.privileges_granted,
+                    "interfaces": self.dhcp_interfaces,
+                    "message": "Revoking raised; see the app log for the traceback.",
+                }
+            )
+
     def ui_tick(self, _sender=None):
         """Repaint the window and collect any finished troubleshooting step.
 
@@ -746,6 +1129,8 @@ class NetDnsMonitorApp(rumps.App):
         closed this costs a queue poll and a string comparison.
         """
         self._drain_action_results()
+        self._drain_log_results()
+        self._drain_privilege_results()
         self._finish_localization_if_due()
         self._refresh_mini()
         if self._peers_dirty:
@@ -753,6 +1138,7 @@ class NetDnsMonitorApp(rumps.App):
             # keeps all file writing on the main thread.
             self._save_peer_record()
         self._refresh_dashboard()
+        self._refresh_log_pane()
 
     def _ensure_dashboard(self) -> DashboardWindow:
         if self._dashboard is None:
@@ -765,6 +1151,11 @@ class NetDnsMonitorApp(rumps.App):
     def open_dashboard(self, _sender=None, activate: bool = True):
         dashboard = self._ensure_dashboard()
         self._refresh_dashboard(force=True)
+        # The level button ships with a title from the LOG_ACTIONS table; this is
+        # what makes it agree with the filter actually in force, which may have come
+        # from config rather than from a click.
+        dashboard.set_log_level_title(self._log_level_title())
+        self._refresh_log_pane()
         dashboard.show(activate=activate)
 
     def open_settings(self):
@@ -847,6 +1238,15 @@ class NetDnsMonitorApp(rumps.App):
                 if self.config["peer_discovery_enabled"]
                 else None,
                 fault_verdict=self.fault_verdict,
+                log_entries=len(self.log_buffer.entries()),
+                log_errors=self.log_buffer.error_count(),
+                new_log_errors=self.new_log_errors,
+                log_error=self.log_error,
+                permissions=privileges.status_rows(
+                    granted=self.privileges_granted,
+                    interfaces=self.dhcp_interfaces,
+                    primary=self.primary_dhcp_interface,
+                ),
             )
         )
         # Only push when something changed: setString_ resets the pane's scroll
@@ -890,6 +1290,40 @@ class NetDnsMonitorApp(rumps.App):
         if action_id == "test_alert":
             self.test_network_alert(None)
             self._append_output("Fired a test alert: the Dock should bounce.\n")
+            return
+
+        # The log column's own controls. Handled here, before the ladder-step
+        # branch below, for the reason recorded against "open_dashboard": an id
+        # this method does not recognise falls through to step_by_name and reports
+        # "Unknown step", i.e. a button that looks wired and does nothing useful.
+        if action_id == "log_refresh":
+            self._start_log_read(self.config["log_view_poll_window"])
+            self._append_output("Re-reading the system log...\n")
+            return
+        if action_id == "log_toggle_level":
+            self._toggle_log_level()
+            return
+        if action_id == "log_clear_search":
+            if self._dashboard is not None:
+                self._dashboard.set_search_query("")
+            return
+        if action_id == "log_clear_buffer":
+            self.log_buffer.clear()
+            self.new_log_errors = 0
+            self.log_error = None
+            self._append_output("Emptied the captured system log.\n")
+            return
+        if action_id == "log_search":
+            # Return pressed in the search box. The pane already re-filters on the
+            # 1s refresh, so there is nothing to do -- but it has to be swallowed
+            # here rather than reaching the ladder.
+            return
+
+        if action_id == "grant_privileges":
+            self._grant_privileges()
+            return
+        if action_id == "revoke_privileges":
+            self._revoke_privileges()
             return
 
         if self._action_thread is not None and self._action_thread.is_alive():

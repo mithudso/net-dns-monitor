@@ -2,7 +2,13 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-config.yaml
+# config.yaml is NOT ignored: it is the shipped default config, tracked in the
+# repo, and tests/test_config.py asserts it matches DEFAULT_CONFIG. The live
+# per-machine config is ~/.config/net-dns-monitor/config.yaml, outside the repo,
+# so nothing here needs to hide it. Its settings-window backups are ignored,
+# since those land next to the live file only if someone points the app at a
+# config inside a checkout.
+config.yaml.bak-*
 build/
 dist/
 net-dns-monitor.log
