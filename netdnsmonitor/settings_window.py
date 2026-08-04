@@ -25,6 +25,7 @@ concludes the setting does not work.
 
 import os
 import time
+import traceback
 from typing import Callable, Optional
 
 import yaml
@@ -71,6 +72,7 @@ GROUPS = [
         [
             ("open_dashboard_at_launch", "Open dashboard at launch", "bool"),
             ("ui_refresh_seconds", "Window refresh (seconds)", "int"),
+            ("dock_refresh_seconds", "Dock tile refresh (seconds)", "int"),
             ("history_max_samples", "Graph history samples", "int"),
         ],
     ),
@@ -187,13 +189,21 @@ def parse_field(kind: str, text: str, label: str = ""):
     if kind == "int":
         try:
             return int(float(text))
-        except ValueError:
+        except (ValueError, OverflowError):
+            # OverflowError is not hypothetical: float("inf") parses fine and
+            # int() then refuses it, and that exception is not a ValueError -- so
+            # it escaped past the window's handler into an AppKit callback, where
+            # the click simply appeared to do nothing.
             raise ValueError(f"{name}: expected a whole number, got {text!r}") from None
     if kind == "float":
         try:
-            return float(text)
+            value = float(text)
         except ValueError:
             raise ValueError(f"{name}: expected a number, got {text!r}") from None
+        # inf/nan parse as floats and would reach a timer interval or a timeout.
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError(f"{name}: expected a finite number, got {text!r}")
+        return value
     return text
 
 
@@ -242,9 +252,11 @@ def save_config(
                 loaded = yaml.safe_load(f)
             if isinstance(loaded, dict):
                 on_disk = loaded
-        except (OSError, yaml.YAMLError):
+        except (OSError, UnicodeError, yaml.YAMLError):
             # An unreadable or malformed file must not block saving a good one --
             # that is the situation someone opens this window to get out of.
+            # UnicodeError specifically: a config that is not valid UTF-8 raises
+            # UnicodeDecodeError, which is not an OSError, and it escaped.
             on_disk = {}
 
     backup = None
@@ -253,7 +265,9 @@ def save_config(
         try:
             with open(path, encoding="utf-8") as f:
                 writer(backup, f.read())
-        except OSError:
+        except (OSError, UnicodeError):
+            # Same reason as above. Failing to back up must not stop the save --
+            # but it must be reported as "no backup" rather than claimed.
             backup = None
 
     merged = {**on_disk, **updates}
@@ -392,6 +406,13 @@ class SettingsWindow:
                 # A parse error names the offending field. Reported in the window
                 # rather than raised into an AppKit callback, where nobody sees it.
                 self.status.setStringValue_(f"Not saved -- {exc}")
+                return
+            except Exception as exc:  # noqa: BLE001 - never raise into AppKit
+                # Anything else -- a full disk, a read-only config directory. The
+                # narrow ValueError catch let those escape into the ObjC callback,
+                # where the click looked like it did nothing at all.
+                traceback.print_exc()
+                self.status.setStringValue_(f"Not saved -- {type(exc).__name__}: {exc}")
                 return
             self.status.setStringValue_(message)
         elif action == "reload":

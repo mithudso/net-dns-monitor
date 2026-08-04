@@ -51,11 +51,19 @@ DEFAULT_CONFIG = {
     # Bounds the per-tick ping. A failed ping takes about this long, so keep it
     # comfortably under ping_interval_seconds.
     "ping_timeout_seconds": 2.0,
-    # Consecutive failed pings before the alert fires. 1 is the literal reading
-    # of "if it fails a ping, alert" and is the default. On Wi-Fi a lone lost
-    # echo request will occasionally trip it; raise to 2 to ignore single
-    # dropped packets and still alert within 10 seconds of a real outage.
-    "ping_failure_threshold": 1,
+    # Consecutive failed pings before the alert fires.
+    #
+    # 1 is the literal reading of "if it fails a ping, alert" and was the original
+    # default. It was changed to 2 on evidence from this machine: three episodes
+    # in ~22 minutes, of which one was a real 2m35s outage (corroborated by the
+    # anti-flap gate reporting external_reachable: False) and the rest cleared
+    # within a single 5-second tick -- i.e. lone dropped Wi-Fi packets, each one
+    # opening a forensic episode and bouncing the Dock.
+    #
+    # At 2, a single lost echo request is ignored and a real outage still alerts
+    # within 10 seconds. Set it back to 1 if you would rather see every dropped
+    # packet.
+    "ping_failure_threshold": 2,
     # 0 means one alert per outage: the alert fires on the failure edge and then
     # stays quiet until pings succeed again. Set it to e.g. 300 to be re-alerted
     # every 5 minutes while the network stays down. The Dock bounce is a
@@ -75,6 +83,12 @@ DEFAULT_CONFIG = {
     # troubleshooting step run from it. Only costs a queue poll and a string
     # comparison while the window is closed.
     "ui_refresh_seconds": 1,
+    # How often the Dock tile may be repainted when only the round-trip number has
+    # changed. A status change (healthy/flaky/incident) always repaints
+    # immediately. This exists because setApplicationIconImage_ is synchronous and
+    # measured at ~2 seconds per call on the main thread -- at the 5-second
+    # heartbeat it would block the run loop for most of every cycle.
+    "dock_refresh_seconds": 30,
     # Open the dashboard window shortly after launch, so there is a visible
     # window without having to find a menu first. It is ordered front WITHOUT
     # stealing focus -- this starts from a launchd agent at login, and yanking

@@ -247,6 +247,10 @@ class NetDnsMonitorApp(rumps.App):
         self._localize_due_at: Optional[float] = None
         # Same lazy rule as the dashboard: built on first use, never in __init__.
         self._mini: Optional[MiniWindow] = None
+        # See _refresh_dock_icon: the Dock call is expensive, so it is rate-limited
+        # except when the status itself changes.
+        self._dock_state = "healthy"
+        self._dock_updated_at = 0.0
         self._settings: Optional[SettingsWindow] = None
         self.config_path = config_path
 
@@ -625,6 +629,27 @@ class NetDnsMonitorApp(rumps.App):
         if drained:
             self._refresh_title()
 
+    def _refresh_dock_icon(self, state: str, rtt_ms, ping_down: bool):
+        """Repaint the Dock tile, but not on every heartbeat.
+
+        `setApplicationIconImage_` is synchronous and costs ~2 seconds per call
+        (measured), on the main thread. Called every 5-second heartbeat -- which is
+        what the round-trip number changing means -- that would block the run loop
+        for a large fraction of every cycle and starve the other three timers.
+
+        So: a status change goes through immediately, because that is the urgent
+        and rare case, and a change to the number alone waits for
+        `dock_refresh_seconds`. dock_icon.set_dock_icon additionally skips
+        identical content, so a quiet network costs nothing at all.
+        """
+        now = time.monotonic()
+        status_changed = state != self._dock_state
+        if not status_changed and now - self._dock_updated_at < self.config["dock_refresh_seconds"]:
+            return
+        set_dock_icon(state, rtt_ms=rtt_ms, ping_down=ping_down)
+        self._dock_state = state
+        self._dock_updated_at = now
+
     def _refresh_title(self):
         # Snapshot once. The resolution worker rebinds this attribute
         # concurrently, and reading it three separate times (confirmed via
@@ -659,10 +684,10 @@ class NetDnsMonitorApp(rumps.App):
             stats=stats,
             ping_down=ping_down,
         )
-        set_dock_icon(
+        self._refresh_dock_icon(
             status_state(flap_gate.state, flap_gate.consecutive_failures, ping_down),
-            rtt_ms=ping["rtt_ms"],
-            ping_down=ping_down,
+            ping["rtt_ms"],
+            ping_down,
         )
 
     # --- peer-assisted fault localization ----------------------------------

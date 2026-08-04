@@ -11,6 +11,7 @@ import threading
 import time
 
 from netdnsmonitor.app import NetDnsMonitorApp
+from netdnsmonitor.ping_monitor import PingMonitor
 from netdnsmonitor.status import PING_DOWN_TEXT
 
 OK = {"ok": True, "rtt_ms": 61.4, "error": None}
@@ -35,6 +36,23 @@ def make_app(tmp_path, result=OK, counters=(0, 0)):
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
     app.state_machine = FakeStateMachine()
     app.ping_job = lambda: (result, counters)
+    pin_threshold(app)
+    return app
+
+
+def pin_threshold(app, failure_threshold=1):
+    """Make these tests independent of the shipped alert threshold.
+
+    They are wiring tests -- "a failed ping reaches the title, the alert and the
+    forensic log" -- and how many failed pings that policy requires is a separate
+    decision, pinned by its own test in test_config.py. Without this, changing the
+    shipped default from 1 to 2 broke eleven tests that were not about it.
+    """
+    app.ping_monitor = PingMonitor(
+        failure_threshold=failure_threshold,
+        loss_window=app.config["ping_loss_window"],
+        alert_repeat_seconds=app.config["ping_alert_repeat_seconds"],
+    )
     return app
 
 
@@ -133,6 +151,7 @@ def test_recovery_cancels_the_bounce(tmp_path, monkeypatch):
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
     app.state_machine = FakeStateMachine()
     app.ping_job = lambda: (result["current"], (0, 0))
+    pin_threshold(app)
 
     run_heartbeat(app)
     result["current"] = OK

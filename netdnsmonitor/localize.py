@@ -67,7 +67,15 @@ def localize(
     `external_reachable` and `dns_ok`. A peer that answered recently but reports
     neither is still useful -- it proves the LAN works.
     """
-    reachable = [p for p in (peers or []) if p.get("answered")]
+    supplied = list(peers or [])
+    reachable = [p for p in supplied if p.get("answered") is True]
+    # Explicitly reported as not answering, as opposed to not saying either way.
+    # The distinction carries a whole verdict: "every peer went silent" is the
+    # high-confidence LOCAL_MACHINE signal below, and a caller that simply omits
+    # the key would otherwise trigger it. Passing raw registry dicts instead of
+    # PeerRegistry.localization_view() produced exactly that -- a peer reporting
+    # itself perfectly healthy yielded "this machine", at high confidence.
+    silent = [p for p in supplied if p.get("answered") is False]
     informative = [
         p
         for p in reachable
@@ -100,13 +108,28 @@ def localize(
             evidence,
         )
 
+    if not reachable and not silent:
+        # Peers were supplied but none of them says whether it answered, so the
+        # strongest signal available is unusable. Refusing to guess here is the
+        # whole point: the alternative reading of this state is a high-confidence
+        # "this machine", which is the wrong thing to tell someone.
+        return _verdict(
+            INCONCLUSIVE,
+            "low",
+            f"{len(supplied)} peer(s) were supplied but none reports whether it "
+            "answered, so this cannot tell 'the LAN is fine' from 'nothing on the "
+            "LAN is reachable'. Pass PeerRegistry.localization_view(), which sets "
+            "that flag.",
+            evidence,
+        )
+
     if not reachable:
         # Every known peer went silent at the same time as our connectivity. The
         # shared element is our own link.
         return _verdict(
             LOCAL_MACHINE,
             "high",
-            f"None of the {len(peers)} known peer(s) answered. A peer on the same "
+            f"None of the {len(silent)} known peer(s) answered. A peer on the same "
             "network is reachable without leaving the LAN, so losing all of them "
             "at once points at this machine's own link rather than anything "
             "beyond the router.",

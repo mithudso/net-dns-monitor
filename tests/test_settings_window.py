@@ -288,3 +288,52 @@ def test_the_window_warns_before_saving_not_after():
     window = SettingsWindow(on_save=lambda values: "")
     assert "comments" in window.notice.stringValue()
     assert "bak-" in window.notice.stringValue()
+
+
+# --- deep-optimizer regressions --------------------------------------------
+
+
+@pytest.mark.parametrize("text", ["inf", "-inf", "nan"])
+def test_non_finite_numbers_are_rejected_as_values_not_raised_as_overflow(text):
+    """`float("inf")` parses and `int()` then refuses it with OverflowError, which
+    is NOT a ValueError -- so it escaped the window's handler into an AppKit
+    callback and the click appeared to do nothing.
+    """
+    with pytest.raises(ValueError):
+        parse_field("int", text, "Ping every (seconds)")
+
+
+def test_a_non_finite_float_never_reaches_a_timer_interval():
+    with pytest.raises(ValueError, match="finite"):
+        parse_field("float", "inf", "Ping timeout")
+
+
+def test_saving_over_a_config_that_is_not_valid_utf8(tmp_path):
+    """A UnicodeDecodeError is not an OSError, so reading such a file to back it up
+    escaped save_config entirely. The save must still succeed and simply report
+    that no backup was taken.
+    """
+    path = tmp_path / "config.yaml"
+    path.write_bytes(b"\xff\xfe\x00 not utf-8 at all")
+    result = save_config(str(path), {"ping_host": "1.1.1.1"})
+    assert result["backup"] is None
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["ping_host"] == "1.1.1.1"
+
+
+def test_a_failing_save_is_reported_in_the_window_not_raised_into_appkit():
+    """The handler caught only ValueError, so a full disk or a read-only config
+    directory escaped into the ObjC callback where nothing is visible.
+    """
+
+    def explode(values):
+        raise OSError("No space left on device")
+
+    window = SettingsWindow(on_save=explode)
+    save = next(
+        b
+        for b in window.window.contentView().subviews()
+        if str(getattr(b, "identifier", lambda: "")() or "") == "save"
+    )
+    window._target.invoke_(save)
+    assert "Not saved" in window.status.stringValue()
+    assert "No space left" in window.status.stringValue()

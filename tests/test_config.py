@@ -161,3 +161,22 @@ def test_a_non_mapping_yaml_root_is_rejected_with_the_filename(tmp_path):
     config_path.write_text("5\n")
     with pytest.raises(ValueError, match="must contain a YAML mapping"):
         load_config(str(config_path))
+
+
+def test_the_shipped_alert_threshold_ignores_a_single_dropped_packet(tmp_path):
+    """Pinned deliberately, because it is a behaviour decision rather than an
+    arbitrary number.
+
+    It was 1 -- the literal reading of "if it fails a ping, alert". Measured on a
+    real machine, that meant three forensic episodes and three Dock bounces in
+    ~22 minutes, of which exactly one was a real outage (2m35s, corroborated by
+    the gate reporting external_reachable: False); the rest cleared inside one
+    5-second tick, i.e. lone dropped Wi-Fi packets.
+
+    A change back to 1 should be a deliberate edit that fails this test, not a
+    silent drift.
+    """
+    cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
+    assert cfg["ping_failure_threshold"] == 2
+    # And a real outage still alerts fast: two ticks of the heartbeat.
+    assert cfg["ping_failure_threshold"] * cfg["ping_interval_seconds"] <= 10

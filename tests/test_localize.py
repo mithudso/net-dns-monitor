@@ -219,3 +219,32 @@ def test_evidence_records_what_was_actually_asked():
     assert result["evidence"]["peers_answered"] == 1
     assert result["evidence"]["peers_reporting_state"] == 1
     assert result["evidence"]["our_external_reachable"] is False
+
+
+# --- misuse must not produce a confident wrong answer ----------------------
+
+
+def test_peers_that_do_not_report_whether_they_answered_yield_no_verdict():
+    """Found by the deep-optimizer pass. Passing raw registry dicts instead of
+    PeerRegistry.localization_view() leaves out `answered`, and the old code read
+    a missing key as "did not answer" -- so a peer reporting itself perfectly
+    healthy produced `local_machine` at HIGH confidence. A confidently wrong
+    verdict here sends someone to reboot the wrong thing.
+    """
+    result = localize(
+        our_external_reachable=False,
+        our_dns_ok=None,
+        peers=[{"id": "a", "host": "mac-a", "external_reachable": True, "dns_ok": True}],
+    )
+    assert result["verdict"] == INCONCLUSIVE
+    assert result["confidence"] == "low"
+    assert "localization_view" in result["reason"]
+
+
+def test_an_explicitly_silent_peer_still_gives_the_high_confidence_verdict():
+    """The fix must not cost the real signal: a peer that genuinely did not answer
+    is still the strongest evidence that our own link is the problem.
+    """
+    result = localize(our_external_reachable=False, our_dns_ok=None, peers=[peer(answered=False)])
+    assert result["verdict"] == LOCAL_MACHINE
+    assert result["confidence"] == "high"

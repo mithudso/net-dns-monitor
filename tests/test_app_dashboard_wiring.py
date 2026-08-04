@@ -17,6 +17,7 @@ import pytest
 from netdnsmonitor.app import NetDnsMonitorApp
 from netdnsmonitor.forensic_log import DOWN, STEP, ForensicRecorder
 from netdnsmonitor.ladder import LadderStep
+from netdnsmonitor.ping_monitor import PingMonitor
 
 OK = {"ok": True, "rtt_ms": 61.4, "error": None}
 FAIL = {"ok": False, "rtt_ms": None, "error": "no reply from 8.8.8.8"}
@@ -65,6 +66,14 @@ def make_app(tmp_path, state_machine=None, result=OK):
     app.forensic = ForensicRecorder(
         journal_path=str(tmp_path / "forensic.jsonl"),
         episodes_dir=str(tmp_path / "episodes"),
+    )
+    # Pin the alert threshold rather than inheriting the shipped default -- see
+    # the same note in test_app_ping_wiring.make_app. How many failed pings the
+    # policy requires is decided and tested in test_config.py, not here.
+    app.ping_monitor = PingMonitor(
+        failure_threshold=1,
+        loss_window=app.config["ping_loss_window"],
+        alert_repeat_seconds=app.config["ping_alert_repeat_seconds"],
     )
     return app
 
@@ -550,3 +559,46 @@ def test_the_application_menu_item_opens_the_dashboard(tmp_path):
     app = make_app(tmp_path)
     app.handle_dashboard_action("open_dashboard")
     assert app._dashboard is not None
+
+
+# --- Dock tile throttling (deep-optimizer finding) --------------------------
+
+
+def make_dock_recorder(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr("netdnsmonitor.app.set_dock_icon", lambda *a, **k: calls.append(a))
+    return calls
+
+
+def test_the_dock_tile_is_not_repainted_on_every_heartbeat(tmp_path, monkeypatch):
+    """setApplicationIconImage_ is synchronous and measured at ~2 seconds per call,
+    on the main thread. Repainting it every 5-second heartbeat -- which is what the
+    round-trip number changing means -- blocked the run loop for a large fraction
+    of every cycle and starved the other three timers.
+    """
+    app = make_app(tmp_path)
+    calls = make_dock_recorder(app, monkeypatch)
+
+    for rtt in (61.0, 62.0, 63.0, 64.0):
+        app.ping_stats = dict(app.ping_stats, rtt_ms=rtt, down=False)
+        app._refresh_title()
+
+    assert len(calls) <= 1, f"the number alone should not repaint the tile: {calls}"
+
+
+def test_a_status_change_repaints_the_dock_tile_immediately(tmp_path, monkeypatch):
+    """The throttle must not delay the thing that matters. Green to red is urgent
+    and rare; the number changing is neither.
+    """
+    app = make_app(tmp_path)
+    calls = make_dock_recorder(app, monkeypatch)
+
+    app.ping_stats = dict(app.ping_stats, rtt_ms=61.0, down=False)
+    app._refresh_title()
+    before = len(calls)
+
+    app.ping_stats = dict(app.ping_stats, rtt_ms=None, down=True)
+    app._refresh_title()
+
+    assert len(calls) > before
+    assert calls[-1][0] == "incident"

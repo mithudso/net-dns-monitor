@@ -13,11 +13,12 @@ down, which is when the user can least do anything about it. So the alert fires
 on the transition into failure and then stays quiet. One outage, one alert.
 Recovery re-arms it, so a second outage alerts again.
 
-`failure_threshold` defaults to 1, which is the literal reading of the request:
-a single dropped echo request alerts. On Wi-Fi that will occasionally be a lone
-lost packet rather than a real outage, so it is configurable -- raise it to 2
-and a single dropped packet is ignored while a real outage still alerts within
-10 seconds.
+`failure_threshold` defaults to 1 *here*, which is the literal reading of the
+request: a single dropped echo request alerts. The shipped config default is 2,
+changed on measured evidence that lone dropped Wi-Fi packets were each opening a
+forensic episode and bouncing the Dock (see config.py). This class keeps 1 so the
+literal behaviour stays the documented, tested primitive and the policy decision
+lives in one place -- the config.
 
 `alert_repeat_seconds` defaults to 0, meaning never re-alert during one
 outage. Set it to e.g. 300 to be nagged every 5 minutes while it stays down.

@@ -89,7 +89,7 @@ below (from `netdnsmonitor/config.py`). Config file lives at
 | `ping_host` | `"8.8.8.8"` | ping heartbeat | Host sent one ICMP echo request every `ping_interval_seconds`. Point elsewhere if your network filters ICMP to it |
 | `ping_interval_seconds` | `5` | ping heartbeat | Heartbeat cadence -- how often the stats and the Dock tile refresh |
 | `ping_timeout_seconds` | `2.0` | ping heartbeat | Per-ping ceiling. A failed ping takes roughly this long to give up, so keep it well under the cadence |
-| `ping_failure_threshold` | `1` | ping heartbeat | Consecutive failed pings before the alert fires. `1` is literal; raise to `2` to ignore single dropped Wi-Fi packets |
+| `ping_failure_threshold` | `2` | ping heartbeat | Consecutive failed pings before the alert fires. `1` is the literal reading; the default is `2` because lone dropped Wi-Fi packets were each opening an episode |
 | `ping_alert_repeat_seconds` | `0` | ping heartbeat | `0` = one alert per outage. Set to e.g. `300` to be re-alerted every 5 minutes while the network stays down |
 | `ping_loss_window` | `12` | ping heartbeat | How many recent pings the loss percentage averages over. 12 at a 5s cadence is the last minute |
 | `ui_refresh_seconds` | `1` | dashboard | How often the window repaints and picks up a finished troubleshooting step |
@@ -141,7 +141,7 @@ resolution_max_workers: 10
 ping_host: "8.8.8.8"
 ping_interval_seconds: 5
 ping_timeout_seconds: 2.0
-ping_failure_threshold: 1
+ping_failure_threshold: 2
 ping_alert_repeat_seconds: 0
 ping_loss_window: 12
 ```
@@ -635,7 +635,7 @@ Tuning:
 | `ping_host` | `8.8.8.8` | What to ping. Point elsewhere if your network filters ICMP to this address. |
 | `ping_interval_seconds` | `5` | Heartbeat cadence. |
 | `ping_timeout_seconds` | `2.0` | Per-ping ceiling. A failed ping takes about this long to give up. |
-| `ping_failure_threshold` | `1` | Consecutive failed pings before alerting. Raise to `2` to ignore single dropped Wi-Fi packets. |
+| `ping_failure_threshold` | `2` | Consecutive failed pings before alerting. Set to `1` to alert on every dropped packet. |
 | `ping_alert_repeat_seconds` | `0` | `0` = one alert per outage. Set to `300` to be re-alerted every 5 minutes while down. |
 | `ping_loss_window` | `12` | How many recent pings the loss percentage averages over. 12 at 5s is the last minute. |
 

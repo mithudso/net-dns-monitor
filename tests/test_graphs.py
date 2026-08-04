@@ -94,14 +94,29 @@ def test_a_spiky_series_puts_more_ink_on_the_graph_than_a_flat_one():
     assert spiky > flat * 2
 
 
+def any_ink_fraction(image, stride=3, min_alpha=0.05):
+    """Fraction of sampled pixels with *any* ink.
+
+    Separate from opaque_fraction because the placeholder text is drawn in
+    tertiaryLabelColor, whose alpha sits below 0.5 -- measuring it against the
+    opaque threshold made this test depend on which antialiased pixels happened
+    to tip over 0.5, and it passed and failed on identical code.
+    """
+    rep = AppKit.NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
+    w, h = int(rep.pixelsWide()), int(rep.pixelsHigh())
+    pixels = [rep.colorAtX_y_(x, y) for x in range(0, w, stride) for y in range(0, h, stride)]
+    return sum(1 for c in pixels if c.alphaComponent() > min_alpha) / len(pixels)
+
+
 def test_an_empty_series_renders_a_placeholder_rather_than_raising():
     """ "No data yet" and "flat at zero" are different states and must not look
     identical -- otherwise a broken history reads as a perfectly idle network.
     """
     image = render_series_graph([], title="Latency")
     assert tuple(image.size())[0] > 0
-    ink = opaque_fraction(image)
-    assert 0 < ink < opaque_fraction(render_series_graph(FLAT))
+    # Something is drawn (the title and the "collecting…" placeholder), but far
+    # less than a real series with its grid, labels and line.
+    assert 0 < any_ink_fraction(image) < any_ink_fraction(render_series_graph(FLAT))
 
 
 def test_an_all_none_series_renders_the_placeholder_too():
@@ -109,7 +124,7 @@ def test_an_all_none_series_renders_the_placeholder_too():
     resolved yet.
     """
     image = render_series_graph([None] * 30, title="Latency")
-    assert opaque_fraction(image) < opaque_fraction(render_series_graph(FLAT))
+    assert any_ink_fraction(image) < any_ink_fraction(render_series_graph(FLAT))
 
 
 def test_a_single_sample_does_not_divide_by_zero_on_the_x_step():

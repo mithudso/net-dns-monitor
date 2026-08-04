@@ -108,14 +108,36 @@ def build_status_icon(
     return image
 
 
+# Last tile actually pushed to the Dock. Measured: setApplicationIconImage_ costs
+# ~2 seconds per call in this process, and it runs on the main thread -- so
+# repeating it with identical content blocked the run loop for nothing. It also
+# made the test suite take 244s instead of 7s, since every constructed app paid it.
+_applied: Optional[tuple] = None
+
+
 def set_dock_icon(status: str, rtt_ms: Optional[float] = None, ping_down: bool = False) -> None:
-    """Cosmetic only -- a failure here must never take the monitor down."""
+    """Cosmetic only -- a failure here must never take the monitor down.
+
+    Skips the call entirely when the tile would be identical to the one already
+    showing. See `_applied`: the underlying AppKit call is expensive and
+    synchronous, so "the number has not changed" is worth checking.
+    """
+    global _applied
     try:
         import AppKit
 
         text, unit = dock_text(rtt_ms=rtt_ms, ping_down=ping_down)
+        wanted = (status, text, unit)
+        if wanted == _applied:
+            return
         AppKit.NSApplication.sharedApplication().setApplicationIconImage_(
             build_status_icon(status, text=text, unit=unit)
         )
+        _applied = wanted
     except Exception:  # noqa: BLE001 - cosmetic, never fatal
         pass
+
+
+def _reset_for_tests() -> None:
+    global _applied
+    _applied = None

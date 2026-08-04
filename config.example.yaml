@@ -75,11 +75,14 @@ ping_interval_seconds: 5
 # 3.08s at 3.0), so keep it comfortably under ping_interval_seconds.
 ping_timeout_seconds: 2.0
 
-# Consecutive failed pings before the alert fires. 1 is the literal reading of
-# "if it fails a ping, alert", and the default. On Wi-Fi a lone lost echo
-# request will occasionally trip it; raise to 2 to ignore single dropped
-# packets while still alerting within 10 seconds of a real outage.
-ping_failure_threshold: 1
+# Consecutive failed pings before the alert fires.
+#
+# 1 is the literal reading of "if it fails a ping, alert". The default is 2, on
+# measured evidence: at 1, lone dropped Wi-Fi packets each opened a forensic
+# episode and bounced the Dock -- three episodes in ~22 minutes, only one of them
+# a real outage. At 2 a single lost packet is ignored and a real outage still
+# alerts within 10 seconds. Set it to 1 to see every dropped packet.
+ping_failure_threshold: 2
 
 # 0 means one alert per outage: it fires on the failure edge, then stays quiet
 # until pings succeed again. Set to e.g. 300 to be re-alerted every 5 minutes
@@ -168,3 +171,11 @@ history_max_samples: 720
 # network, DNS on this machine, DNS for the whole network, and an upstream
 # outage. With no peer it says so instead of guessing.
 peer_probe_wait_seconds: 3
+
+# How often the Dock tile may be repainted when only the round-trip number has
+# changed. A status change (healthy/flaky/incident) always repaints immediately.
+#
+# This exists because setApplicationIconImage_ is synchronous and measured at
+# ~2 seconds per call on the main thread: at the 5-second heartbeat, repainting
+# every tick blocked the run loop for most of every cycle.
+dock_refresh_seconds: 30

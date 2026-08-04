@@ -224,7 +224,7 @@ outage. Recovery re-arms it and cancels the bounce.
 
 Two knobs if the default is too noisy or too quiet:
 
-- `ping_failure_threshold` (default 1) -- consecutive failed pings before
+- `ping_failure_threshold` (default 2) -- consecutive failed pings before
   alerting. 1 is literal: a single dropped echo request alerts. On Wi-Fi that
   will occasionally be one lost packet rather than a real outage; set it to 2
   to ignore those and still alert within 10 seconds of a real outage.
