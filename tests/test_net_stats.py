@@ -102,8 +102,8 @@ def test_empty_output_is_zero_not_an_error():
 
 
 def test_read_interface_counters_uses_the_absolute_netstat_path():
-    """launchd's minimal PATH again: a bare `netstat` resolves in a shell and
-    not in the installed bundle.
+    """Absolute path for explicitness, as with /sbin/ping; a bare `netstat` would
+    in fact resolve under launchd's PATH. See test_ping for the full note.
     """
     calls = []
 

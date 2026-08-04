@@ -18,9 +18,7 @@ class Classification(Enum):
     UNCLASSIFIED = "unclassified"
 
 
-def classify(
-    external_reachable: Optional[bool], dns_ok: Optional[bool]
-) -> Classification:
+def classify(external_reachable: Optional[bool], dns_ok: Optional[bool]) -> Classification:
     if external_reachable is None or dns_ok is None:
         return Classification.UNCLASSIFIED
     if not external_reachable:

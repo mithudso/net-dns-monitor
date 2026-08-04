@@ -100,6 +100,17 @@ DEFAULT_CONFIG = {
     # this: "other", kept as history.
     "peer_recent_seconds": 86400,
     "peer_record_path": "~/Library/Application Support/net-dns-monitor/peers.json",
+    # When an outage starts, peers are probed immediately rather than at the next
+    # 5-minute sweep, and the fault-localization verdict is computed this many
+    # seconds later -- long enough for pongs to come back over a LAN, short enough
+    # that the answer is still about the outage in progress.
+    "peer_probe_wait_seconds": 3,
+    # --- graph history -----------------------------------------------------
+    # Rolling window of heartbeat samples behind the graphs. 720 at the default
+    # 5s cadence is the last hour. Appended one line per sample and compacted
+    # when the file outgrows the window.
+    "history_path": "~/Library/Application Support/net-dns-monitor/history.jsonl",
+    "history_max_samples": 720,
 }
 
 
@@ -145,6 +156,7 @@ def load_config(path: str) -> dict:
         "forensic_log_path",
         "forensic_episodes_dir",
         "peer_record_path",
+        "history_path",
     ):
         config[path_key] = os.path.expanduser(config[path_key])
     return config

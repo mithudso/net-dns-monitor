@@ -47,17 +47,13 @@ def make_sm(results, escalator=None):
 
 
 def test_healthy_probe_produces_no_report():
-    sm, prober, repair, escalate = make_sm(
-        [{"external_reachable": True, "dns_ok": True}]
-    )
+    sm, prober, repair, escalate = make_sm([{"external_reachable": True, "dns_ok": True}])
     assert sm.tick() is None
     assert repair.executed_steps == []
 
 
 def test_single_failure_below_threshold_produces_no_report():
-    sm, prober, repair, escalate = make_sm(
-        [{"external_reachable": True, "dns_ok": False}]
-    )
+    sm, prober, repair, escalate = make_sm([{"external_reachable": True, "dns_ok": False}])
     assert sm.tick() is None
     assert repair.executed_steps == []
 

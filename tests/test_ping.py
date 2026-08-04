@@ -44,10 +44,11 @@ def test_successful_ping_reports_ok_and_the_round_trip_time():
 
 
 def test_uses_the_absolute_ping_path_not_a_bare_name():
-    """launchd starts the app with a minimal PATH. A bare `ping` resolves in an
-    interactive shell and not in the installed bundle, so the heartbeat would
-    fail only in production -- exactly the class of bug this project already
-    hit with locale encoding.
+    """Every external tool this project runs is named by absolute path.
+
+    Not because a bare name would fail -- launchd's PATH does include /sbin, so
+    `ping` would resolve -- but so the path cannot be changed underneath the app
+    by a login file, a wrapper, or a future launchd default. See ping.py.
     """
     run_fn, calls = fake_run_factory()
     ping_once("8.8.8.8", run_fn=run_fn)

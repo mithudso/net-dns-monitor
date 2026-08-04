@@ -7,9 +7,9 @@ Why shell out to netstat rather than use a library: the alternative is psutil,
 a new runtime dependency that would have to be frozen into the py2app bundle,
 and the bundling of this app has been fragile enough already (see setup.py).
 `netstat -ibn` is in the base system and costs one short-lived subprocess per
-tick. Absolute path for the same reason as /sbin/ping in ping.py: launchd hands
-the app a minimal PATH, so a bare name works in a shell and not in the
-installed bundle.
+tick. Absolute path for the same reason as /sbin/ping in ping.py: explicitness, not
+necessity -- launchd's PATH does contain /usr/sbin, so a bare `netstat` would
+resolve. See ping.py for the full rationale.
 
 Parsing, and the two traps in it:
 

@@ -25,16 +25,28 @@ def test_redact_leaves_unrelated_values_untouched():
 
 
 def test_should_not_escalate_before_ladder_completes():
-    assert should_escalate(ladder_completed=False, repair_attempted_or_na=True, recheck_ok=False) is False
+    assert (
+        should_escalate(ladder_completed=False, repair_attempted_or_na=True, recheck_ok=False)
+        is False
+    )
 
 
 def test_should_not_escalate_without_a_repair_attempt_or_na():
-    assert should_escalate(ladder_completed=True, repair_attempted_or_na=False, recheck_ok=False) is False
+    assert (
+        should_escalate(ladder_completed=True, repair_attempted_or_na=False, recheck_ok=False)
+        is False
+    )
 
 
 def test_should_not_escalate_when_recheck_resolved_it():
-    assert should_escalate(ladder_completed=True, repair_attempted_or_na=True, recheck_ok=True) is False
+    assert (
+        should_escalate(ladder_completed=True, repair_attempted_or_na=True, recheck_ok=True)
+        is False
+    )
 
 
 def test_should_escalate_when_ladder_and_repair_done_but_still_failing():
-    assert should_escalate(ladder_completed=True, repair_attempted_or_na=True, recheck_ok=False) is True
+    assert (
+        should_escalate(ladder_completed=True, repair_attempted_or_na=True, recheck_ok=False)
+        is True
+    )

@@ -150,3 +150,21 @@ peer_record_path: "~/Library/Application Support/net-dns-monitor/peers.json"
 # focus: this starts from a launchd agent at login, and yanking focus every
 # login would be its own annoyance. Set false to keep it closed until asked for.
 open_dashboard_at_launch: true
+
+# --- Graph history --------------------------------------------------------
+# Rolling window of heartbeat samples behind the three graphs in the window.
+# 720 at the default 5s cadence is the last hour. One appended line per sample;
+# the file is compacted when it outgrows the window.
+history_path: "~/Library/Application Support/net-dns-monitor/history.jsonl"
+history_max_samples: 720
+
+# --- Peer-assisted fault localization -------------------------------------
+# When an outage starts, peers are probed immediately rather than at the next
+# announce sweep, and the verdict is computed this many seconds later -- long
+# enough for replies to cross a LAN, short enough that the answer is still about
+# the outage in progress.
+#
+# With at least one peer running, the app can tell apart: this machine, the local
+# network, DNS on this machine, DNS for the whole network, and an upstream
+# outage. With no peer it says so instead of guessing.
+peer_probe_wait_seconds: 3

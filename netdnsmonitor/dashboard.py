@@ -48,10 +48,13 @@ TROUBLESHOOTING_ACTIONS = [
     ("Check resolver overrides", "check_resolver_overrides", "check"),
     ("Resolve via public resolver", "resolve_against_public_resolver", "check"),
     ("Flush DNS cache (changes system state)", "flush_dns_cache", "repair"),
+    ("Prewarm DNS (top 50 queried names)", "prewarm_dns", "check"),
     ("Run full diagnosis", "full_diagnosis", "repair"),
 ]
 
 SECONDARY_ACTIONS = [
+    ("Open settings", "open_settings", "check"),
+    ("Collapse to floating mini window", "toggle_mini", "check"),
     ("Open last incident report", "open_last_report", "check"),
     ("Open forensic logs folder", "open_forensic_dir", "check"),
     ("Test network alert", "test_alert", "check"),
@@ -78,6 +81,7 @@ def dashboard_sections(
     episode_open: bool = False,
     episode_started_at: Optional[str] = None,
     peers: Optional[dict] = None,
+    fault_verdict: Optional[dict] = None,
 ) -> list:
     """The window's contents as (section title, [(label, value)]) pairs."""
     config = config or {}
@@ -135,7 +139,39 @@ def dashboard_sections(
     ]
     if peers is not None:
         sections.insert(2, ("Other monitors on this network", _peer_rows(peers)))
+    if fault_verdict:
+        # First, not last: when something is broken, where it is broken is the
+        # only thing anyone opens this window for.
+        sections.insert(0, ("Where the problem is", _verdict_rows(fault_verdict)))
     return sections
+
+
+def _verdict_rows(verdict: dict) -> list:
+    """The localization result, with the evidence behind it.
+
+    The reasoning is shown, not just the conclusion. A bare "this machine" is an
+    assertion; the sentence explaining which comparison produced it is something
+    the reader can disagree with -- which matters, because acting on it means
+    rebooting or reconfiguring something.
+    """
+    evidence = verdict.get("evidence") or {}
+    rows = [
+        ("Cause", verdict.get("summary", "unknown")),
+        ("Confidence", str(verdict.get("confidence", "unknown"))),
+        ("Why", verdict.get("reason", "")),
+        (
+            "Peers consulted",
+            f"{evidence.get('peers_answered', 0)} answered of "
+            f"{evidence.get('peers_asked', 0)} known",
+        ),
+    ]
+    if evidence.get("peer_external_reachable") is not None:
+        rows.append(
+            ("Peer can reach internet", "yes" if evidence["peer_external_reachable"] else "no")
+        )
+    if evidence.get("peer_dns_ok") is not None:
+        rows.append(("Peer can resolve DNS", "yes" if evidence["peer_dns_ok"] else "no"))
+    return rows
 
 
 def _peer_rows(peers: dict) -> list:
@@ -218,12 +254,26 @@ def render_dashboard_text(sections: list) -> str:
 # --- the window ------------------------------------------------------------
 
 WINDOW_WIDTH = 640
-WINDOW_HEIGHT = 720
+# Tall enough that the three graphs fit between the stats pane and the buttons
+# without the buttons landing on top of the results pane. The stats pane scrolls,
+# which is why it gives up the room rather than the window growing further --
+# test_buttons_do_not_overlap_the_output_pane is what keeps this arithmetic
+# honest, and it caught exactly this when the graphs were added.
+WINDOW_HEIGHT = 950
 MARGIN = 16
-STATS_HEIGHT = 250
-OUTPUT_HEIGHT = 170
+STATS_HEIGHT = 200
+OUTPUT_HEIGHT = 150
 BUTTON_HEIGHT = 28
 BUTTON_GAP = 6
+GRAPH_HEIGHT = 92
+GRAPH_GAP = 6
+# Latency, download, upload -- three graphs rather than one with three axes,
+# because a 61ms line and a 1.2Mbps line share no sensible scale.
+GRAPH_KINDS = (
+    ("Ping latency", "rtt_ms", "latency", "ms"),
+    ("Download", "down_bps", "download", ""),
+    ("Upload", "up_bps", "upload", ""),
+)
 
 
 class DashboardWindow:
@@ -264,6 +314,9 @@ class DashboardWindow:
         )
         content.addSubview_(self.stats_view.enclosingScrollView() or self.stats_view)
 
+        self.graph_views = {}
+        self._add_graphs(AppKit, content)
+
         self.buttons = []
         self._add_buttons(AppKit, content)
 
@@ -274,10 +327,51 @@ class DashboardWindow:
         content.addSubview_(self.output_view.enclosingScrollView() or self.output_view)
         self.output_view.setString_("Results of anything you run from here appear in this pane.\n")
 
+    def _add_graphs(self, AppKit, content):
+        """One image view per series, stacked under the stats pane.
+
+        NSImageView holding a rendered NSImage rather than a custom NSView: an
+        ObjC class may only be registered once per process, and an offscreen
+        NSImage is pixel-testable headlessly. See graphs.py.
+        """
+        top = WINDOW_HEIGHT - MARGIN - STATS_HEIGHT - GRAPH_GAP
+        for index, (_title, field, _kind, _unit) in enumerate(GRAPH_KINDS):
+            y = top - (index + 1) * (GRAPH_HEIGHT + GRAPH_GAP)
+            view = AppKit.NSImageView.alloc().initWithFrame_(
+                AppKit.NSMakeRect(MARGIN, y, WINDOW_WIDTH - 2 * MARGIN, GRAPH_HEIGHT)
+            )
+            view.setImageScaling_(AppKit.NSImageScaleNone)
+            content.addSubview_(view)
+            self.graph_views[field] = view
+
+    def _graphs_bottom(self) -> float:
+        top = WINDOW_HEIGHT - MARGIN - STATS_HEIGHT - GRAPH_GAP
+        return top - len(GRAPH_KINDS) * (GRAPH_HEIGHT + GRAPH_GAP)
+
+    def set_graphs(self, series_by_field: dict):
+        """Re-render each graph from the history."""
+        from netdnsmonitor.graphs import format_bits, render_series_graph
+
+        for title, field, kind, unit in GRAPH_KINDS:
+            view = self.graph_views.get(field)
+            if view is None:
+                continue
+            values = series_by_field.get(field) or []
+            view.setImage_(
+                render_series_graph(
+                    values,
+                    title=title,
+                    kind=kind,
+                    unit=unit,
+                    size=(WINDOW_WIDTH - 2 * MARGIN, GRAPH_HEIGHT),
+                    format_value=None if field == "rtt_ms" else format_bits,
+                )
+            )
+
     def _add_buttons(self, AppKit, content):
-        """Two columns, laid out downward from just under the stats pane."""
+        """Two columns, laid out downward from just under the graphs."""
         column_width = (WINDOW_WIDTH - 2 * MARGIN - BUTTON_GAP) / 2
-        top = WINDOW_HEIGHT - MARGIN - STATS_HEIGHT - MARGIN
+        top = self._graphs_bottom() - GRAPH_GAP
         for index, (label, action_id, kind) in enumerate(ALL_ACTIONS):
             row, column = divmod(index, 2)
             x = MARGIN + column * (column_width + BUTTON_GAP)
@@ -394,6 +488,11 @@ def _make_button_target(handler):
 
 APP_MENU_ITEMS = [
     ("Open Dashboard", "open_dashboard", "d"),
+    # The mini window is borderless and has no close control, so collapsing must
+    # never be a one-way trip -- the toggle is reachable from here, from the
+    # status-item dropdown, and from the dashboard.
+    ("Toggle Mini Window", "toggle_mini", "m"),
+    ("Settings…", "open_settings", ","),
 ]
 
 

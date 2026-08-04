@@ -19,10 +19,14 @@ So a filtered ICMP path degrades the heartbeat display and can raise a
 spurious alert; it cannot trigger a repair. `ping_host` is configurable for
 exactly that case.
 
-`/sbin/ping` by absolute path, not a bare `ping`: launchd starts this app with
-a minimal PATH, so a bare name resolves in an interactive shell and not in the
-installed bundle -- a bug that would appear only in production. (Same class as
-the missing LANG that produced 0-byte incident reports; see the LaunchAgent.)
+`/sbin/ping` by absolute path. Absolute paths for every external tool this project runs, here and elsewhere.
+The rationale is *not* that a bare name would fail: launchd hands this job
+PATH=/usr/bin:/bin:/usr/sbin:/sbin (measured on the running agent), so `ping`,
+`netstat`, `ifconfig`, `log`, `open` and `osascript` all resolve there perfectly
+well. It is that the path is then explicit and cannot be changed underneath the
+app by a login file, a wrapper, or a future launchd default -- and for a tool
+whose whole job is diagnosing a broken machine, "which binary did it actually
+run" should not be a question.
 
 Flags, and what each one is load-bearing for:
   -c 1     one echo request, then exit. This is polled every few seconds, not

@@ -45,9 +45,15 @@ class StateMachine:
         self.log_watcher = log_watcher or (lambda: [])
         self.flap_gate = FlapGate(failure_threshold, success_threshold)
         self.sensitive_strings = sensitive_strings or []
+        # The most recent probe, so fault localization can say what THIS machine
+        # sees without re-probing. Kept here rather than recomputed by the caller
+        # because a second probe seconds later can disagree with the one the gate
+        # actually acted on, and then the verdict would explain a different event.
+        self.last_probe: ProbeResult = {}
 
     def tick(self) -> Optional[dict]:
         probe = self.prober()
+        self.last_probe = probe
         classification = classify(probe.get("external_reachable"), probe.get("dns_ok"))
         ok = classification == Classification.HEALTHY
 

@@ -13,6 +13,7 @@ PATH_KEYS = {
     "forensic_log_path",
     "forensic_episodes_dir",
     "peer_record_path",
+    "history_path",
 }
 
 

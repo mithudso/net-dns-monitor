@@ -62,17 +62,37 @@ IFCONFIG_BIN = "/sbin/ifconfig"
 FALLBACK_BROADCAST = "255.255.255.255"
 
 
-def build_message(kind: str, self_id: str, host: str, status: str, port: int) -> bytes:
-    return json.dumps(
-        {
-            "proto": PROTOCOL,
-            "t": kind,
-            "id": self_id,
-            "host": host,
-            "status": status,
-            "port": port,
-        }
-    ).encode("utf-8")
+def build_message(
+    kind: str,
+    self_id: str,
+    host: str,
+    status: str,
+    port: int,
+    external_reachable=None,
+    dns_ok=None,
+) -> bytes:
+    """Encode one message.
+
+    `external_reachable` and `dns_ok` are what make peer-assisted fault
+    localization possible -- a peer's three-state `status` says it is unhappy but
+    not at which layer. They are omitted when unknown rather than sent as false,
+    and added WITHOUT bumping the protocol tag: a receiver running the older build
+    ignores unknown keys, and a newer receiver treats absence as "did not say",
+    which localize.py handles as a distinct case from "said no".
+    """
+    message = {
+        "proto": PROTOCOL,
+        "t": kind,
+        "id": self_id,
+        "host": host,
+        "status": status,
+        "port": port,
+    }
+    if external_reachable is not None:
+        message["ext"] = bool(external_reachable)
+    if dns_ok is not None:
+        message["dns"] = bool(dns_ok)
+    return json.dumps(message).encode("utf-8")
 
 
 def parse_message(payload: bytes) -> Optional[dict]:
@@ -98,7 +118,24 @@ def parse_message(payload: bytes) -> Optional[dict]:
         "id": sanitise(message.get("id"), 64),
         "host": sanitise(message.get("host")),
         "status": sanitise(message.get("status"), 32),
+        # Absent means "did not say", which is not the same as False.
+        "external_reachable": _tristate(message.get("ext")),
+        "dns_ok": _tristate(message.get("dns")),
     }
+
+
+def _tristate(value):
+    """None when absent, a real bool otherwise.
+
+    Coerced rather than passed through: this comes off the network, and a JSON
+    string "false" is truthy in Python -- which would invert a fault-localization
+    verdict and send someone to reboot the wrong thing.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    return bool(value)
 
 
 def broadcast_addresses(run_fn: Callable = subprocess.run) -> list:
@@ -106,8 +143,8 @@ def broadcast_addresses(run_fn: Callable = subprocess.run) -> list:
 
     Subnet broadcast (192.168.1.255) rather than only the limited broadcast
     address: 255.255.255.255 is dropped by some interfaces and configurations,
-    and sending to both costs one extra datagram every five minutes. Absolute
-    path for the launchd PATH, same as everywhere else in this project.
+    and sending to both costs one extra datagram every five minutes. Absolute path
+    for explicitness, as everywhere else here; see ping.py for why.
     """
     addresses = []
     try:
@@ -147,6 +184,7 @@ class PeerNetwork:
         status_fn: Callable[[], str] = lambda: "unknown",
         broadcast_fn: Callable[[], list] = broadcast_addresses,
         on_change: Optional[Callable[[], None]] = None,
+        state_fn: Optional[Callable[[], dict]] = None,
     ):
         self.registry = registry
         self.host = host
@@ -155,6 +193,10 @@ class PeerNetwork:
         # over loopback instead of broadcasting onto a real network.
         self.send_port = send_port or bind_port
         self.status_fn = status_fn
+        # Returns {"external_reachable": ..., "dns_ok": ...} for what we advertise
+        # about our own connectivity. Default says nothing, which peers read as
+        # "did not say" rather than as a denial.
+        self.state_fn = state_fn or (lambda: {})
         self.broadcast_fn = broadcast_fn
         self.on_change = on_change
         self.socket: Optional[socket.socket] = None
@@ -229,8 +271,15 @@ class PeerNetwork:
     def _send_to_all(self, kind: str, addresses) -> int:
         if self.socket is None:
             return 0
+        state = self.state_fn() or {}
         payload = build_message(
-            kind, self.registry.self_id, self.host, self.status_fn(), self.bind_port
+            kind,
+            self.registry.self_id,
+            self.host,
+            self.status_fn(),
+            self.bind_port,
+            external_reachable=state.get("external_reachable"),
+            dns_ok=state.get("dns_ok"),
         )
         sent = 0
         for address in addresses:
@@ -274,6 +323,8 @@ class PeerNetwork:
             address=address,
             status=message["status"],
             via=message["t"],
+            external_reachable=message["external_reachable"],
+            dns_ok=message["dns_ok"],
         )
         if message["t"] in (ANNOUNCE, PONG):
             with self._lock:
@@ -286,10 +337,17 @@ class PeerNetwork:
     def _reply_pong(self, address: str) -> None:
         if self.socket is None:
             return
+        state = self.state_fn() or {}
         with contextlib.suppress(OSError):
             self.socket.sendto(
                 build_message(
-                    PONG, self.registry.self_id, self.host, self.status_fn(), self.bind_port
+                    PONG,
+                    self.registry.self_id,
+                    self.host,
+                    self.status_fn(),
+                    self.bind_port,
+                    external_reachable=state.get("external_reachable"),
+                    dns_ok=state.get("dns_ok"),
                 ),
                 (address, self.send_port),
             )

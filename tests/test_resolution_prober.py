@@ -54,9 +54,7 @@ def test_one_domain_raising_does_not_break_others():
             raise OSError("network unreachable")
         return (True, None)
 
-    findings = resolve_domains_parallel(
-        ["boom.example", "fine.example"], resolve_fn=resolve_fn
-    )
+    findings = resolve_domains_parallel(["boom.example", "fine.example"], resolve_fn=resolve_fn)
     by_domain = {f["domain"]: f for f in findings}
     assert by_domain["boom.example"]["resolved"] is False
     assert "network unreachable" in by_domain["boom.example"]["error"]
@@ -64,9 +62,7 @@ def test_one_domain_raising_does_not_break_others():
 
 
 def test_completed_findings_are_marked_completed():
-    findings = resolve_domains_parallel(
-        ["a.example"], resolve_fn=lambda d, t: (True, None)
-    )
+    findings = resolve_domains_parallel(["a.example"], resolve_fn=lambda d, t: (True, None))
     assert findings[0]["outcome"] == "completed"
 
 
@@ -74,6 +70,7 @@ def test_batch_deadline_returns_without_waiting_for_hung_lookups():
     """getaddrinfo cannot be bounded per lookup, so the deadline is the only
     real ceiling on a cycle. It must return early, not block for the full hang.
     """
+
     # 5.0 and 2.5 are a pair: the sleep must stay well above the assertion, or
     # a deadline that no longer bounds anything would still finish inside it
     # and this would pass on a broken prober. 2.5s is still >8x the 0.3s
@@ -86,9 +83,7 @@ def test_batch_deadline_returns_without_waiting_for_hung_lookups():
         return (True, None)
 
     started = time.monotonic()
-    findings = resolve_domains_parallel(
-        ["hung.example"], resolve_fn=hangs, deadline_seconds=0.3
-    )
+    findings = resolve_domains_parallel(["hung.example"], resolve_fn=hangs, deadline_seconds=0.3)
     elapsed = time.monotonic() - started
 
     assert elapsed < 2.5, f"deadline did not bound the batch (took {elapsed:.1f}s)"

@@ -121,7 +121,9 @@ def test_check_resolver_overrides_reports_failure_instead_of_raising(tmp_path):
 def test_check_resolver_overrides_reports_none_when_dir_absent():
     run_fn, _ = fake_run_factory()
     executor = make_repair_executor(
-        run_fn=run_fn, resolver_dir_exists_fn=lambda path: False, resolver_listdir_fn=lambda path: []
+        run_fn=run_fn,
+        resolver_dir_exists_fn=lambda path: False,
+        resolver_listdir_fn=lambda path: [],
     )
     outcome = executor(LadderStep("check_resolver_overrides", "check", needs_privilege=False))
     assert "no /etc/resolver overrides" in outcome

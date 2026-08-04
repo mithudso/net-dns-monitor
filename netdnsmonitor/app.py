@@ -45,23 +45,31 @@ from netdnsmonitor.dashboard import (
 )
 from netdnsmonitor.dock_icon import set_dock_icon
 from netdnsmonitor.forensic_log import ForensicRecorder
+from netdnsmonitor.history import SampleHistory
 from netdnsmonitor.ladder import ladder_for, step_by_name
+from netdnsmonitor.localize import localize
 from netdnsmonitor.log_watcher import make_log_watcher
+from netdnsmonitor.mini_window import MiniWindow, mini_text
 from netdnsmonitor.net_stats import ThroughputMeter, read_interface_counters
 from netdnsmonitor.peer_net import PeerNetwork
 from netdnsmonitor.peers import PeerRegistry, load_record, save_record
 from netdnsmonitor.ping import ping_once
 from netdnsmonitor.ping_monitor import PingMonitor
 from netdnsmonitor.prober import make_prober
+from netdnsmonitor.query_log import extract_top_domains, make_query_log_reader
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.resolution_log import append_resolution_findings
 from netdnsmonitor.resolution_prober import resolve_domains_parallel
+from netdnsmonitor.settings_window import SettingsWindow, collect, restart_note, save_config
 from netdnsmonitor.stall_log import select_stalled_domains
 from netdnsmonitor.state_machine import StateMachine
 from netdnsmonitor.status import STATS_UNKNOWN, build_title, format_stats, status_state
 
 OPEN_BIN = "/usr/bin/open"
+
+# How many of the most-queried names the prewarm button resolves.
+PREWARM_LIMIT = 50
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 DISPLAY_NAME = "Net-DNS-Monitor"
@@ -228,7 +236,26 @@ class NetDnsMonitorApp(rumps.App):
         self.peer_network: Optional[PeerNetwork] = None
         self._peers_dirty = True
 
-        self.menu = ["Open dashboard", "Open last report", "Test network alert"]
+        self.history = SampleHistory(
+            path=self.config["history_path"],
+            max_samples=self.config["history_max_samples"],
+        )
+        self.history.load()
+        # The most recent peer-assisted fault verdict, and the deadline for
+        # computing the next one. See _begin_localization.
+        self.fault_verdict: Optional[dict] = None
+        self._localize_due_at: Optional[float] = None
+        # Same lazy rule as the dashboard: built on first use, never in __init__.
+        self._mini: Optional[MiniWindow] = None
+        self._settings: Optional[SettingsWindow] = None
+        self.config_path = config_path
+
+        self.menu = [
+            "Open dashboard",
+            "Toggle mini window",
+            "Open last report",
+            "Test network alert",
+        ]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
         self.resolution_timer = rumps.Timer(
@@ -341,6 +368,7 @@ class NetDnsMonitorApp(rumps.App):
             # network from a test run.
             broadcast_fn=peer_net.broadcast_addresses,
             on_change=self._mark_peers_dirty,
+            state_fn=self._peer_state,
         )
         if not network.start():
             # Deliberately not fatal and not retried on a tighter loop: a monitor
@@ -363,6 +391,19 @@ class NetDnsMonitorApp(rumps.App):
         return status_state(
             flap_gate.state, flap_gate.consecutive_failures, self.ping_stats["down"]
         )
+
+    def _peer_state(self) -> dict:
+        """What we tell peers about our own connectivity.
+
+        Taken from the anti-flap gate's last probe rather than re-probed: a fresh
+        probe seconds later can disagree with the one the gate acted on, and a peer
+        would then be localizing a different event from the one we reported.
+        """
+        probe = getattr(self.state_machine, "last_probe", None) or {}
+        return {
+            "external_reachable": probe.get("external_reachable"),
+            "dns_ok": probe.get("dns_ok"),
+        }
 
     def _mark_peers_dirty(self):
         """Called from the listener thread -- so it only sets a flag. The record
@@ -543,8 +584,17 @@ class NetDnsMonitorApp(rumps.App):
             host = self.config["ping_host"]
             if snapshot["down"]:
                 self._ping_failures_this_episode = snapshot["consecutive_failures"]
+            self.history.record(
+                rtt_ms=snapshot["rtt_ms"],
+                loss_pct=snapshot["loss_pct"],
+                down_bps=down_bps,
+                up_bps=up_bps,
+                down=snapshot["down"],
+            )
             if snapshot["alert"]:
                 alert.network_failed(host, error=snapshot["error"])
+                # Ask the peers while it is actually happening.
+                self._begin_localization()
                 self.forensic.note(
                     forensic_log.DOWN,
                     "ping",
@@ -615,6 +665,52 @@ class NetDnsMonitorApp(rumps.App):
             ping_down=ping_down,
         )
 
+    # --- peer-assisted fault localization ----------------------------------
+
+    def _begin_localization(self):
+        """An outage just started: ask every known peer, right now.
+
+        Deliberately not waiting for the 5-minute sweep. The whole value of a peer
+        here is what it sees *during* the outage; a reading from four minutes ago
+        answers a different question.
+
+        The verdict is computed a few seconds later rather than immediately,
+        because pongs arrive asynchronously on the listener thread -- see
+        _finish_localization_if_due.
+        """
+        if not self.config["peer_discovery_enabled"] or self.peer_network is None:
+            return
+        self.peer_network.probe(self.peer_registry.addresses_to_probe())
+        self._localize_due_at = time.monotonic() + self.config["peer_probe_wait_seconds"]
+
+    def _finish_localization_if_due(self):
+        """Main thread. Compute and record the verdict once pongs have had time to
+        arrive.
+        """
+        if self._localize_due_at is None or time.monotonic() < self._localize_due_at:
+            return
+        self._localize_due_at = None
+
+        probe = getattr(self.state_machine, "last_probe", None) or {}
+        # A fresh window rather than the `current` bucket: mid-outage the question
+        # is whether a peer answered in the last few seconds, and a peer last heard
+        # from nine minutes ago is still `current` while telling you nothing.
+        fresh = max(self.config["peer_probe_wait_seconds"] * 3, 15)
+        verdict = localize(
+            our_external_reachable=probe.get("external_reachable"),
+            our_dns_ok=probe.get("dns_ok"),
+            peers=self.peer_registry.localization_view(fresh_seconds=fresh),
+        )
+        self.fault_verdict = verdict
+        self.forensic.note(
+            forensic_log.OBSERVATION,
+            "peers",
+            detail=f"fault localization: {verdict['summary']}",
+            reason=verdict["reason"],
+            result=f"{verdict['verdict']} (confidence {verdict['confidence']}); "
+            f"evidence {verdict['evidence']}",
+        )
+
     # --- dashboard window --------------------------------------------------
 
     def ui_tick(self, _sender=None):
@@ -625,6 +721,8 @@ class NetDnsMonitorApp(rumps.App):
         closed this costs a queue poll and a string comparison.
         """
         self._drain_action_results()
+        self._finish_localization_if_due()
+        self._refresh_mini()
         if self._peers_dirty:
             # A peer was heard from on the listener thread. Persisting from here
             # keeps all file writing on the main thread.
@@ -643,6 +741,66 @@ class NetDnsMonitorApp(rumps.App):
         dashboard = self._ensure_dashboard()
         self._refresh_dashboard(force=True)
         dashboard.show(activate=activate)
+
+    def open_settings(self):
+        if self._settings is None:
+            self._settings = SettingsWindow(on_save=self._save_settings)
+        self._settings.load(self.config)
+        self._settings.show()
+
+    def _save_settings(self, values: Optional[dict]) -> str:
+        """Parse, write, and report. Called from the window's Save button.
+
+        `None` means Reload: re-read the file from disk and repopulate, which is
+        how someone backs out of edits they have not saved.
+
+        Deliberately does NOT reconfigure the running app beyond `self.config`.
+        Most of these are read once in __init__ -- timer intervals, thresholds,
+        the peer windows -- and half-applying them would leave the app in a state
+        that matches neither the file nor a fresh start. The message says which
+        need a restart.
+        """
+        if values is None:
+            self.config = load_config(self.config_path)
+            if self._settings is not None:
+                self._settings.load(self.config)
+            return "Reloaded from disk."
+
+        updates = collect(values)  # raises ValueError, which the window reports
+        result = save_config(self.config_path, updates)
+        self.config = load_config(self.config_path)
+        note = restart_note(updates)
+        if result["backup"]:
+            note += f"\nPrevious config saved as {os.path.basename(result['backup'])}"
+        return note
+
+    def toggle_mini_window(self):
+        """Collapse to the glanceable panel, or put it away."""
+        if self._mini is not None and self._mini.is_visible():
+            self._mini.hide()
+            return
+        if self._mini is None:
+            self._mini = MiniWindow()
+        self._refresh_mini()
+        self._mini.show()
+
+    def _refresh_mini(self):
+        # Runs every second for the life of the process, so it returns
+        # immediately until the panel has been built at least once. It does keep
+        # refreshing a hidden panel: formatting one short string is cheaper than
+        # tracking visibility, and it means the text is already correct the
+        # instant it is shown rather than a second stale.
+        if self._mini is None:
+            return
+        flap_gate = self.state_machine.flap_gate
+        ping = self.ping_stats
+        self._mini.set_text(
+            mini_text(
+                status_state(flap_gate.state, flap_gate.consecutive_failures, ping["down"]),
+                rtt_ms=ping["rtt_ms"],
+                loss_pct=ping["loss_pct"],
+            )
+        )
 
     def _refresh_dashboard(self, force: bool = False):
         if self._dashboard is None:
@@ -663,6 +821,7 @@ class NetDnsMonitorApp(rumps.App):
                 peers=self.peer_registry.buckets()
                 if self.config["peer_discovery_enabled"]
                 else None,
+                fault_verdict=self.fault_verdict,
             )
         )
         # Only push when something changed: setString_ resets the pane's scroll
@@ -670,6 +829,11 @@ class NetDnsMonitorApp(rumps.App):
         if force or text != self._dashboard_text:
             self._dashboard_text = text
             self._dashboard.set_stats(text)
+            # Re-rendered alongside the text, so the numbers and the lines always
+            # describe the same moment.
+            self._dashboard.set_graphs(
+                {field: self.history.series(field) for field in ("rtt_ms", "down_bps", "up_bps")}
+            )
 
     def handle_dashboard_action(self, action_id: str):
         """A button was clicked. Main thread.
@@ -679,6 +843,12 @@ class NetDnsMonitorApp(rumps.App):
         window and all four timers for up to half a minute -- the same reason the
         ping does not run here.
         """
+        if action_id == "open_settings":
+            self.open_settings()
+            return
+        if action_id == "toggle_mini":
+            self.toggle_mini_window()
+            return
         if action_id == "open_dashboard":
             # The application menu dispatches through here too. Without this the
             # id falls through to the ladder-step branch and reports "Unknown
@@ -728,6 +898,8 @@ class NetDnsMonitorApp(rumps.App):
                     + (f"reply in {rtt:.1f}ms" if result["ok"] and rtt is not None else "")
                     + ("" if result["ok"] else f"FAILED -- {result['error']}")
                 )
+            elif action_id == "prewarm_dns":
+                lines.extend(self._prewarm_dns(events))
             elif action_id == "full_diagnosis":
                 lines.extend(self._full_diagnosis(events))
             else:
@@ -745,6 +917,56 @@ class NetDnsMonitorApp(rumps.App):
         outcome = self.state_machine.repair_executor(step)
         events.append({"detail": step.name, "reason": step.reason, "result": outcome})
         return [f"why: {step.reason}", f"result: {outcome}"]
+
+    def _prewarm_dns(self, events: list) -> list:
+        """Resolve the 50 most-queried names so their answers are already cached.
+
+        Reuses the query-log miner that the resolution monitor retired: reading
+        the top-N busiest domains was the wrong basis for deciding *which domains
+        to watch* (see stall_log.py), but it is exactly the right basis for
+        deciding which answers are worth having warm.
+
+        Worker thread only. `log show --last 1h` can take several seconds and
+        return a lot of text, and 50 getaddrinfo calls follow it.
+        """
+        reader = make_query_log_reader(lookback=self.config["log_lookback"])
+        domains = extract_top_domains(reader(), limit=PREWARM_LIMIT)
+        if not domains:
+            return [
+                "No queried domains found in the log. Either nothing has resolved "
+                "recently, or reading the unified log needs permission -- the same "
+                "permission the incident log watcher uses."
+            ]
+
+        findings = resolve_domains_parallel(
+            domains,
+            timeout=self.config["resolution_timeout_seconds"],
+            max_workers=self.config["resolution_max_workers"],
+            deadline_seconds=self.config["resolution_batch_deadline_seconds"],
+        )
+        resolved = sum(1 for f in findings if f.get("resolved"))
+        slowest = sorted(
+            (f for f in findings if f.get("elapsed_seconds") is not None),
+            key=lambda f: f["elapsed_seconds"],
+            reverse=True,
+        )[:5]
+
+        lines = [f"prewarmed {resolved}/{len(findings)} of the top {len(domains)} queried names"]
+        failed = [f["domain"] for f in findings if not f.get("resolved")]
+        if failed:
+            lines.append(f"did not resolve: {', '.join(failed[:10])}")
+        if slowest:
+            lines.append("slowest:")
+            lines.extend(f"    {f['domain']} {f['elapsed_seconds']:.2f}s" for f in slowest)
+        events.append(
+            {
+                "detail": f"prewarm_dns ({len(domains)} names)",
+                "reason": "Resolve the most-queried names so their answers are "
+                "already cached when something asks for them.",
+                "result": f"{resolved}/{len(findings)} resolved",
+            }
+        )
+        return lines
 
     def _full_diagnosis(self, events: list) -> list:
         probe = self.state_machine.prober()
@@ -790,7 +1012,7 @@ class NetDnsMonitorApp(rumps.App):
             self._dashboard.append_output(text)
 
     def _open_path(self, path: str, make_dir: bool = False):
-        """Hand a path to Finder. Absolute /usr/bin/open for the launchd PATH."""
+        """Hand a path to Finder. Absolute /usr/bin/open for explicitness; see ping.py."""
         try:
             if make_dir:
                 os.makedirs(path, exist_ok=True)
@@ -803,6 +1025,10 @@ class NetDnsMonitorApp(rumps.App):
     @rumps.clicked("Open dashboard")
     def open_dashboard_clicked(self, sender):
         self.open_dashboard(sender)
+
+    @rumps.clicked("Toggle mini window")
+    def toggle_mini_window_clicked(self, _sender):
+        self.toggle_mini_window()
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

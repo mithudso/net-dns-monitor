@@ -49,14 +49,16 @@ def test_slow_failure_is_also_a_stall(tmp_path):
 
 
 def test_domain_that_stalled_once_stays_selected_after_a_fast_run(tmp_path):
-    """"Ever stalled" is the requirement -- one clean fast run afterwards must
+    """ "Ever stalled" is the requirement -- one clean fast run afterwards must
     not drop a domain off the list.
     """
     path = _write_log(
         tmp_path,
         [
             _record("flaky.example.com", 12.0, checked_at="2026-07-01T00:00:00+00:00"),
-            _record("flaky.example.com", 0.02, resolved=True, checked_at="2026-07-02T00:00:00+00:00"),
+            _record(
+                "flaky.example.com", 0.02, resolved=True, checked_at="2026-07-02T00:00:00+00:00"
+            ),
         ],
     )
 
@@ -177,12 +179,16 @@ def test_a_corrupt_byte_mid_file_does_not_drop_the_records_after_it(tmp_path):
     """
     path = tmp_path / "resolution-log.jsonl"
     path.write_bytes(
-        json.dumps(_record("early.example.com", 9.0, checked_at="2026-07-01T00:00:00+00:00")).encode()
+        json.dumps(
+            _record("early.example.com", 9.0, checked_at="2026-07-01T00:00:00+00:00")
+        ).encode()
         + b"\n"
         # Invalid UTF-8 in the JSON *syntax*, so replacement leaves a line that
         # cannot parse and is skipped like any torn line.
         + b'{"domain": "corrupt.example.com", \xff"elapsed_seconds": 9.0}\n'
-        + json.dumps(_record("late.example.com", 9.0, checked_at="2026-07-02T00:00:00+00:00")).encode()
+        + json.dumps(
+            _record("late.example.com", 9.0, checked_at="2026-07-02T00:00:00+00:00")
+        ).encode()
         + b"\n"
     )
 

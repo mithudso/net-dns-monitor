@@ -80,14 +80,18 @@ def test_build_prompt_includes_probe_results_and_ladder_results():
 
 def test_uses_default_model_for_classified_incidents():
     client = FakeClient()
-    escalator = make_escalator(client=client, default_model="claude-haiku-4-5-20251001", fallback_model="claude-sonnet-5")
+    escalator = make_escalator(
+        client=client, default_model="claude-haiku-4-5-20251001", fallback_model="claude-sonnet-5"
+    )
     escalator(_bundle(classification="dns"))
     assert client.messages.calls[0]["model"] == "claude-haiku-4-5-20251001"
 
 
 def test_uses_fallback_model_for_unclassified_incidents():
     client = FakeClient()
-    escalator = make_escalator(client=client, default_model="claude-haiku-4-5-20251001", fallback_model="claude-sonnet-5")
+    escalator = make_escalator(
+        client=client, default_model="claude-haiku-4-5-20251001", fallback_model="claude-sonnet-5"
+    )
     escalator(_bundle(classification="unclassified"))
     assert client.messages.calls[0]["model"] == "claude-sonnet-5"
 

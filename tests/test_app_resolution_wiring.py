@@ -34,9 +34,11 @@ def test_resolution_job_chains_stall_select_resolve_and_log(tmp_path):
         }
     ]
 
-    with patch.object(app, "select_stalled_domains", return_value=["example.com"]) as select, \
-         patch.object(app, "resolve_domains_parallel", return_value=fake_findings) as resolve, \
-         patch.object(app, "append_resolution_findings") as append_log:
+    with (
+        patch.object(app, "select_stalled_domains", return_value=["example.com"]) as select,
+        patch.object(app, "resolve_domains_parallel", return_value=fake_findings) as resolve,
+        patch.object(app, "append_resolution_findings") as append_log,
+    ):
         job = app.build_resolution_job(config)
         result = job()
 
@@ -62,9 +64,11 @@ def test_app_construction_installs_the_real_resolution_job(tmp_path):
     """
     real_app = app.NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
 
-    with patch.object(app, "select_stalled_domains", return_value=["example.com"]) as select, \
-         patch.object(app, "resolve_domains_parallel", return_value=[]) as resolve, \
-         patch.object(app, "append_resolution_findings") as append_log:
+    with (
+        patch.object(app, "select_stalled_domains", return_value=["example.com"]) as select,
+        patch.object(app, "resolve_domains_parallel", return_value=[]) as resolve,
+        patch.object(app, "append_resolution_findings") as append_log,
+    ):
         real_app.resolution_job()
 
     assert select.called and resolve.called and append_log.called
@@ -79,9 +83,11 @@ def test_resolution_job_reads_and_appends_the_same_log(tmp_path):
     """
     config = _config(tmp_path)
 
-    with patch.object(app, "select_stalled_domains", return_value=[]) as select, \
-         patch.object(app, "resolve_domains_parallel", return_value=[]), \
-         patch.object(app, "append_resolution_findings") as append_log:
+    with (
+        patch.object(app, "select_stalled_domains", return_value=[]) as select,
+        patch.object(app, "resolve_domains_parallel", return_value=[]),
+        patch.object(app, "append_resolution_findings") as append_log,
+    ):
         app.build_resolution_job(config)()
 
     assert select.call_args[0][0] == append_log.call_args[0][1]

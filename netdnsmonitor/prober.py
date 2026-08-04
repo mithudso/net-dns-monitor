@@ -51,9 +51,7 @@ def make_prober(
             else None
         )
         dns_ok: Optional[bool] = (
-            all(resolve_fn(domain, timeout) for domain in domains)
-            if domains
-            else None
+            all(resolve_fn(domain, timeout) for domain in domains) if domains else None
         )
         return {
             "external_reachable": external_reachable,

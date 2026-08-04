@@ -42,7 +42,9 @@ def test_invokes_log_show_with_lookback_window():
 
 
 def test_returns_empty_list_when_command_fails():
-    run_fn = lambda args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="permission denied")
+    run_fn = lambda args, **kwargs: SimpleNamespace(
+        returncode=1, stdout="", stderr="permission denied"
+    )
     watcher = make_log_watcher(run_fn=run_fn)
     assert watcher() == []
 

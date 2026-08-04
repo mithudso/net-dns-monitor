@@ -79,7 +79,65 @@ def pair():
 
 def test_a_message_round_trips():
     parsed = parse_message(build_message(ANNOUNCE, "id-a", "mac-a", "healthy", 45737))
-    assert parsed == {"t": ANNOUNCE, "id": "id-a", "host": "mac-a", "status": "healthy"}
+    assert parsed == {
+        "t": ANNOUNCE,
+        "id": "id-a",
+        "host": "mac-a",
+        "status": "healthy",
+        # Not sent, so "did not say" rather than "said no" -- localize.py treats
+        # those as completely different evidence.
+        "external_reachable": None,
+        "dns_ok": None,
+    }
+
+
+def test_connectivity_state_round_trips_when_it_is_known():
+    """What makes peer-assisted fault localization possible: a peer's three-state
+    status says it is unhappy, not at which layer.
+    """
+    parsed = parse_message(
+        build_message(
+            ANNOUNCE, "id-a", "mac-a", "incident", 45737, external_reachable=False, dns_ok=True
+        )
+    )
+    assert parsed["external_reachable"] is False
+    assert parsed["dns_ok"] is True
+
+
+def test_unknown_state_is_omitted_from_the_wire_not_sent_as_false():
+    """Sent as false, an older peer that cannot report would look like a peer
+    asserting it has no connectivity -- and two machines "both down" is the
+    signal that means an upstream outage.
+    """
+    import json as _json
+
+    decoded = _json.loads(build_message(ANNOUNCE, "id-a", "mac-a", "healthy", 1).decode())
+    assert "ext" not in decoded
+    assert "dns" not in decoded
+
+
+def test_a_string_state_off_the_wire_cannot_invert_a_verdict():
+    """`"false"` is truthy in Python. Passed through unchecked it would flip a
+    localization verdict and send someone to reboot the wrong thing.
+    """
+    payload = json.dumps(
+        {"proto": PROTOCOL, "t": ANNOUNCE, "id": "x", "ext": "false", "dns": "false"}
+    ).encode()
+    parsed = parse_message(payload)
+    assert parsed["external_reachable"] is False
+    assert parsed["dns_ok"] is False
+
+
+def test_an_older_peer_message_still_parses():
+    """Backward compatibility is why the protocol tag was not bumped: the two new
+    keys are optional and their absence is meaningful.
+    """
+    payload = json.dumps(
+        {"proto": PROTOCOL, "t": ANNOUNCE, "id": "old-peer", "host": "h", "status": "healthy"}
+    ).encode()
+    parsed = parse_message(payload)
+    assert parsed["id"] == "old-peer"
+    assert parsed["external_reachable"] is None
 
 
 def test_non_json_is_rejected():

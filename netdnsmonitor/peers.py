@@ -81,6 +81,8 @@ class PeerRegistry:
         address="",
         status="",
         via="announce",
+        external_reachable=None,
+        dns_ok=None,
     ) -> bool:
         """Record that a peer was heard from. Returns True if it is newly seen.
 
@@ -111,6 +113,15 @@ class PeerRegistry:
                 "last_seen_via": sanitise(via, 32),
             }
         )
+        # Tri-state and only overwritten when the peer actually said something.
+        # A peer running an older build sends neither, and "didn't say" must stay
+        # distinguishable from "said no" -- localize.py treats them completely
+        # differently.
+        for field, value in (("external_reachable", external_reachable), ("dns_ok", dns_ok)):
+            if value is not None:
+                existing[field] = bool(value)
+            else:
+                existing.setdefault(field, None)
         existing["missed_healthchecks"] = 0
         return is_new
 
@@ -206,7 +217,33 @@ class PeerRegistry:
                     "last_seen": sanitise(entry.get("last_seen"), 64),
                     "last_seen_via": sanitise(entry.get("last_seen_via"), 32),
                     "missed_healthchecks": _as_int(entry.get("missed_healthchecks")),
+                    "external_reachable": _as_tristate(entry.get("external_reachable")),
+                    "dns_ok": _as_tristate(entry.get("dns_ok")),
                 }
+
+    def localization_view(self, fresh_seconds: float = 30) -> list:
+        """Peers as localize.py wants them: each tagged with whether it has been
+        heard from recently enough to count as answering *now*.
+
+        `fresh_seconds` is much shorter than the `current` bucket on purpose.
+        During an outage the question is "did this peer answer in the last few
+        seconds", not "was it around this morning" -- a peer last heard from nine
+        minutes ago is still `current` but tells you nothing about right now.
+        """
+        view = []
+        for peer in self.peers.values():
+            age = self.age_seconds(peer)
+            view.append(
+                {
+                    "id": peer.get("id"),
+                    "host": peer.get("host"),
+                    "address": peer.get("address"),
+                    "answered": age is not None and age <= fresh_seconds,
+                    "external_reachable": peer.get("external_reachable"),
+                    "dns_ok": peer.get("dns_ok"),
+                }
+            )
+        return view
 
     def addresses_to_probe(self) -> list:
         """Every known peer address, most recently heard from first.
@@ -223,6 +260,19 @@ class PeerRegistry:
                     seen.add(address)
                     ordered.append((peer["id"], address))
         return ordered
+
+
+def _as_tristate(value):
+    """None stays None; anything else becomes a real bool.
+
+    A record file is hand-editable, and a string "false" is truthy in Python --
+    which would silently invert a localization verdict.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    return bool(value)
 
 
 def _as_int(value) -> int:

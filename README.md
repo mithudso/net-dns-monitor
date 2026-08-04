@@ -119,6 +119,46 @@ Steps run on a worker thread, never on the run loop: `repair_executor` allows 5s
 per step and a full ladder is four of them, so running one inline would freeze
 the window and every timer for up to half a minute.
 
+## Graphs, the mini window, settings, and prewarming
+
+- **Three graphs** in the dashboard -- ping latency, download, upload -- over the
+  last `history_max_samples` samples (default 720 = one hour at a 5s cadence).
+  Outages are drawn as *gaps* with a faint marker, never as a line interpolated
+  across them.
+- **A floating mini window.** "Collapse to floating mini window" (or `Cmd-M`)
+  gives a small always-on-top panel showing just the status dot, round-trip time
+  and loss. Draggable, stays above other windows, remembers where you left it,
+  and does not vanish when you switch apps. Toggle it back from the same places.
+- **A settings window** (`Cmd-,`) with a field for **every** one of the 34
+  config keys, grouped by area, and marked where a restart is needed. Saving
+  rewrites `config.yaml` and **does not keep its comments** -- the previous file
+  is backed up as `config.yaml.bak-<timestamp>` first, and a new timestamp each
+  save so repeated saves cannot eat the only commented copy.
+- **Prewarm DNS** resolves the 50 most-queried names from the unified log so
+  their answers are already cached.
+
+## Working out *where* an outage is, using a peer
+
+One machine cannot tell these apart -- "I can't reach the internet" looks the
+same whether the Wi-Fi card wedged, the router died, the ISP is out, or only DNS
+is broken. A second machine running the monitor is the missing reference.
+
+When an outage starts, peers are probed immediately and their own
+`external_reachable` / `dns_ok` are compared with ours:
+
+| What we see | What the peer sees | Verdict |
+| --- | --- | --- |
+| no internet | *no peer answers at all* | **this machine** -- our own link |
+| no internet | peer is fine | **this machine** -- route, firewall, VPN or interface |
+| no internet | peer also has none | **upstream** -- router, modem or ISP |
+| DNS only | peer resolves fine | **DNS on this machine** -- resolver, cache, `/etc/resolver` |
+| DNS only | peer cannot resolve either | **DNS for the whole network** -- the shared resolver |
+
+The verdict, its confidence, the sentence explaining it, and the evidence all go
+to the top of the dashboard and into the forensic episode. With no peer available
+it says the question cannot be answered rather than guessing, and peers that
+disagree with each other are treated as an unusable signal rather than a vote.
+
 ## Forensic log
 
 Every network down/up episode is written up automatically: what was detected,
@@ -276,6 +316,11 @@ test suite, since it needs a real macOS run loop.
 - `peers.py` -- peer registry, recency buckets, and the file record
 - `peer_net.py` -- UDP announce/probe/pong and the listener thread
 - `dashboard.py` -- the window: contents as pure data plus the AppKit view
+- `history.py` -- bounded rolling sample history behind the graphs
+- `graphs.py` -- renders each series to an NSImage (pixel-testable)
+- `localize.py` -- the decision matrix that turns an outage into a place to look
+- `mini_window.py` -- the floating always-on-top panel
+- `settings_window.py` -- a field per config key, and the safe save
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
 - `stall_log.py` -- selects every ever-stalled domain from the resolution log
 - `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)
