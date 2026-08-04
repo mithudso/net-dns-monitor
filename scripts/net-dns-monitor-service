@@ -57,6 +57,19 @@ EXEC_NAME="Net-DNS-Monitor"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 APP_LOG="$HOME/Library/Logs/net-dns-monitor.launchd.log"
 
+# launchd refuses to respawn a job that stopped less than this many seconds ago.
+#
+# One constant, used both in the generated plist below AND by the waits in
+# `start`/`restart`/`check`. They used to be unrelated: the plist said 15 and the
+# restart path read the pid immediately after killing the app, so a completely
+# normal restart reported `running: no` -- launchd was simply not allowed to start
+# it again yet. `update` inherited that, which made a successful update look like
+# it had killed the app for good.
+THROTTLE_SECONDS=15
+
+# How long past the throttle window to keep waiting before calling it a failure.
+RESPAWN_GRACE_SECONDS=10
+
 # The py2app build output the bundle is installed *from*. It lives inside a git
 # worktree under .claude/worktrees/, which is disposable by convention -- which
 # is exactly why `install` copies the bundle out to ~/Applications instead of
@@ -105,6 +118,28 @@ untracked_pids() {
 
 is_loaded()     { launchctl print "$SERVICE" >/dev/null 2>&1; }
 is_supervised() { [ -e "$FLAG" ]; }
+
+# Poll for a running pid for up to $1 seconds; print it and succeed if one
+# appears, print nothing and fail if the window elapses.
+#
+# Every caller that kickstarts the job needs this. `launchctl kickstart` returns
+# as soon as launchd has *accepted* the request, not when a process exists, and
+# after a kill launchd will sit on that request for ThrottleInterval seconds. Any
+# code that reads running_pid on the next line is therefore asking a question
+# launchd cannot answer yet, and printing "running: no" for the answer.
+wait_for_pid() {
+    local limit="${1:-0}" deadline pid
+    deadline=$(( $(date +%s) + limit ))
+    while :; do
+        pid="$(running_pid)"
+        if [ -n "$pid" ]; then
+            printf '%s\n' "$pid"
+            return 0
+        fi
+        [ "$(date +%s)" -ge "$deadline" ] && return 1
+        sleep 1
+    done
+}
 
 # --- LaunchAgent -----------------------------------------------------------
 
@@ -162,9 +197,12 @@ write_plist() {
 		</dict>
 	</dict>
 
-	<!-- Don't respawn faster than this if the app is crash-looping. -->
+	<!-- Don't respawn faster than this if the app is crash-looping. The value
+	     comes from \$THROTTLE_SECONDS in this script so that the restart/start
+	     waits know how long launchd is entitled to take; hard-coding it here was
+	     what made a throttled respawn look like a dead app. -->
 	<key>ThrottleInterval</key>
-	<integer>15</integer>
+	<integer>$THROTTLE_SECONDS</integer>
 
 	<!-- launchd starts processes with no LANG/LC_* at all, which makes the
 	     frozen app's locale encoding US-ASCII. That is what caused incident
@@ -237,6 +275,10 @@ cmd_install() {
     audit "install: supervising $EXEC"
     reload_agent          # KeepAlive starts the app; no separate launch needed
 
+    # A fresh bootstrap is not throttled, but the process still takes a moment to
+    # exist, and status read immediately after would report "no".
+    wait_for_pid "$RESPAWN_GRACE_SECONDS" >/dev/null || true
+
     say ""
     cmd_status
 }
@@ -247,6 +289,10 @@ cmd_start() {
     is_loaded || reload_agent
     if [ -z "$(running_pid)" ]; then
         launchctl kickstart "$SERVICE" 2>/dev/null || true
+        # A job stopped moments ago is still inside its throttle window, so this
+        # waits rather than letting cmd_status report a "no" that only means
+        # "not yet".
+        wait_for_pid $(( THROTTLE_SECONDS + RESPAWN_GRACE_SECONDS )) >/dev/null || true
     fi
     audit "start: supervision enabled"
     cmd_status
@@ -268,8 +314,32 @@ cmd_restart() {
     [ -f "$PLIST" ] || die "not installed yet -- run: $0 install"
     touch "$FLAG"
     is_loaded || reload_agent
+
+    # -k kills the running instance; KeepAlive brings it back, but not for up to
+    # ThrottleInterval seconds. The old version reported status on the very next
+    # line and so announced `running: no` for every successful restart -- and
+    # `update` calls this, which made a good update look like it had killed the
+    # app permanently.
     launchctl kickstart -k "$SERVICE" 2>/dev/null || launchctl kickstart "$SERVICE" 2>/dev/null || true
-    audit "restart: requested"
+
+    local wait_seconds=$(( THROTTLE_SECONDS + RESPAWN_GRACE_SECONDS )) pid
+    say "waiting up to ${wait_seconds}s for launchd to respawn it (ThrottleInterval is ${THROTTLE_SECONDS}s)..."
+    pid="$(wait_for_pid "$wait_seconds")" || pid=""
+
+    if [ -z "$pid" ]; then
+        # Past the throttle window with nothing running. Ask for it directly
+        # instead of waiting on KeepAlive, then allow one more short window.
+        launchctl kickstart "$SERVICE" 2>/dev/null || true
+        pid="$(wait_for_pid "$RESPAWN_GRACE_SECONDS")" || pid=""
+    fi
+
+    if [ -n "$pid" ]; then
+        audit "restart: running as pid $pid"
+    else
+        audit "restart: no pid after $(( wait_seconds + RESPAWN_GRACE_SECONDS ))s"
+        warn "restart requested but nothing is running yet -- check $APP_LOG"
+    fi
+    say ""
     cmd_status
 }
 
@@ -302,7 +372,10 @@ cmd_check() {
 
     audit "check: app was not running, kickstarting"
     launchctl kickstart "$SERVICE" 2>/dev/null || true
-    pid="$(running_pid)"
+    # Waits, for the same reason restart does: reading the pid on the next line
+    # asks launchd a question it cannot answer until the throttle window is up,
+    # and this function exists specifically to answer "is it up".
+    pid="$(wait_for_pid $(( THROTTLE_SECONDS + RESPAWN_GRACE_SECONDS )))" || pid=""
     if [ -n "$pid" ]; then
         say "restarted: app was not running (now pid $pid)"
     else
