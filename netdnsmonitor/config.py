@@ -75,6 +75,12 @@ DEFAULT_CONFIG = {
     # troubleshooting step run from it. Only costs a queue poll and a string
     # comparison while the window is closed.
     "ui_refresh_seconds": 1,
+    # Open the dashboard window shortly after launch, so there is a visible
+    # window without having to find a menu first. It is ordered front WITHOUT
+    # stealing focus -- this starts from a launchd agent at login, and yanking
+    # focus every login would be its own annoyance. Set false to keep it closed
+    # until you ask for it.
+    "open_dashboard_at_launch": True,
     # --- LAN peer discovery ------------------------------------------------
     # Announce this instance on the local network and look for other copies of
     # the monitor. Off means no socket is opened and nothing is broadcast.

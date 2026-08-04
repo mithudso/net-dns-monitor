@@ -36,7 +36,12 @@ def free_port() -> int:
 @pytest.fixture(autouse=True)
 def _loopback_only(monkeypatch):
     monkeypatch.setattr("netdnsmonitor.peer_net.broadcast_addresses", lambda: ["127.0.0.1"])
-    monkeypatch.setattr("netdnsmonitor.dashboard.DashboardWindow.show", lambda self: None)
+    monkeypatch.setattr(
+        "netdnsmonitor.dashboard.DashboardWindow.show",
+        # Signature must match: show() takes `activate`, and the launch path
+        # passes activate=False so it does not steal focus at login.
+        lambda self, activate=True: None,
+    )
 
 
 def make_app(tmp_path, **overrides):

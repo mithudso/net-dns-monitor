@@ -144,3 +144,9 @@ peer_recent_seconds: 86400
 # is what lets a fresh process probe the hosts it knew about last run instead of
 # waiting for someone to announce.
 peer_record_path: "~/Library/Application Support/net-dns-monitor/peers.json"
+
+# Open the dashboard window shortly after launch, so there is a visible window
+# without having to find a menu first. It is ordered front WITHOUT stealing
+# focus: this starts from a launchd agent at login, and yanking focus every
+# login would be its own annoyance. Set false to keep it closed until asked for.
+open_dashboard_at_launch: true

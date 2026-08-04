@@ -87,7 +87,17 @@ behavior.
 
 ## Dashboard window
 
-The menu bar item's first entry, **Open dashboard**, opens a real window:
+Four ways to open it, because the status item in the top-right is easy to miss on
+a crowded or notched menu bar:
+
+1. **Automatically shortly after launch** (`open_dashboard_at_launch: true`),
+   ordered front without stealing focus.
+2. **Click the Dock icon.**
+3. **"Net-DNS-Monitor" -> Open Dashboard** in the menu bar top-*left*, which
+   appears when the app is active.
+4. **Open dashboard** in the status-item dropdown, top-right.
+
+What it shows:
 
 - **Network right now** -- ping target, round-trip time, packet loss, current
   download and upload rates.

@@ -93,6 +93,7 @@ below (from `netdnsmonitor/config.py`). Config file lives at
 | `ping_alert_repeat_seconds` | `0` | ping heartbeat | `0` = one alert per outage. Set to e.g. `300` to be re-alerted every 5 minutes while the network stays down |
 | `ping_loss_window` | `12` | ping heartbeat | How many recent pings the loss percentage averages over. 12 at a 5s cadence is the last minute |
 | `ui_refresh_seconds` | `1` | dashboard | How often the window repaints and picks up a finished troubleshooting step |
+| `open_dashboard_at_launch` | `true` | dashboard | Open the window shortly after launch, ordered front without stealing focus |
 | `forensic_log_path` | `~/Library/Application Support/net-dns-monitor/forensic-log.jsonl` | forensic log | Append-only journal, written as each event happens |
 | `forensic_episodes_dir` | `~/Library/Application Support/net-dns-monitor/episodes` | forensic log | Per-episode `.md`/`.json` write-ups, produced on recovery |
 | `peer_discovery_enabled` | `true` | peer discovery | Announce on the LAN and look for other instances. `false` opens no socket and broadcasts nothing |
@@ -400,8 +401,25 @@ Each report is self-contained:
 
 ## Dashboard window
 
-**Open dashboard** is the first item in the menu bar dropdown. It opens a window
-with four panes of information and a button per troubleshooting step.
+There are **four** ways to get the window, because the status item in the
+top-right is easy to miss on a crowded or notched menu bar:
+
+1. It opens **shortly after launch** by default (`open_dashboard_at_launch`),
+   ordered front *without* stealing focus.
+2. **Click the Dock icon.** macOS asks the application delegate about this via
+   `applicationShouldHandleReopen:`, which rumps does not implement -- so before
+   this existed, a Dock click on an app owning no windows activated it and did
+   nothing else. The app now watches for activation instead.
+3. **"Net-DNS-Monitor" -> Open Dashboard** in the menu bar at the top-*left*,
+   which appears when the app is active. rumps never populates that menu, so
+   clicking the app name genuinely had no items behind it; it now does.
+4. **Open dashboard**, the first item in the status-item dropdown at the
+   top-right.
+
+Note that route 2 relies on a notification that macOS does *not* post when the
+app is already frontmost -- route 3 covers that case.
+
+The window has four panes of information and a button per troubleshooting step.
 
 What it shows:
 

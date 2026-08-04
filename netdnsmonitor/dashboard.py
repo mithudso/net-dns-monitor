@@ -304,13 +304,27 @@ class DashboardWindow:
 
     # --- what App calls ----------------------------------------------------
 
-    def show(self):
+    def show(self, activate: bool = True):
+        """Order the window front. `activate` decides whether to steal focus.
+
+        True for anything the user just asked for -- a Dock click or a menu item
+        -- because without `activateIgnoringOtherApps_` the window opens *behind*
+        the frontmost app, which is indistinguishable from it not opening.
+
+        False for the automatic open at launch. This runs from a launchd agent at
+        login, and yanking focus away from whatever someone is doing, every
+        login, would be a new annoyance in place of the old one.
+        """
         import AppKit
 
-        self.window.makeKeyAndOrderFront_(None)
-        # Without this the window opens behind the frontmost app, which is
-        # indistinguishable from it not opening at all.
-        AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        if activate:
+            self.window.makeKeyAndOrderFront_(None)
+            AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        else:
+            self.window.orderFront_(None)
+
+    def is_visible(self) -> bool:
+        return bool(self.window.isVisible())
 
     def set_stats(self, text: str):
         self.stats_view.setString_(text)
@@ -376,3 +390,49 @@ def _make_button_target(handler):
     possible bridge.
     """
     return _button_target_class().alloc().initWithHandler_(handler)
+
+
+APP_MENU_ITEMS = [
+    ("Open Dashboard", "open_dashboard", "d"),
+]
+
+
+def install_main_menu(on_action: Callable[[str], None]):
+    """Give the app a real application menu, and return the target to retain.
+
+    rumps never populates one. With `LSUIElement: False` this app is a normal
+    Dock app, so activating it puts "Net-DNS-Monitor" in the menu bar at the
+    top-*left* -- and clicking it did nothing at all, because the menu genuinely
+    had no items. That is a separate surface from the status item on the right,
+    and someone reaching for the app name is doing the obvious thing.
+
+    Quit is included because a macOS application menu without one is wrong, but
+    note it behaves the way the status item's Quit does: launchd's KeepAlive
+    brings the app straight back. `net-dns-monitor-service stop` is the real off
+    switch, for the reasons recorded in that script.
+    """
+    import AppKit
+
+    target = _make_button_target(lambda sender: on_action(str(sender.identifier() or "")))
+
+    app_menu = AppKit.NSMenu.alloc().init()
+    for title, action_id, key in APP_MENU_ITEMS:
+        item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, "invoke:", key)
+        item.setTarget_(target)
+        item.setIdentifier_(action_id)
+        app_menu.addItem_(item)
+    app_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+    app_menu.addItem_(
+        AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            f"Quit {WINDOW_TITLE}", "terminate:", "q"
+        )
+    )
+
+    # The first item of the main menu is the application menu; its own title is
+    # ignored by AppKit, which uses the bundle name instead.
+    app_item = AppKit.NSMenuItem.alloc().init()
+    app_item.setSubmenu_(app_menu)
+    main_menu = AppKit.NSMenu.alloc().init()
+    main_menu.addItem_(app_item)
+    AppKit.NSApplication.sharedApplication().setMainMenu_(main_menu)
+    return target

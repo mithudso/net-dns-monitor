@@ -42,7 +42,12 @@ class FakeStateMachine:
 
 @pytest.fixture(autouse=True)
 def _no_real_window(monkeypatch, tmp_path):
-    monkeypatch.setattr("netdnsmonitor.dashboard.DashboardWindow.show", lambda self: None)
+    monkeypatch.setattr(
+        "netdnsmonitor.dashboard.DashboardWindow.show",
+        # Signature must match: show() takes `activate`, and the launch path
+        # passes activate=False so it does not steal focus at login.
+        lambda self, activate=True: None,
+    )
     # The fake reports below carry only the fields the forensic recorder reads.
     # Persisting them is a separate concern with its own tests in
     # test_report_storage.py, and requiring the full report schema here would
@@ -400,3 +405,148 @@ def test_step_reasons_come_from_the_ladder_definition_not_the_dashboard(tmp_path
     app._action_thread.join(timeout=5)
     app.ui_tick()
     assert step.reason in app._dashboard.output_view.string()
+
+
+# --- opening the window without the status item -------------------------------
+
+
+def test_the_launch_tick_opens_the_window_without_stealing_focus(tmp_path):
+    """This runs from a launchd agent at login. Ordering the window front is
+    wanted; yanking focus away from whatever someone is doing, every login, is
+    not -- so the launch path must pass activate=False.
+    """
+    calls = []
+    app = make_app(tmp_path)
+    app._dashboard = None
+    import netdnsmonitor.dashboard as dashboard_module
+
+    original = dashboard_module.DashboardWindow.show
+    dashboard_module.DashboardWindow.show = lambda self, activate=True: calls.append(activate)
+    try:
+        app.launch_tick()
+    finally:
+        dashboard_module.DashboardWindow.show = original
+
+    assert calls == [False]
+    assert app._dashboard is not None
+
+
+def test_the_launch_tick_runs_once(tmp_path):
+    """It installs a menu and a notification observer; doing that on a repeating
+    timer would stack duplicates for the life of the process.
+    """
+    app = make_app(tmp_path)
+    stopped = []
+    app.launch_timer.stop = lambda: stopped.append(1)
+    app.launch_tick()
+    assert stopped == [1]
+
+
+def test_launch_can_be_configured_not_to_open_the_window(tmp_path):
+    app = make_app(
+        tmp_path,
+    )
+    app.config["open_dashboard_at_launch"] = False
+    app.launch_tick()
+    assert app._dashboard is None
+
+
+def test_activation_opens_the_window_and_does_activate(tmp_path):
+    """The Dock-click path. macOS asks the delegate via
+    applicationShouldHandleReopen:, which rumps does not implement, so a Dock
+    click on an app owning no windows used to activate it and do nothing else.
+    """
+    calls = []
+    app = make_app(tmp_path)
+    import netdnsmonitor.dashboard as dashboard_module
+
+    original = dashboard_module.DashboardWindow.show
+    dashboard_module.DashboardWindow.show = lambda self, activate=True: calls.append(activate)
+    try:
+        app._on_app_activated(None)
+    finally:
+        dashboard_module.DashboardWindow.show = original
+
+    assert calls == [True]
+
+
+def test_activation_is_not_reentrant(tmp_path):
+    """show() activates the app, which can re-post the notification. Without the
+    guard that recurses.
+    """
+    app = make_app(tmp_path)
+    seen = []
+
+    def reentrant(self, activate=True):
+        seen.append(activate)
+        app._on_app_activated(None)  # what the re-posted notification would do
+
+    import netdnsmonitor.dashboard as dashboard_module
+
+    original = dashboard_module.DashboardWindow.show
+    dashboard_module.DashboardWindow.show = reentrant
+    try:
+        app._on_app_activated(None)
+    finally:
+        dashboard_module.DashboardWindow.show = original
+
+    assert len(seen) == 1
+
+
+def test_a_raising_open_releases_the_reentrancy_guard(tmp_path):
+    """A guard left stuck on would silently disable the Dock click for the rest
+    of the process's life -- the same shape as a bug that already bit this file,
+    which is why it is released in a finally.
+    """
+    app = make_app(tmp_path)
+    import netdnsmonitor.dashboard as dashboard_module
+
+    original = dashboard_module.DashboardWindow.show
+
+    def boom(self, activate=True):
+        raise RuntimeError("AppKit said no")
+
+    dashboard_module.DashboardWindow.show = boom
+    try:
+        app._on_app_activated(None)
+        assert app._opening_dashboard is False
+        calls = []
+        dashboard_module.DashboardWindow.show = lambda self, activate=True: calls.append(activate)
+        app._on_app_activated(None)
+        assert calls == [True]
+    finally:
+        dashboard_module.DashboardWindow.show = original
+
+
+def test_the_application_menu_is_populated_and_wired(tmp_path):
+    """rumps never populates the application menu, so clicking "Net-DNS-Monitor"
+    at the top-left did nothing at all -- the menu genuinely had no items.
+    """
+    import AppKit
+
+    from netdnsmonitor.dashboard import install_main_menu
+
+    dispatched = []
+    target = install_main_menu(dispatched.append)
+    main_menu = AppKit.NSApplication.sharedApplication().mainMenu()
+    assert main_menu is not None
+
+    app_menu = main_menu.itemAtIndex_(0).submenu()
+    titles = [app_menu.itemAtIndex_(i).title() for i in range(app_menu.numberOfItems())]
+    assert "Open Dashboard" in titles
+    assert any("Quit" in t for t in titles)
+
+    item = app_menu.itemAtIndex_(0)
+    assert item.target() is not None
+    assert item.action() == "invoke:"
+    target.invoke_(item)
+    assert dispatched == ["open_dashboard"]
+
+
+def test_the_application_menu_item_opens_the_dashboard(tmp_path):
+    """The id the menu dispatches has to be one handle_dashboard_action knows,
+    or the menu would look wired and do nothing.
+    """
+    app = make_app(tmp_path)
+    app.handle_dashboard_action("open_dashboard")
+    assert app._dashboard is not None

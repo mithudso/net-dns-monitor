@@ -37,7 +37,12 @@ from netdnsmonitor import alert, forensic_log, peer_net
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.classifier import classify
 from netdnsmonitor.config import load_config
-from netdnsmonitor.dashboard import DashboardWindow, dashboard_sections, render_dashboard_text
+from netdnsmonitor.dashboard import (
+    DashboardWindow,
+    dashboard_sections,
+    install_main_menu,
+    render_dashboard_text,
+)
 from netdnsmonitor.dock_icon import set_dock_icon
 from netdnsmonitor.forensic_log import ForensicRecorder
 from netdnsmonitor.ladder import ladder_for, step_by_name
@@ -199,6 +204,11 @@ class NetDnsMonitorApp(rumps.App):
         # directly and would each pop a window.
         self._dashboard: Optional[DashboardWindow] = None
         self._dashboard_text = ""
+        # Retained: an unretained notification observer token is deallocated and
+        # the block then silently never fires.
+        self._activation_observer = None
+        self._main_menu_target = None
+        self._opening_dashboard = False
         self._action_thread: Optional[threading.Thread] = None
         self._action_results: queue.Queue = queue.Queue()
         self._last_flap_state = "healthy"
@@ -231,7 +241,71 @@ class NetDnsMonitorApp(rumps.App):
         self.ui_timer.start()
         self.peer_timer = rumps.Timer(self.peer_tick, self.config["peer_announce_seconds"])
         self.peer_timer.start()
+        # Runs once, then stops itself. Everything in it needs a live
+        # NSApplication and a turning run loop, and none of it may happen in
+        # __init__ where the tests would each get a window.
+        self.launch_timer = rumps.Timer(self.launch_tick, 1)
+        self.launch_timer.start()
         set_dock_icon("healthy")
+
+    # --- launch-time UI setup ----------------------------------------------
+
+    def launch_tick(self, _sender=None):
+        """One-shot: give the app a real application menu, start watching for
+        activation, and open the window if configured to.
+        """
+        self.launch_timer.stop()
+        try:
+            self._main_menu_target = install_main_menu(self.handle_dashboard_action)
+        except Exception:  # noqa: BLE001 - a missing menu must not stop the monitor
+            traceback.print_exc()
+        self._install_activation_observer()
+        if self.config["open_dashboard_at_launch"]:
+            # activate=False: ordered front without stealing focus at login.
+            self.open_dashboard(activate=False)
+
+    def _install_activation_observer(self):
+        """Open the dashboard when the app is brought to the front.
+
+        This is what makes clicking the Dock icon do something. macOS asks the
+        application delegate (`applicationShouldHandleReopen:`), which rumps does
+        not implement, so a Dock click on an app owning no windows activated it
+        and nothing else happened -- exactly the reported symptom.
+
+        Observing NSApplicationDidBecomeActiveNotification instead of subclassing
+        rumps' delegate keeps this out of rumps' internals. Note the notification
+        does NOT fire when the app is already frontmost; the application menu item
+        covers that case.
+        """
+        try:
+            import AppKit
+            from Foundation import NSNotificationCenter
+
+            self._activation_observer = (
+                NSNotificationCenter.defaultCenter().addObserverForName_object_queue_usingBlock_(
+                    AppKit.NSApplicationDidBecomeActiveNotification,
+                    None,
+                    None,  # posting thread, i.e. the main thread
+                    self._on_app_activated,
+                )
+            )
+        except Exception:  # noqa: BLE001 - the menu item still works without it
+            traceback.print_exc()
+
+    def _on_app_activated(self, _notification):
+        # show() activates the app, which can re-post this notification. The
+        # guard is released in a finally so an exception in between cannot leave
+        # it stuck on -- that would silently disable the Dock click for the rest
+        # of the process's life.
+        if self._opening_dashboard:
+            return
+        self._opening_dashboard = True
+        try:
+            self.open_dashboard()
+        except Exception:  # noqa: BLE001 - never raise into an AppKit callback
+            traceback.print_exc()
+        finally:
+            self._opening_dashboard = False
 
     # --- LAN peer discovery ------------------------------------------------
 
@@ -565,10 +639,10 @@ class NetDnsMonitorApp(rumps.App):
             self._dashboard = DashboardWindow(on_action=self.handle_dashboard_action)
         return self._dashboard
 
-    def open_dashboard(self, _sender=None):
+    def open_dashboard(self, _sender=None, activate: bool = True):
         dashboard = self._ensure_dashboard()
         self._refresh_dashboard(force=True)
-        dashboard.show()
+        dashboard.show(activate=activate)
 
     def _refresh_dashboard(self, force: bool = False):
         if self._dashboard is None:
@@ -605,6 +679,13 @@ class NetDnsMonitorApp(rumps.App):
         window and all four timers for up to half a minute -- the same reason the
         ping does not run here.
         """
+        if action_id == "open_dashboard":
+            # The application menu dispatches through here too. Without this the
+            # id falls through to the ladder-step branch and reports "Unknown
+            # step" into a window that isn't open yet -- a menu item that looks
+            # wired and does nothing, which is the whole bug class this fixes.
+            self.open_dashboard()
+            return
         if action_id == "open_last_report":
             self.open_last_report(None)
             return
