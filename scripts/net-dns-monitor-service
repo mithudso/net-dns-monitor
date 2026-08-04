@@ -1,0 +1,468 @@
+#!/bin/bash
+#
+# net-dns-monitor-service -- install and supervise the Net-DNS-Monitor menu bar app.
+#
+# Keeps the app running: launchd restarts it immediately if it crashes or is
+# killed, and starts it at login. Supervision is gated on a flag file so there
+# is still a way to turn the app off deliberately (see "The Quit problem").
+#
+#   net-dns-monitor-service install     # copy bundle, write LaunchAgent, start
+#   net-dns-monitor-service status      # is it running, is it ticking
+#   net-dns-monitor-service stop        # deliberately off, stays off
+#   net-dns-monitor-service start       # back on, supervised
+#   net-dns-monitor-service restart
+#   net-dns-monitor-service check       # one-shot "restart it if it died"
+#   net-dns-monitor-service update      # re-copy a freshly built bundle
+#   net-dns-monitor-service logs [-f]
+#   net-dns-monitor-service uninstall
+#
+# ---------------------------------------------------------------------------
+# Why launchd owns the process, and nothing else may start it
+#
+# All start/stop/restart goes through launchctl. Launching the bundle any other
+# way -- `open -n Net-DNS-Monitor.app`, or the project's own scripts/start.sh --
+# creates a process launchd does not track. `launchctl list` then shows no PID,
+# this script concludes the app is down, launches its own copy, and the user
+# gets two menu bar icons. `status` and `check` therefore also look for
+# untracked copies and warn about them.
+#
+# The Quit problem
+#
+# The app's original LaunchAgent deliberately had no KeepAlive, with a good
+# reason recorded in it: with KeepAlive, choosing Quit in the menu bar just
+# relaunches the app, so there would be no way to turn it off. Keeping the app
+# always running and keeping Quit meaningful are genuinely in tension.
+#
+# This resolves it with launchd's KeepAlive/PathState: the app is supervised
+# only while the flag file below exists. So Quit is indeed overridden -- the
+# app comes straight back, which is what "always running" was asked for -- but
+# `stop` removes the flag and the app then stays down until `start`. The off
+# switch moved from the menu bar to this script rather than disappearing.
+# ---------------------------------------------------------------------------
+
+set -euo pipefail
+
+LABEL="com.mitchhudson.net-dns-monitor"
+SERVICE="gui/$(id -u)/$LABEL"
+
+SUPPORT_DIR="$HOME/Library/Application Support/net-dns-monitor"
+FLAG="$SUPPORT_DIR/supervise.enabled"
+KEEPALIVE_LOG="$SUPPORT_DIR/keepalive.log"
+RESOLUTION_LOG="$SUPPORT_DIR/resolution-log.jsonl"
+REPORTS_DIR="$SUPPORT_DIR/reports"
+
+INSTALLED_APP="$HOME/Applications/Net-DNS-Monitor.app"
+EXEC="$INSTALLED_APP/Contents/MacOS/Net-DNS-Monitor"
+EXEC_NAME="Net-DNS-Monitor"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+APP_LOG="$HOME/Library/Logs/net-dns-monitor.launchd.log"
+
+# The py2app build output the bundle is installed *from*. It lives inside a git
+# worktree under .claude/worktrees/, which is disposable by convention -- which
+# is exactly why `install` copies the bundle out to ~/Applications instead of
+# pointing launchd straight at it. Only `install` and `update` read this path,
+# and both fail with a clear message if the worktree is gone.
+SOURCE_BUNDLE="${NDM_SOURCE_BUNDLE:-$HOME/dev/net-dns-monitor/.claude/worktrees/dns-resolution-monitor/dist/Net-DNS-Monitor.app}"
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*" >&2; }
+die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Append to the keepalive log. `check` runs unattended from a timer, so its
+# decisions have to leave a trace somewhere durable.
+audit() {
+    mkdir -p "$SUPPORT_DIR"
+    printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >>"$KEEPALIVE_LOG"
+}
+
+# --- state inspection ------------------------------------------------------
+
+# PID of the launchd-managed app, or nothing. launchd is the only authority
+# here: `launchctl list <label>` prints a "PID" key only while the job runs.
+#
+# Deliberately not `pgrep -f netdnsmonitor`: -f scans whole command lines, so
+# any unrelated process that merely mentions the app (an editor, a grep, an
+# agent invocation quoting this path) matches, and the check silently becomes a
+# no-op that always believes the app is up. That false positive was observed
+# for real while writing this.
+running_pid() {
+    local out
+    out=$(launchctl list "$LABEL" 2>/dev/null) || return 0
+    printf '%s\n' "$out" | awk -F' = ' '/"PID"/ { gsub(/[^0-9]/, "", $2); print $2; exit }'
+}
+
+# Exact-name match, so this cannot suffer the argv false positive above.
+# Used only to detect copies launchd does not own.
+all_app_pids() { pgrep -x "$EXEC_NAME" 2>/dev/null || true; }
+
+untracked_pids() {
+    local tracked; tracked="$(running_pid)"
+    local pid
+    for pid in $(all_app_pids); do
+        [ "$pid" = "$tracked" ] || printf '%s\n' "$pid"
+    done
+}
+
+is_loaded()     { launchctl print "$SERVICE" >/dev/null 2>&1; }
+is_supervised() { [ -e "$FLAG" ]; }
+
+# --- LaunchAgent -----------------------------------------------------------
+
+write_plist() {
+    mkdir -p "$(dirname "$PLIST")"
+    cat >"$PLIST" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$LABEL</string>
+
+	<!-- Generated by net-dns-monitor-service. Edit that script, not this file;
+	     \`install\` overwrites this plist. -->
+
+	<!-- A LaunchAgent, not a LaunchDaemon, on purpose: this is a rumps menu bar
+	     app and needs the logged-in user's GUI session. A daemon runs before
+	     login with no window server access and could never draw a status item.
+
+	     ProgramArguments points at the executable *inside* the .app bundle
+	     rather than at \`python -m netdnsmonitor.app\`. That matters: framework
+	     Python re-execs itself into its own bundled Python.app the instant
+	     rumps creates the GUI, so a bare module launch shows "Python" in the
+	     Dock / Force Quit / Cmd-Tab. The py2app-frozen bundle embeds a private
+	     interpreter that never takes that path.
+
+	     The path is ~/Applications, NOT the dist/ directory inside the git
+	     worktree the bundle was built in. Anything under .claude/worktrees/ can
+	     be removed at any time, and when it is, login startup breaks silently. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>$EXEC</string>
+	</array>
+
+	<!-- Deliberately NO RunAtLoad. It would start the app whenever this agent
+	     is loaded, which includes every login, regardless of the flag file
+	     below. Verified on macOS 26.4: with the flag removed, a bootstrap with
+	     RunAtLoad set started the app anyway, so \`stop\` would silently undo
+	     itself at the next login. KeepAlive alone is enough to start the job at
+	     load when its condition holds, so login startup still works, and it
+	     works for the correct reason: because supervision is enabled. -->
+
+	<!-- Restart the app whenever it stops, for any reason, as long as the flag
+	     file exists. Removing the flag (\`net-dns-monitor-service stop\`) tells
+	     launchd to stop supervising and shut the app down; recreating it
+	     (\`start\`) brings it back. This is the deliberate off switch that
+	     replaces the menu bar Quit item, which KeepAlive necessarily overrides. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>PathState</key>
+		<dict>
+			<key>$FLAG</key>
+			<true/>
+		</dict>
+	</dict>
+
+	<!-- Don't respawn faster than this if the app is crash-looping. -->
+	<key>ThrottleInterval</key>
+	<integer>15</integer>
+
+	<!-- launchd starts processes with no LANG/LC_* at all, which makes the
+	     frozen app's locale encoding US-ASCII. That is what caused incident
+	     reports to be written as 0-byte .md files: an unencoded open() raised
+	     UnicodeEncodeError on the first curly quote. report_storage now pins
+	     encoding="utf-8" explicitly, so this is belt-and-braces rather than
+	     the fix; a UTF-8 locale is nonetheless what the app would get from a
+	     normal shell, and matching that removes a class of surprise. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+
+	<key>ProcessType</key>
+	<string>Interactive</string>
+
+	<key>StandardOutPath</key>
+	<string>$APP_LOG</string>
+	<key>StandardErrorPath</key>
+	<string>$APP_LOG</string>
+</dict>
+</plist>
+PLIST_EOF
+    plutil -lint "$PLIST" >/dev/null || die "generated plist is malformed: $PLIST"
+}
+
+# bootout fails when the job isn't loaded and bootstrap fails when it already
+# is, so both are tolerated. Re-bootstrapping is how a rewritten plist takes
+# effect -- launchd caches the old one otherwise.
+reload_agent() {
+    launchctl bootout "$SERVICE" 2>/dev/null || true
+    local attempt
+    for attempt in 1 2 3; do
+        if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    # Already loaded is a success for our purposes; anything else is not.
+    is_loaded || die "could not bootstrap $LABEL (try: launchctl bootstrap gui/$(id -u) '$PLIST')"
+}
+
+# --- commands --------------------------------------------------------------
+
+cmd_install() {
+    mkdir -p "$SUPPORT_DIR" "$HOME/Applications"
+
+    if [ -d "$SOURCE_BUNDLE" ]; then
+        say "Installing bundle from build output:"
+        say "  $SOURCE_BUNDLE"
+        say "  -> $INSTALLED_APP"
+        # ditto, not cp -R: it preserves the bundle's resource forks, symlinks
+        # and ad-hoc code signature. A cp -R copy can invalidate the signature.
+        ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"
+    elif [ -x "$EXEC" ]; then
+        warn "note: build output not found at $SOURCE_BUNDLE"
+        warn "      keeping the already-installed bundle at $INSTALLED_APP"
+    else
+        die "no bundle to install. Build it first:
+    cd ~/dev/net-dns-monitor/.claude/worktrees/dns-resolution-monitor
+    ./scripts/start.sh      # builds dist/Net-DNS-Monitor.app
+  then re-run: $0 install"
+    fi
+
+    [ -x "$EXEC" ] || die "installed bundle has no executable at $EXEC"
+
+    write_plist
+    touch "$FLAG"
+    audit "install: supervising $EXEC"
+    reload_agent          # KeepAlive starts the app; no separate launch needed
+
+    say ""
+    cmd_status
+}
+
+cmd_start() {
+    [ -f "$PLIST" ] || die "not installed yet -- run: $0 install"
+    touch "$FLAG"
+    is_loaded || reload_agent
+    if [ -z "$(running_pid)" ]; then
+        launchctl kickstart "$SERVICE" 2>/dev/null || true
+    fi
+    audit "start: supervision enabled"
+    cmd_status
+}
+
+cmd_stop() {
+    # Remove the flag FIRST. While it exists, KeepAlive would just restart
+    # whatever we kill.
+    rm -f "$FLAG"
+    launchctl kill SIGTERM "$SERVICE" 2>/dev/null || true
+    audit "stop: supervision disabled by request"
+    say "Supervision disabled. The app will stay stopped, including across"
+    say "login, until: $0 start"
+    say ""
+    cmd_status
+}
+
+cmd_restart() {
+    [ -f "$PLIST" ] || die "not installed yet -- run: $0 install"
+    touch "$FLAG"
+    is_loaded || reload_agent
+    launchctl kickstart -k "$SERVICE" 2>/dev/null || launchctl kickstart "$SERVICE" 2>/dev/null || true
+    audit "restart: requested"
+    cmd_status
+}
+
+# One-shot supervision check. KeepAlive already does this continuously; this
+# exists for a manual "is it up, fix it if not", and as the fallback if
+# KeepAlive/PathState is ever unavailable. To run it on a timer instead, add a
+# second LaunchAgent with StartInterval and ProgramArguments = [this script,
+# "check"] -- but then drop KeepAlive from the app's plist, because two
+# supervisors fighting over one process is its own failure mode.
+cmd_check() {
+    if ! is_supervised; then
+        audit "check: skipped, supervision disabled (no flag file)"
+        say "supervision disabled -- not starting. Enable with: $0 start"
+        return 0
+    fi
+    [ -f "$PLIST" ] || die "not installed yet -- run: $0 install"
+
+    if ! is_loaded; then
+        audit "check: agent was not loaded, bootstrapping"
+        reload_agent
+        say "restarted: LaunchAgent was not loaded"
+        return 0
+    fi
+
+    local pid; pid="$(running_pid)"
+    if [ -n "$pid" ]; then
+        say "ok: running (pid $pid)"
+        return 0
+    fi
+
+    audit "check: app was not running, kickstarting"
+    launchctl kickstart "$SERVICE" 2>/dev/null || true
+    pid="$(running_pid)"
+    if [ -n "$pid" ]; then
+        say "restarted: app was not running (now pid $pid)"
+    else
+        audit "check: kickstart did not yield a running pid"
+        warn "restart attempted but no pid yet -- see $APP_LOG"
+    fi
+}
+
+cmd_update() {
+    [ -d "$SOURCE_BUNDLE" ] || die "build output not found: $SOURCE_BUNDLE
+  Nothing to update from. If the git worktree was removed, rebuild the bundle
+  and either restore that path or set NDM_SOURCE_BUNDLE to the new one."
+    say "Updating $INSTALLED_APP from $SOURCE_BUNDLE"
+    ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"
+    audit "update: re-copied bundle from $SOURCE_BUNDLE"
+    cmd_restart
+}
+
+# Age of a file in whole seconds, or nothing if it doesn't exist.
+file_age_seconds() {
+    [ -e "$1" ] || return 0
+    local mtime now
+    mtime=$(stat -f %m "$1") || return 0
+    now=$(date +%s)
+    printf '%s\n' "$(( now - mtime ))"
+}
+
+# Seconds the given pid has been alive, or nothing. The wedged-process check
+# below needs this: a stale resolution log right after a start means only that
+# the app was down until a moment ago, not that the new process is stuck.
+#
+# BSD ps has no `etimes` (seconds) keyword -- that is a Linux/procps extension,
+# and asking for it on macOS makes ps dump its whole keyword list instead. So
+# parse `etime`, whose format is [[dd-]hh:]mm:ss.
+process_uptime_seconds() {
+    [ -n "${1:-}" ] || return 0
+    local etime rest days=0 h=0 m=0 s=0
+    etime=$(ps -o etime= -p "$1" 2>/dev/null | tr -d ' ') || return 0
+    [ -n "$etime" ] || return 0
+
+    rest="$etime"
+    case "$rest" in *-*) days="${rest%%-*}"; rest="${rest#*-}" ;; esac
+
+    local IFS=:
+    # shellcheck disable=SC2086  # deliberate word splitting on IFS
+    set -- $rest
+    if [ "$#" -eq 3 ]; then h="$1"; m="$2"; s="$3"
+    elif [ "$#" -eq 2 ]; then m="$1"; s="$2"
+    else return 0
+    fi
+
+    # 10# forces base 10 so a zero-padded field like 08 isn't read as octal.
+    printf '%s\n' "$(( 10#$days * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s ))"
+}
+
+cmd_status() {
+    local pid age reports
+    pid="$(running_pid)"
+
+    say "net-dns-monitor"
+    say "  supervised   : $(is_supervised && echo "yes (flag present)" || echo "NO -- stopped on purpose; '$0 start' to resume")"
+    say "  agent loaded : $(is_loaded && echo yes || echo no)"
+    if [ -n "$pid" ]; then
+        say "  running      : yes (pid $pid)"
+    else
+        say "  running      : no"
+    fi
+    say "  bundle       : $EXEC"
+    if [ -f "$PLIST" ]; then
+        local program
+        program=$(plutil -extract ProgramArguments.0 raw -o - "$PLIST" 2>/dev/null || echo "?")
+        say "  agent runs   : $program"
+        [ "$program" = "$EXEC" ] || warn "  WARNING: the LaunchAgent points somewhere else -- re-run '$0 install'"
+    else
+        say "  agent plist  : (missing -- not installed)"
+    fi
+
+    # Liveness that actually means something. A PID only proves the process is
+    # resident; the resolution log is appended every resolution_interval_seconds
+    # (default 300), so a recent mtime proves the app is still ticking.
+    age="$(file_age_seconds "$RESOLUTION_LOG")"
+    if [ -n "$age" ]; then
+        say "  last tick    : resolution log written ${age}s ago"
+        # Only meaningful once this process has been up longer than the write
+        # interval it is being judged against. Straight after a start the log
+        # is stale because the app was down, which says nothing about the new
+        # process.
+        local uptime; uptime="$(process_uptime_seconds "$pid")"
+        if [ -n "$pid" ] && [ -n "$uptime" ] && [ "$uptime" -gt 900 ] && [ "$age" -gt 900 ]; then
+            warn "  WARNING: up for ${uptime}s but hasn't written in ${age}s -- it may be wedged."
+            warn "           KeepAlive only restarts a process that exits, never one that hangs."
+            warn "           Force a clean restart with: $0 restart"
+        elif [ -n "$pid" ] && [ -n "$uptime" ] && [ "$uptime" -lt 900 ]; then
+            say "  uptime       : ${uptime}s (too new to judge whether it is ticking)"
+        fi
+    else
+        say "  last tick    : no resolution log yet"
+    fi
+
+    if [ -d "$REPORTS_DIR" ]; then
+        reports=$(find "$REPORTS_DIR" -name '*.json' -type f | wc -l | tr -d ' ')
+        say "  incidents    : $reports report(s) in $REPORTS_DIR"
+    fi
+
+    local dupes; dupes="$(untracked_pids | tr '\n' ' ' | sed 's/ $//')"
+    if [ -n "$dupes" ]; then
+        warn "  WARNING: copies running that launchd does not manage (pid(s): $dupes)."
+        warn "           Two menu bar icons come from this -- usually scripts/start.sh"
+        warn "           or 'open -n' was used. Clean up with: kill $dupes"
+    fi
+
+    if [ -f "$APP_LOG" ] && [ -s "$APP_LOG" ]; then
+        # The age matters: this log is append-only and never rotated, so an old
+        # traceback sits at the tail forever and reads as if it just happened.
+        local log_age; log_age="$(file_age_seconds "$APP_LOG")"
+        say ""
+        say "  last app log lines (written ${log_age:-?}s ago, $APP_LOG):"
+        tail -n 3 "$APP_LOG" | sed 's/^/    /'
+    fi
+}
+
+cmd_logs() {
+    say "--- app log: $APP_LOG"
+    if [ "${1:-}" = "-f" ]; then
+        touch "$APP_LOG"
+        tail -f "$APP_LOG"
+    else
+        [ -f "$APP_LOG" ] && tail -n 40 "$APP_LOG" || say "(empty)"
+        say ""
+        say "--- supervision log: $KEEPALIVE_LOG"
+        [ -f "$KEEPALIVE_LOG" ] && tail -n 20 "$KEEPALIVE_LOG" || say "(empty)"
+    fi
+}
+
+cmd_uninstall() {
+    rm -f "$FLAG"
+    launchctl bootout "$SERVICE" 2>/dev/null || true
+    rm -f "$PLIST"
+    audit "uninstall: agent removed"
+    say "Removed the LaunchAgent and disabled supervision."
+    say "Left in place: $INSTALLED_APP, and everything under"
+    say "  $SUPPORT_DIR"
+    say "Delete those by hand if you want them gone."
+}
+
+usage() {
+    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+
+case "${1:-status}" in
+    install)   cmd_install ;;
+    start)     cmd_start ;;
+    stop)      cmd_stop ;;
+    restart)   cmd_restart ;;
+    check)     cmd_check ;;
+    update)    cmd_update ;;
+    status)    cmd_status ;;
+    logs)      shift; cmd_logs "${1:-}" ;;
+    uninstall) cmd_uninstall ;;
+    -h|--help|help) usage 0 ;;
+    *) warn "unknown command: $1"; usage 1 ;;
+esac

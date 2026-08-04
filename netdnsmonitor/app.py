@@ -21,20 +21,30 @@ debounced because acting on it costs something -- flushed caches and API calls.
 
 import os
 import queue
+import socket as socket_module
+import subprocess
+import sys
 import threading
 import time
 import traceback
+import uuid
 import webbrowser
 from typing import Callable, Optional
 
 import rumps
 
-from netdnsmonitor import alert
+from netdnsmonitor import alert, forensic_log, peer_net
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
+from netdnsmonitor.classifier import classify
 from netdnsmonitor.config import load_config
+from netdnsmonitor.dashboard import DashboardWindow, dashboard_sections, render_dashboard_text
 from netdnsmonitor.dock_icon import set_dock_icon
+from netdnsmonitor.forensic_log import ForensicRecorder
+from netdnsmonitor.ladder import ladder_for, step_by_name
 from netdnsmonitor.log_watcher import make_log_watcher
 from netdnsmonitor.net_stats import ThroughputMeter, read_interface_counters
+from netdnsmonitor.peer_net import PeerNetwork
+from netdnsmonitor.peers import PeerRegistry, load_record, save_record
 from netdnsmonitor.ping import ping_once
 from netdnsmonitor.ping_monitor import PingMonitor
 from netdnsmonitor.prober import make_prober
@@ -45,6 +55,8 @@ from netdnsmonitor.resolution_prober import resolve_domains_parallel
 from netdnsmonitor.stall_log import select_stalled_domains
 from netdnsmonitor.state_machine import StateMachine
 from netdnsmonitor.status import STATS_UNKNOWN, build_title, format_stats, status_state
+
+OPEN_BIN = "/usr/bin/open"
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 DISPLAY_NAME = "Net-DNS-Monitor"
@@ -177,8 +189,36 @@ class NetDnsMonitorApp(rumps.App):
         # in order, so a cycle the main thread happens to miss cannot swallow a
         # failure edge and with it the alert.
         self._ping_results: queue.Queue = queue.Queue()
+        self._ping_failures_this_episode = 0
 
-        self.menu = ["Open last report", "Test network alert"]
+        self.forensic = ForensicRecorder(
+            journal_path=self.config["forensic_log_path"],
+            episodes_dir=self.config["forensic_episodes_dir"],
+        )
+        # Created on first open, never here: eleven tests construct this class
+        # directly and would each pop a window.
+        self._dashboard: Optional[DashboardWindow] = None
+        self._dashboard_text = ""
+        self._action_thread: Optional[threading.Thread] = None
+        self._action_results: queue.Queue = queue.Queue()
+        self._last_flap_state = "healthy"
+
+        # A fresh id per process. Two instances on one machine are genuinely two
+        # instances, and a hostname is not unique enough to key on.
+        self.instance_id = uuid.uuid4().hex[:16]
+        self.peer_registry = PeerRegistry(
+            self_id=self.instance_id,
+            current_seconds=self.config["peer_current_seconds"],
+            recent_seconds=self.config["peer_recent_seconds"],
+        )
+        # Loading the previous run's record here is what makes "try to connect to
+        # them on startup" possible -- otherwise a fresh process knows nobody
+        # until somebody else happens to announce.
+        self.peer_registry.load(load_record(self.config["peer_record_path"]))
+        self.peer_network: Optional[PeerNetwork] = None
+        self._peers_dirty = True
+
+        self.menu = ["Open dashboard", "Open last report", "Test network alert"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
         self.resolution_timer = rumps.Timer(
@@ -187,7 +227,78 @@ class NetDnsMonitorApp(rumps.App):
         self.resolution_timer.start()
         self.ping_timer = rumps.Timer(self.ping_tick, self.config["ping_interval_seconds"])
         self.ping_timer.start()
+        self.ui_timer = rumps.Timer(self.ui_tick, self.config["ui_refresh_seconds"])
+        self.ui_timer.start()
+        self.peer_timer = rumps.Timer(self.peer_tick, self.config["peer_announce_seconds"])
+        self.peer_timer.start()
         set_dock_icon("healthy")
+
+    # --- LAN peer discovery ------------------------------------------------
+
+    def peer_tick(self, _sender=None):
+        """Announce, heartbeat every known peer, and persist the record.
+
+        Starts discovery on the first tick rather than in `__init__`: binding a
+        socket and spawning a reader thread there would do both in every test that
+        constructs this class, and doing it from a timer keeps launch itself free
+        of any network work at all -- the requirement was that startup not block.
+        """
+        if not self.config["peer_discovery_enabled"]:
+            return
+        if self.peer_network is None and not self._start_peer_network():
+            return
+
+        # Announce first, so a peer that has just come up learns about us in the
+        # same sweep it would otherwise be probed in.
+        self.peer_network.announce()
+        # Every bucket, not just the live ones: a machine last seen yesterday is
+        # exactly the one worth probing.
+        self.peer_network.probe(self.peer_registry.addresses_to_probe())
+        self._save_peer_record()
+
+    def _start_peer_network(self) -> bool:
+        network = PeerNetwork(
+            registry=self.peer_registry,
+            host=socket_module.gethostname(),
+            bind_port=self.config["peer_port"],
+            status_fn=self._peer_status,
+            # Looked up on the module rather than taken as a default argument, so
+            # the tests can substitute loopback and never broadcast onto a real
+            # network from a test run.
+            broadcast_fn=peer_net.broadcast_addresses,
+            on_change=self._mark_peers_dirty,
+        )
+        if not network.start():
+            # Deliberately not fatal and not retried on a tighter loop: a monitor
+            # that will not run because a discovery socket was busy has its
+            # priorities backwards. The next tick tries again.
+            print(
+                f"[peers] discovery unavailable: {network.start_error}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return False
+        self.peer_network = network
+        return True
+
+    def _peer_status(self) -> str:
+        """What we advertise about ourselves: the same three-state decision the
+        menu bar shows, and nothing else.
+        """
+        flap_gate = self.state_machine.flap_gate
+        return status_state(
+            flap_gate.state, flap_gate.consecutive_failures, self.ping_stats["down"]
+        )
+
+    def _mark_peers_dirty(self):
+        """Called from the listener thread -- so it only sets a flag. The record
+        file is written and the window repainted from the main thread.
+        """
+        self._peers_dirty = True
+
+    def _save_peer_record(self):
+        save_record(self.peer_registry, self.config["peer_record_path"])
+        self._peers_dirty = False
 
     def tick(self, _sender=None):
         report = self.state_machine.tick()
@@ -195,7 +306,76 @@ class NetDnsMonitorApp(rumps.App):
             paths = save_report(report, self.config["reports_dir"])
             self.last_report_path = paths["markdown_path"]
             self.last_classification = report["classification"]
+            self._record_incident_forensics(report)
+        self._note_gate_recovery()
         self._refresh_title()
+
+    # --- forensic record ---------------------------------------------------
+
+    def _record_incident_forensics(self, report: dict):
+        """Fold a declared incident into the open episode.
+
+        The state machine stays ignorant of forensics -- it returns a report and
+        this translates it -- which keeps its orchestration logic testable
+        without a recorder.
+        """
+        classification = report.get("classification", "unknown")
+        self.forensic.note(
+            forensic_log.DOWN,
+            "flap_gate",
+            reason=(
+                f"{self.config['failure_threshold']} consecutive failed probes; "
+                f"classified as {classification}"
+            ),
+            detail=f"probe results: {report.get('probe_results')}",
+            result=f"{classification} incident declared",
+        )
+        for step in report.get("ladder_results") or []:
+            self.forensic.note(
+                forensic_log.STEP,
+                "flap_gate",
+                detail=step.get("name", "?"),
+                reason=step.get("reason", ""),
+                result=step.get("outcome", ""),
+            )
+        self.forensic.note(
+            forensic_log.RECHECK,
+            "flap_gate",
+            reason="Re-probe after the ladder, so 'repaired' means something was measured",
+            result="healthy again" if report.get("recheck_ok") else "still failing",
+        )
+        escalation = report.get("escalation")
+        if escalation:
+            self.forensic.note(
+                forensic_log.ESCALATION,
+                "flap_gate",
+                reason="The ladder ran and the recheck still failed",
+                result=str(escalation.get("error") or "analysis received from Claude"),
+            )
+
+    def _network_is_up(self) -> bool:
+        """Both detectors have to agree before an episode closes.
+
+        A DNS incident can be declared while ICMP to the ping host still answers
+        perfectly, so closing on ping recovery alone would leave a gate-opened
+        episode open forever.
+        """
+        return not self.ping_stats["down"] and self.state_machine.flap_gate.state != "incident"
+
+    def _note_gate_recovery(self):
+        """The gate clears an incident silently -- that transition produces no
+        report at all (see status.py) -- so it has to be watched for here.
+        """
+        state = self.state_machine.flap_gate.state
+        was = self._last_flap_state
+        self._last_flap_state = state
+        if was == "incident" and state != "incident" and self._network_is_up():
+            self.forensic.note(
+                forensic_log.UP,
+                "flap_gate",
+                reason=f"{self.config['success_threshold']} consecutive healthy probes",
+                result="incident cleared",
+            )
 
     def resolution_tick(self, _sender=None):
         """Runs the resolution batch on a worker thread, not the run loop.
@@ -287,10 +467,36 @@ class NetDnsMonitorApp(rumps.App):
                 "down": snapshot["down"],
             }
             host = self.config["ping_host"]
+            if snapshot["down"]:
+                self._ping_failures_this_episode = snapshot["consecutive_failures"]
             if snapshot["alert"]:
                 alert.network_failed(host, error=snapshot["error"])
+                self.forensic.note(
+                    forensic_log.DOWN,
+                    "ping",
+                    reason=(
+                        f"{snapshot['consecutive_failures']} consecutive failed ping(s) to "
+                        f"{host}, threshold is {self.config['ping_failure_threshold']}"
+                    ),
+                    detail=f"ping {host}",
+                    result=snapshot["error"] or "no reply",
+                )
             elif was_down and not snapshot["down"]:
                 alert.network_recovered(host)
+                if self._network_is_up():
+                    self.forensic.note(
+                        forensic_log.UP,
+                        "ping",
+                        reason="Pings answered again",
+                        detail=f"ping {host}",
+                        result=(
+                            f"reply in {snapshot['rtt_ms']:.0f}ms after "
+                            f"{self._ping_failures_this_episode} failed ping(s)"
+                            if snapshot["rtt_ms"] is not None
+                            else "reply received"
+                        ),
+                    )
+                self._ping_failures_this_episode = 0
 
         if drained:
             self._refresh_title()
@@ -334,6 +540,188 @@ class NetDnsMonitorApp(rumps.App):
             rtt_ms=ping["rtt_ms"],
             ping_down=ping_down,
         )
+
+    # --- dashboard window --------------------------------------------------
+
+    def ui_tick(self, _sender=None):
+        """Repaint the window and collect any finished troubleshooting step.
+
+        Its own timer, at 1s, rather than riding the 5s heartbeat: a button whose
+        result appears up to five seconds later feels broken. While the window is
+        closed this costs a queue poll and a string comparison.
+        """
+        self._drain_action_results()
+        if self._peers_dirty:
+            # A peer was heard from on the listener thread. Persisting from here
+            # keeps all file writing on the main thread.
+            self._save_peer_record()
+        self._refresh_dashboard()
+
+    def _ensure_dashboard(self) -> DashboardWindow:
+        if self._dashboard is None:
+            # Retained on the instance. An NSWindow with no strong Python
+            # reference is collected out from under AppKit, which looks exactly
+            # like the window never opening.
+            self._dashboard = DashboardWindow(on_action=self.handle_dashboard_action)
+        return self._dashboard
+
+    def open_dashboard(self, _sender=None):
+        dashboard = self._ensure_dashboard()
+        self._refresh_dashboard(force=True)
+        dashboard.show()
+
+    def _refresh_dashboard(self, force: bool = False):
+        if self._dashboard is None:
+            return
+        flap_gate = self.state_machine.flap_gate
+        episode = self.forensic.episode
+        text = render_dashboard_text(
+            dashboard_sections(
+                ping_stats=self.ping_stats,
+                flap_state=flap_gate.state,
+                consecutive_failures=flap_gate.consecutive_failures,
+                config=self.config,
+                last_classification=self.last_classification,
+                last_report_path=self.last_report_path,
+                resolution_findings=self.last_resolution_findings,
+                episode_open=self.forensic.is_open,
+                episode_started_at=episode.get("started_at") if episode else None,
+                peers=self.peer_registry.buckets()
+                if self.config["peer_discovery_enabled"]
+                else None,
+            )
+        )
+        # Only push when something changed: setString_ resets the pane's scroll
+        # position, and at 1s that would fight anyone reading it.
+        if force or text != self._dashboard_text:
+            self._dashboard_text = text
+            self._dashboard.set_stats(text)
+
+    def handle_dashboard_action(self, action_id: str):
+        """A button was clicked. Main thread.
+
+        Anything that shells out goes to a worker: repair_executor allows 5s per
+        step and a full ladder is four of them, so running inline would freeze the
+        window and all four timers for up to half a minute -- the same reason the
+        ping does not run here.
+        """
+        if action_id == "open_last_report":
+            self.open_last_report(None)
+            return
+        if action_id == "open_forensic_dir":
+            self._open_path(self.config["forensic_episodes_dir"], make_dir=True)
+            return
+        if action_id == "test_alert":
+            self.test_network_alert(None)
+            self._append_output("Fired a test alert: the Dock should bounce.\n")
+            return
+
+        if self._action_thread is not None and self._action_thread.is_alive():
+            self._append_output("Still running the previous step -- ignored.\n")
+            return
+
+        self._append_output(f"\n>>> {action_id}\n")
+        self._action_thread = threading.Thread(
+            target=self._run_action, args=(action_id,), name="dashboard-action", daemon=True
+        )
+        self._action_thread.start()
+
+    def _run_action(self, action_id: str):
+        """Worker thread. Produces text and forensic events; records neither.
+
+        Deliberately does not touch the recorder or the window: the recorder's
+        episode state is mutated by the main-thread ping drain, and AppKit views
+        are not thread-safe. Everything comes back through the queue.
+        """
+        lines: list[str] = []
+        events: list[dict] = []
+        try:
+            if action_id == "ping_now":
+                result = ping_once(
+                    self.config["ping_host"],
+                    timeout_seconds=self.config["ping_timeout_seconds"],
+                )
+                rtt = result["rtt_ms"]
+                lines.append(
+                    f"ping {self.config['ping_host']}: "
+                    + (f"reply in {rtt:.1f}ms" if result["ok"] and rtt is not None else "")
+                    + ("" if result["ok"] else f"FAILED -- {result['error']}")
+                )
+            elif action_id == "full_diagnosis":
+                lines.extend(self._full_diagnosis(events))
+            else:
+                lines.extend(self._single_step(action_id, events))
+        except Exception:  # noqa: BLE001 - a click must not kill the app
+            traceback.print_exc()
+            lines.append("This step raised; see the app log for the traceback.")
+
+        self._action_results.put((action_id, "\n".join(lines) + "\n", events))
+
+    def _single_step(self, action_id: str, events: list) -> list:
+        step = step_by_name(action_id)
+        if step is None:
+            return [f"Unknown step {action_id!r}."]
+        outcome = self.state_machine.repair_executor(step)
+        events.append({"detail": step.name, "reason": step.reason, "result": outcome})
+        return [f"why: {step.reason}", f"result: {outcome}"]
+
+    def _full_diagnosis(self, events: list) -> list:
+        probe = self.state_machine.prober()
+        classification = classify(probe.get("external_reachable"), probe.get("dns_ok"))
+        lines = [
+            f"probe: {probe}",
+            f"classified as: {classification.value}",
+        ]
+        steps = ladder_for(classification)
+        if not steps:
+            lines.append(
+                "No ladder for this classification -- nothing is broken, or "
+                "`domains` is empty so DNS could not be judged."
+            )
+            return lines
+        for step in steps:
+            outcome = self.state_machine.repair_executor(step)
+            lines.append(f"[{step.kind}] {step.name}")
+            lines.append(f"    why: {step.reason}")
+            lines.append(f"    result: {outcome}")
+            events.append({"detail": step.name, "reason": step.reason, "result": outcome})
+        return lines
+
+    def _drain_action_results(self):
+        """Main thread: append output and record the forensic events."""
+        while True:
+            try:
+                _action_id, text, events = self._action_results.get_nowait()
+            except queue.Empty:
+                return
+            for event in events:
+                self.forensic.note(
+                    forensic_log.STEP,
+                    "manual",
+                    detail=event["detail"],
+                    reason=event["reason"],
+                    result=event["result"],
+                )
+            self._append_output(text)
+
+    def _append_output(self, text: str):
+        if self._dashboard is not None:
+            self._dashboard.append_output(text)
+
+    def _open_path(self, path: str, make_dir: bool = False):
+        """Hand a path to Finder. Absolute /usr/bin/open for the launchd PATH."""
+        try:
+            if make_dir:
+                os.makedirs(path, exist_ok=True)
+            subprocess.run([OPEN_BIN, path], check=False, timeout=10)
+        except (subprocess.SubprocessError, OSError):
+            traceback.print_exc()
+
+    # --- menu --------------------------------------------------------------
+
+    @rumps.clicked("Open dashboard")
+    def open_dashboard_clicked(self, sender):
+        self.open_dashboard(sender)
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

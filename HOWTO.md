@@ -16,6 +16,9 @@ every DNS lookup that has ever stalled on this machine.
 - [Feature: Claude escalation](#feature-claude-escalation)
 - [Feature: incident reports](#feature-incident-reports)
 - [Feature: ping heartbeat and the network-failed alert](#feature-ping-heartbeat-and-the-network-failed-alert)
+- [Dashboard window](#dashboard-window)
+- [Feature: forensic log of every down/up episode](#feature-forensic-log-of-every-downup-episode)
+- [Feature: LAN peer discovery](#feature-lan-peer-discovery)
 - [Menu bar reference](#menu-bar-reference)
 - [Permissions](#permissions)
 - [Running the tests](#running-the-tests)
@@ -89,6 +92,15 @@ below (from `netdnsmonitor/config.py`). Config file lives at
 | `ping_failure_threshold` | `1` | ping heartbeat | Consecutive failed pings before the alert fires. `1` is literal; raise to `2` to ignore single dropped Wi-Fi packets |
 | `ping_alert_repeat_seconds` | `0` | ping heartbeat | `0` = one alert per outage. Set to e.g. `300` to be re-alerted every 5 minutes while the network stays down |
 | `ping_loss_window` | `12` | ping heartbeat | How many recent pings the loss percentage averages over. 12 at a 5s cadence is the last minute |
+| `ui_refresh_seconds` | `1` | dashboard | How often the window repaints and picks up a finished troubleshooting step |
+| `forensic_log_path` | `~/Library/Application Support/net-dns-monitor/forensic-log.jsonl` | forensic log | Append-only journal, written as each event happens |
+| `forensic_episodes_dir` | `~/Library/Application Support/net-dns-monitor/episodes` | forensic log | Per-episode `.md`/`.json` write-ups, produced on recovery |
+| `peer_discovery_enabled` | `true` | peer discovery | Announce on the LAN and look for other instances. `false` opens no socket and broadcasts nothing |
+| `peer_port` | `45737` | peer discovery | UDP port for announce/probe/pong |
+| `peer_announce_seconds` | `300` | peer discovery | Re-announce and heartbeat every known peer on this cadence |
+| `peer_current_seconds` | `600` | peer discovery | Heard from within this window counts as `current`. Two announce intervals, so one dropped broadcast is not a demotion |
+| `peer_recent_seconds` | `86400` | peer discovery | Heard from within this window but not the one above: `recent`. Older: `other` |
+| `peer_record_path` | `~/Library/Application Support/net-dns-monitor/peers.json` | peer discovery | File record of current / recent / other hosts, read back at startup |
 
 Retired keys, ignored if still present in your `config.yaml`:
 `resolution_lookback`, `resolution_top_n` (the monitor no longer mines the
@@ -386,6 +398,144 @@ Each report is self-contained:
 - the Claude escalation response, if one occurred
 - a one-line summary
 
+## Dashboard window
+
+**Open dashboard** is the first item in the menu bar dropdown. It opens a window
+with four panes of information and a button per troubleshooting step.
+
+What it shows:
+
+- **Network right now** -- ping target, round-trip time, packet loss, download
+  and upload rate. Reads `not measured yet` rather than `0` before the first
+  ping, and `no reply` while pings are going unanswered.
+- **Monitor** -- current status, consecutive probe failures, what the last
+  incident was classified as and where its report is, the last resolution batch,
+  and whether a forensic episode is currently open.
+- **Other monitors on this network** -- see [LAN peer
+  discovery](#feature-lan-peer-discovery).
+- **Settings in force** -- every cadence and threshold actually in effect. The
+  point is that the app's behaviour is explicable without opening the config
+  file: if it is alerting more than you expected, this pane says why.
+
+The buttons, each of which reports *why* the step exists alongside its result:
+
+| Button | Kind | What it does |
+| --- | --- | --- |
+| Ping now | check | One immediate ICMP echo request, out of band from the heartbeat |
+| Check interface state | check | `scutil --nwi` |
+| Check default route | check | `netstat -rn -f inet` |
+| Check DNS servers | check | `scutil --dns` |
+| Check resolver overrides | check | Lists `/etc/resolver` entries |
+| Resolve via public resolver | check | Raw UDP query against a public resolver |
+| Flush DNS cache | **repair** | `dscacheutil -flushcache` + `killall -HUP mDNSResponder` |
+| Run full diagnosis | **repair** | Probes, classifies, then runs the whole ladder for that classification |
+| Open last incident report | -- | Opens the most recent report in your browser |
+| Open forensic logs folder | -- | Reveals `forensic_episodes_dir` in Finder |
+| Test network alert | -- | Fires the alert so you can confirm it reaches you |
+
+Steps that mutate system state say so on the button. Everything that shells out
+runs on a worker thread, never on the run loop -- `repair_executor` allows 5s per
+step and a full ladder is four of them, so an inline click would freeze the
+window and all four timers for up to half a minute. A second click while a step
+is still running is refused rather than queued.
+
+Anything you run by hand is recorded in the forensic log too, tagged `manual`, so
+an episode's write-up shows human intervention alongside the automatic steps.
+
+## Feature: forensic log of every down/up episode
+
+Every network down/up episode is written up automatically: what was detected,
+every step taken, **why** it was taken, and what it returned.
+
+### What counts as one episode
+
+The app has two detectors on different clocks, and neither alone can answer the
+question:
+
+| Detector | Notices | Acts |
+| --- | --- | --- |
+| ping heartbeat (5s) | within seconds | never -- it only displays and alerts |
+| anti-flap gate (30s) | after debounce, so ~60s+ | runs the whole ladder, escalates, writes a report |
+
+So an episode **opens on the first "down" from either detector** and **closes only
+when both agree the network is back**. The heartbeat supplies the timing, the gate
+supplies the actions, and one document covers both. A gate incident declared while
+the heartbeat is already down joins the open episode rather than starting a second
+one; a DNS incident declared while ICMP still answers opens one on its own and is
+closed by the gate clearing, not by the heartbeat.
+
+### Two artifacts
+
+- **`forensic-log.jsonl`** -- one JSON object per event, appended *the moment it
+  happens*. This is the durable half: an app killed, crashed, or a machine powered
+  off mid-outage still leaves the evidence behind, which is the one case a forensic
+  log exists for.
+- **`episodes/<timestamp>-episode.md`** (and `.json`) -- the write-up, produced when
+  the network comes back. Contains a chronological timeline and a "Steps taken"
+  table of step / kind / why it was run / result.
+
+An outage that cleared before the ladder ever started says so in words rather than
+showing an empty table -- the recovery was the network's own, not the app's, and
+the document should not imply otherwise.
+
+Multi-line command output (`scutil --nwi` is a dozen lines) is flattened for the
+table so one step's output cannot break the rendering of every row after it.
+
+## Feature: LAN peer discovery
+
+The app announces itself on the local network and looks for other copies of the
+monitor running on other machines.
+
+- **At launch** it announces (on the first sweep -- nothing about this blocks
+  startup) and probes every host it remembers from the previous run.
+- **Every `peer_announce_seconds`** (default 300) it re-announces and then
+  heartbeats every known peer with a probe, which each peer answers with a pong.
+
+### The protocol, in full
+
+    announce   broadcast, "I exist, here is my id, hostname and status"
+    probe      unicast, "are you still there"
+    pong       unicast reply to a probe
+
+There is no leader, no shared state, and no remote commands. A peer can learn
+another peer's hostname and monitor status, and nothing else.
+
+### The three buckets
+
+Peers are filed by how recently they were last heard from, so a machine that is
+switched off needs nothing to notice it left:
+
+| Bucket | Meaning |
+| --- | --- |
+| `current` | within `peer_current_seconds` (600 = two announce intervals, so one dropped broadcast is not a demotion) |
+| `recent` | within `peer_recent_seconds` (a day) -- was here, isn't answering now |
+| `other` | known, but older than that -- kept as history |
+
+All three go to `peer_record_path` (`peers.json`) and appear in the dashboard,
+along with a count of missed heartbeats per peer. That file is read back at
+startup, which is what lets a fresh process probe the hosts it knew about last
+run instead of waiting for one of them to announce.
+
+### What this discloses, and how to turn it off
+
+Any host on the same LAN can learn this machine's hostname and whether its
+network is currently healthy. That is the point of the feature, but it is a
+disclosure:
+
+```yaml
+peer_discovery_enabled: false   # opens no socket, broadcasts nothing
+```
+
+Incoming datagrams are size-capped at 2 KB, JSON-only, checked for a protocol
+tag, and every string is truncated and stripped of control characters. The peer
+table is capped so a host spraying announcements with fresh ids cannot exhaust
+memory. Nothing from a packet is ever used as a path, a command, or an argument.
+
+If the UDP port is unavailable -- another copy on this machine already has it, or
+a sandbox denies it -- discovery is simply off for that sweep and the monitor
+carries on. A network-monitoring tool that refuses to start because it could not
+open a discovery socket has its priorities backwards.
+
 ## Menu bar reference
 
 - **App name:** shows as "Net-DNS-Monitor" everywhere -- app menu, Dock,
@@ -429,6 +579,9 @@ Each report is self-contained:
     had any failed domain, the title gets a `N/total resolution fails`
     suffix -- since a top-queried domain can stop resolving without
     tripping the single configured `domains` check.
+- **"Open dashboard"** -- opens the window described in [Dashboard
+  window](#dashboard-window): live statistics, the settings in force,
+  discovered peers, and a button per troubleshooting step.
 - **"Open last report"** -- opens the most recent incident report's
   Markdown file in your default browser. Shows a notification instead if
   no incident has occurred yet.

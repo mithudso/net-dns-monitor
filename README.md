@@ -85,6 +85,82 @@ alert" to check that alerts actually reach you. See `HOWTO.md`'s Menu bar
 reference section for the full status-icon and resolution-monitor-badge
 behavior.
 
+## Dashboard window
+
+The menu bar item's first entry, **Open dashboard**, opens a real window:
+
+- **Network right now** -- ping target, round-trip time, packet loss, current
+  download and upload rates.
+- **Monitor** -- live status, consecutive probe failures, the last incident and
+  its report path, the last resolution batch, and whether a forensic episode is
+  open.
+- **Other monitors on this network** -- peers discovered on the LAN, grouped
+  into current / recent / other.
+- **Settings in force** -- every cadence and threshold actually in effect, so
+  the app's behaviour is explicable without opening the config file.
+- **A button per troubleshooting step** -- ping now, check interface state,
+  check the default route, check the configured DNS servers, check
+  `/etc/resolver` overrides, resolve via a public resolver, flush the DNS cache,
+  or run the full ladder for the current classification. Results appear in the
+  pane at the bottom, each with the reason the step exists. Steps that mutate
+  system state say so on the button.
+
+Steps run on a worker thread, never on the run loop: `repair_executor` allows 5s
+per step and a full ladder is four of them, so running one inline would freeze
+the window and every timer for up to half a minute.
+
+## Forensic log
+
+Every network down/up episode is written up automatically: what was detected,
+every step taken, **why** each step was taken, and what it returned.
+
+An episode spans both detectors. It opens on the first "down" signal from either
+the 5-second ping heartbeat or the 30-second anti-flap gate, and closes only
+when both agree the network is back. That split matters -- the heartbeat notices
+an outage in seconds but takes no action, and the gate takes all the action but
+only after debounce, so either one alone produces a useless record.
+
+Two artifacts:
+
+- `forensic-log.jsonl` -- appended to *as each event happens*, so an app killed
+  or a machine powered off mid-outage still leaves the evidence behind.
+- `episodes/<timestamp>-episode.md` and `.json` -- the per-episode write-up,
+  produced when the network comes back. The Markdown has a chronological
+  timeline and a "Steps taken" table of step / kind / why it was run / result.
+
+An outage that cleared before the ladder ever started says so explicitly rather
+than showing an empty table.
+
+## Peer discovery on the LAN
+
+At startup (on the first sweep, never blocking launch) the app announces itself
+on the local network over UDP and looks for other copies of the monitor. Every
+`peer_announce_seconds` (default 300) it re-announces, then heartbeats every host
+it knows about with a probe/pong exchange.
+
+Peers are filed by how recently they were last heard from, so a machine that is
+switched off needs nothing to notice it left:
+
+| Bucket | Meaning |
+| --- | --- |
+| `current` | heard from within `peer_current_seconds` (default 600 = two announce intervals, so one dropped broadcast is not a demotion) |
+| `recent` | heard from within `peer_recent_seconds` (default a day) -- was here, isn't answering now |
+| `other` | known, but longer ago than that -- kept as history |
+
+All three are written to `peer_record_path` (default `peers.json`) and shown in
+the dashboard. That file is read back at startup, which is what lets a fresh
+process probe the hosts it knew about last run rather than waiting for one of
+them to announce.
+
+**What this discloses:** any host on the same LAN can learn this machine's
+hostname and whether its network is currently healthy. That is the feature, but
+it is a disclosure, so `peer_discovery_enabled: false` opens no socket and
+broadcasts nothing. Incoming datagrams are size-capped, JSON-only,
+protocol-tagged, and every string is truncated and stripped of control
+characters; nothing from a packet is ever used as a path, a command, or an
+argument. There is no leader, no shared state, and no remote commands -- a peer
+can learn another peer's hostname and status and nothing else.
+
 ## Ping heartbeat and network-failed alert
 
 Separately from incident detection, the app sends one ICMP echo request to
@@ -186,6 +262,10 @@ test suite, since it needs a real macOS run loop.
 - `ping_monitor.py` -- loss window + the edge-triggered alert decision
 - `net_stats.py` -- interface byte counters and throughput derivation
 - `alert.py` -- Dock bounce + network-failed notification
+- `forensic_log.py` -- down/up episode journal and per-episode write-up
+- `peers.py` -- peer registry, recency buckets, and the file record
+- `peer_net.py` -- UDP announce/probe/pong and the listener thread
+- `dashboard.py` -- the window: contents as pure data plus the AppKit view
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
 - `stall_log.py` -- selects every ever-stalled domain from the resolution log
 - `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)

@@ -15,21 +15,87 @@ class LadderStep:
     name: str
     kind: str  # "check" or "repair"
     needs_privilege: bool
+    # Why this step is worth running, in the words a human would want to read
+    # months later in a forensic log. Defaulted so the positional constructions
+    # in the tests keep working, but every real step below fills it -- a log
+    # that records what was done without recording why is a list of commands,
+    # not an explanation.
+    reason: str = ""
 
 
 NETWORK_LADDER = [
-    LadderStep("check_interface_state", "check", needs_privilege=False),
-    LadderStep("check_default_route", "check", needs_privilege=False),
-    LadderStep("renew_dhcp_lease", "repair", needs_privilege=True),
-    LadderStep("toggle_network_service", "repair", needs_privilege=True),
+    LadderStep(
+        "check_interface_state",
+        "check",
+        needs_privilege=False,
+        reason="Confirm the link itself is up before blaming anything above it.",
+    ),
+    LadderStep(
+        "check_default_route",
+        "check",
+        needs_privilege=False,
+        reason="A missing default route is indistinguishable from an outage "
+        "from userspace, and is fixed completely differently.",
+    ),
+    LadderStep(
+        "renew_dhcp_lease",
+        "repair",
+        needs_privilege=True,
+        reason="A stale or conflicting lease is the most common recoverable network-layer fault.",
+    ),
+    LadderStep(
+        "toggle_network_service",
+        "repair",
+        needs_privilege=True,
+        reason="Re-initialising the interface clears driver and association "
+        "state that renewing a lease cannot.",
+    ),
 ]
 
 DNS_LADDER = [
-    LadderStep("check_configured_dns_servers", "check", needs_privilege=False),
-    LadderStep("check_resolver_overrides", "check", needs_privilege=False),
-    LadderStep("flush_dns_cache", "repair", needs_privilege=False),
-    LadderStep("resolve_against_public_resolver", "check", needs_privilege=False),
+    LadderStep(
+        "check_configured_dns_servers",
+        "check",
+        needs_privilege=False,
+        reason="Establish which resolvers the system is actually using before "
+        "changing anything about them.",
+    ),
+    LadderStep(
+        "check_resolver_overrides",
+        "check",
+        needs_privilege=False,
+        reason="/etc/resolver entries silently redirect specific domains and "
+        "routinely outlive the VPN or lab network that needed them.",
+    ),
+    LadderStep(
+        "flush_dns_cache",
+        "repair",
+        needs_privilege=False,
+        reason="A cached negative or stale answer keeps failing long after the "
+        "underlying fault is gone.",
+    ),
+    LadderStep(
+        "resolve_against_public_resolver",
+        "check",
+        needs_privilege=False,
+        reason="Separates a broken local resolver from a name that genuinely "
+        "cannot be resolved anywhere.",
+    ),
 ]
+
+
+def step_by_name(name: str):
+    """Look a step up by its dispatch name.
+
+    The dashboard's troubleshooting buttons identify a step by name, and need the
+    step object to report which kind it is and why it runs. Returns None for an
+    unknown name so a stale button label cannot raise inside a click handler,
+    where the traceback would be invisible.
+    """
+    for step in NETWORK_LADDER + DNS_LADDER:
+        if step.name == name:
+            return step
+    return None
 
 
 def ladder_for(classification: Classification) -> list[LadderStep]:

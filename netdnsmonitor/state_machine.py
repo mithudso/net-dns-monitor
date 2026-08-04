@@ -48,9 +48,7 @@ class StateMachine:
 
     def tick(self) -> Optional[dict]:
         probe = self.prober()
-        classification = classify(
-            probe.get("external_reachable"), probe.get("dns_ok")
-        )
+        classification = classify(probe.get("external_reachable"), probe.get("dns_ok"))
         ok = classification == Classification.HEALTHY
 
         prev_state = self.flap_gate.state
@@ -60,9 +58,7 @@ class StateMachine:
 
         return self._run_incident_pipeline(classification, probe)
 
-    def _run_incident_pipeline(
-        self, classification: Classification, probe: ProbeResult
-    ) -> dict:
+    def _run_incident_pipeline(self, classification: Classification, probe: ProbeResult) -> dict:
         started_at = datetime.now(timezone.utc)
 
         ladder_results = []
@@ -70,7 +66,14 @@ class StateMachine:
         for step in ladder_for(classification):
             outcome = self.repair_executor(step)
             ladder_results.append(
-                {"name": step.name, "kind": step.kind, "outcome": outcome}
+                {
+                    "name": step.name,
+                    "kind": step.kind,
+                    # Carried through so the report and the forensic log can say
+                    # why each step ran, not just that it did.
+                    "reason": step.reason,
+                    "outcome": outcome,
+                }
             )
             if step.kind == "repair":
                 repair_outcomes.append(f"{step.name}: {outcome}")

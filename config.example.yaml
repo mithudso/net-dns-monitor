@@ -91,3 +91,56 @@ ping_alert_repeat_seconds: 0
 # How many recent pings the loss percentage in the menu bar averages over.
 # 12 at a 5-second cadence is the last minute.
 ping_loss_window: 12
+
+# --- Dashboard window -----------------------------------------------------
+# The menu bar item's "Open dashboard" opens a window with the live statistics,
+# the settings in force, discovered peers, and a button per troubleshooting
+# step. This is how often it repaints and picks up the result of a step you ran
+# from it. Costs a queue poll and a string comparison while the window is shut.
+ui_refresh_seconds: 1
+
+# --- Forensic log ---------------------------------------------------------
+# Every network down/up episode is recorded: what was detected, every step
+# taken, why each step was taken, and what it returned.
+#
+# The journal is appended to as each event happens, so an app killed or a
+# machine powered off mid-outage still leaves the evidence behind. The
+# per-episode .md/.json documents are written when the network comes back.
+#
+# One episode spans both detectors: it opens on the first "down" from either the
+# 5-second ping heartbeat or the 30-second anti-flap gate, and closes only when
+# both agree the network is back.
+forensic_log_path: "~/Library/Application Support/net-dns-monitor/forensic-log.jsonl"
+forensic_episodes_dir: "~/Library/Application Support/net-dns-monitor/episodes"
+
+# --- LAN peer discovery ---------------------------------------------------
+# Announce this instance on the local network, find other copies of the monitor
+# on other machines, and heartbeat each one.
+#
+# WHAT THIS DISCLOSES: any host on the same LAN can learn this machine's
+# hostname and whether its network is currently healthy. That is the point of
+# the feature, but it is a disclosure -- set this to false and no socket is
+# opened and nothing is broadcast.
+#
+# Nothing received over this socket is ever used as a path, a command, or an
+# argument. Datagrams are size-capped, JSON-only, protocol-tagged, and every
+# string is truncated and stripped of control characters.
+peer_discovery_enabled: true
+peer_port: 45737
+
+# Re-announce and heartbeat every known peer on this cadence.
+peer_announce_seconds: 300
+
+# Heard from within this window: "current". Two announce intervals by default,
+# so a single dropped broadcast does not demote a healthy peer.
+peer_current_seconds: 600
+
+# Heard from within this window but not the one above: "recent". Anything older
+# is "other", kept as history. Peers are filed by elapsed time alone, so a
+# machine that is switched off needs nothing to notice it left.
+peer_recent_seconds: 86400
+
+# The file record of current / recent / other hosts. Read back at startup, which
+# is what lets a fresh process probe the hosts it knew about last run instead of
+# waiting for someone to announce.
+peer_record_path: "~/Library/Application Support/net-dns-monitor/peers.json"

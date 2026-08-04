@@ -4,17 +4,35 @@ import pytest
 
 from netdnsmonitor.config import DEFAULT_CONFIG, load_config
 
+# Every key load_config runs through expanduser. Kept as one list so adding a
+# path default without expanding it fails the test below rather than shipping a
+# literal "~" that the app then tries to create a directory called.
+PATH_KEYS = {
+    "reports_dir",
+    "resolution_log_path",
+    "forensic_log_path",
+    "forensic_episodes_dir",
+    "peer_record_path",
+}
+
 
 def test_missing_file_returns_defaults(tmp_path):
     cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
-    path_keys = {"reports_dir", "resolution_log_path"}
-    non_path_keys = {k: v for k, v in cfg.items() if k not in path_keys}
-    expected = {k: v for k, v in DEFAULT_CONFIG.items() if k not in path_keys}
+    non_path_keys = {k: v for k, v in cfg.items() if k not in PATH_KEYS}
+    expected = {k: v for k, v in DEFAULT_CONFIG.items() if k not in PATH_KEYS}
     assert non_path_keys == expected
-    assert cfg["reports_dir"] == os.path.expanduser(DEFAULT_CONFIG["reports_dir"])
-    assert cfg["resolution_log_path"] == os.path.expanduser(
-        DEFAULT_CONFIG["resolution_log_path"]
-    )
+    for key in PATH_KEYS:
+        assert cfg[key] == os.path.expanduser(DEFAULT_CONFIG[key])
+
+
+def test_every_path_default_is_expanded(tmp_path):
+    """A `~` that survives load_config becomes a literal directory named "~" in
+    the working directory the moment something calls makedirs on it.
+    """
+    cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
+    for key, value in cfg.items():
+        if isinstance(value, str) and ("/" in value or key.endswith(("_dir", "_path"))):
+            assert not value.startswith("~"), key
 
 
 def test_resolution_monitor_defaults_present(tmp_path):

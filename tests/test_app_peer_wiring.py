@@ -1,0 +1,262 @@
+"""Peer discovery as wired into the rumps shell.
+
+Every test forces `peer_port` to an ephemeral port and substitutes loopback for
+the broadcast list, so nothing in the suite ever sends a datagram onto a real
+network or collides with the installed app on the default port.
+"""
+
+import socket
+
+import pytest
+
+from netdnsmonitor.app import NetDnsMonitorApp
+from netdnsmonitor.peers import CURRENT, load_record
+
+
+class FakeFlapGate:
+    def __init__(self, state="healthy", consecutive_failures=0):
+        self.state = state
+        self.consecutive_failures = consecutive_failures
+
+
+class FakeStateMachine:
+    def __init__(self, flap_state="healthy", consecutive_failures=0):
+        self.flap_gate = FakeFlapGate(flap_state, consecutive_failures)
+
+    def tick(self):
+        return None
+
+
+def free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture(autouse=True)
+def _loopback_only(monkeypatch):
+    monkeypatch.setattr("netdnsmonitor.peer_net.broadcast_addresses", lambda: ["127.0.0.1"])
+    monkeypatch.setattr("netdnsmonitor.dashboard.DashboardWindow.show", lambda self: None)
+
+
+def make_app(tmp_path, **overrides):
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    app.state_machine = FakeStateMachine()
+    app.ping_job = lambda: ({"ok": True, "rtt_ms": 61.0, "error": None}, (0, 0))
+    app.config["peer_port"] = free_port()
+    app.config["peer_record_path"] = str(tmp_path / "peers.json")
+    app.config.update(overrides)
+    return app
+
+
+# --- startup is not blocked --------------------------------------------------
+
+
+def test_constructing_the_app_opens_no_socket_and_starts_no_thread(tmp_path):
+    """The requirement was explicitly that startup not block on any of this. It
+    also keeps every other test that builds this class off the network.
+    """
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    assert app.peer_network is None
+
+
+def test_the_first_peer_tick_starts_discovery(tmp_path):
+    app = make_app(tmp_path)
+    app.peer_tick()
+    try:
+        assert app.peer_network is not None
+        assert app.peer_network.started is True
+    finally:
+        app.peer_network.stop()
+
+
+def test_discovery_can_be_turned_off_entirely(tmp_path):
+    """It broadcasts this machine's hostname and health onto the LAN, so there has
+    to be a switch that opens no socket at all.
+    """
+    app = make_app(tmp_path, peer_discovery_enabled=False)
+    app.peer_tick()
+    assert app.peer_network is None
+
+
+def test_a_failed_bind_is_not_fatal_and_is_retried_next_tick(tmp_path, monkeypatch):
+    """A monitor that will not run because a UDP port was busy has its priorities
+    backwards.
+    """
+    calls = []
+    real_start = None
+
+    def failing_start(self):
+        calls.append(1)
+        self.start_error = "Address already in use"
+        return False
+
+    monkeypatch.setattr("netdnsmonitor.peer_net.PeerNetwork.start", failing_start)
+    app = make_app(tmp_path)
+    app.peer_tick()
+    assert app.peer_network is None
+    app.peer_tick()
+    assert len(calls) == 2  # retried rather than given up on
+    assert real_start is None
+
+
+def test_the_app_keeps_working_with_discovery_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr("netdnsmonitor.peer_net.PeerNetwork.start", lambda self: False)
+    app = make_app(tmp_path)
+    app.peer_tick()
+    app.ping_tick()
+    app._ping_thread.join(timeout=5)
+    app._drain_ping_results()
+    assert "61ms" in app.title
+
+
+# --- discovery ---------------------------------------------------------------
+
+
+def test_two_instances_find_each_other(tmp_path):
+    """Two apps, two ports, loopback in place of broadcast -- the real protocol
+    end to end through the rumps shell rather than the module in isolation.
+    """
+    a = make_app(tmp_path / "a")
+    b = make_app(tmp_path / "b")
+    a.peer_tick()
+    b.peer_tick()
+    try:
+        # Point each at the other, as a real broadcast would.
+        a.peer_network.send_port = b.config["peer_port"]
+        b.peer_network.send_port = a.config["peer_port"]
+
+        a.peer_network.announce()
+        assert _wait(lambda: a.instance_id in b.peer_registry.peers)
+        b.peer_network.announce()
+        assert _wait(lambda: b.instance_id in a.peer_registry.peers)
+
+        assert b.peer_registry.bucket(b.peer_registry.peers[a.instance_id]) == CURRENT
+    finally:
+        a.peer_network.stop()
+        b.peer_network.stop()
+
+
+def test_each_instance_gets_its_own_id(tmp_path):
+    """Two copies on one machine are genuinely two instances, and a hostname is
+    not unique enough to key on.
+    """
+    a = make_app(tmp_path / "a")
+    b = make_app(tmp_path / "b")
+    assert a.instance_id != b.instance_id
+
+
+def test_the_advertised_status_is_the_same_three_state_decision_as_the_menu_bar(tmp_path):
+    app = make_app(tmp_path)
+    assert app._peer_status() == "healthy"
+    app.ping_stats = dict(app.ping_stats, down=True)
+    assert app._peer_status() == "incident"
+    app.ping_stats = dict(app.ping_stats, down=False)
+    app.state_machine = FakeStateMachine("healthy", consecutive_failures=1)
+    assert app._peer_status() == "flaky"
+
+
+# --- the file record ---------------------------------------------------------
+
+
+def test_a_sweep_writes_the_record_file(tmp_path):
+    app = make_app(tmp_path)
+    app.peer_tick()
+    try:
+        record = load_record(app.config["peer_record_path"])
+        assert record["self_id"] == app.instance_id
+        assert set(record["peers"]) == {"current", "recent", "other"}
+    finally:
+        app.peer_network.stop()
+
+
+def test_a_restart_remembers_the_hosts_from_the_previous_run(tmp_path):
+    """This is what "attempt to connect to them when starting" needs: without the
+    record, a fresh process knows nobody until someone announces.
+    """
+    first = make_app(tmp_path)
+    first.peer_registry.observe("peer-x", host="other-mac", address="192.168.1.77")
+    first._save_peer_record()
+
+    second = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    second.config["peer_record_path"] = first.config["peer_record_path"]
+    second.peer_registry.load(load_record(first.config["peer_record_path"]))
+
+    assert "peer-x" in second.peer_registry.peers
+    assert ("peer-x", "192.168.1.77") in second.peer_registry.addresses_to_probe()
+
+
+def test_a_peer_heard_on_the_listener_thread_is_persisted_from_the_main_thread(tmp_path):
+    """The listener only sets a flag; the file write happens on the ui tick. All
+    file writing stays on one thread.
+    """
+    app = make_app(tmp_path)
+    app._peers_dirty = False
+    app.peer_registry.observe("peer-y", host="mac-y", address="192.168.1.88")
+    app._mark_peers_dirty()
+
+    assert not (tmp_path / "peers.json").exists()
+    app.ui_tick()
+    assert "peer-y" in str(load_record(app.config["peer_record_path"]))
+    assert app._peers_dirty is False
+
+
+# --- the window --------------------------------------------------------------
+
+
+# render_dashboard_text upper-cases section headings.
+PEERS_HEADING = "OTHER MONITORS ON THIS NETWORK"
+
+
+def test_the_dashboard_lists_known_peers(tmp_path):
+    app = make_app(tmp_path)
+    app.peer_registry.observe("peer-z", host="mac-z", address="192.168.1.99", status="healthy")
+    app.open_dashboard()
+    text = app._dashboard.stats_view.string()
+    assert PEERS_HEADING in text
+    assert "mac-z" in text
+    assert "192.168.1.99" in text
+
+
+def test_the_dashboard_says_so_when_no_peer_has_been_seen(tmp_path):
+    app = make_app(tmp_path)
+    app.open_dashboard()
+    assert "none discovered yet" in app._dashboard.stats_view.string()
+
+
+def test_a_peer_that_stopped_answering_shows_its_missed_heartbeats(tmp_path):
+    """ "Was here, isn't answering now" is the interesting fact, and it is
+    invisible if absent peers are hidden.
+    """
+    app = make_app(tmp_path)
+    app.peer_registry.observe("ghost", host="switched-off", address="192.168.1.5")
+    app.peer_registry.note_healthcheck_miss("ghost")
+    app.peer_registry.note_healthcheck_miss("ghost")
+    app.open_dashboard()
+    text = app._dashboard.stats_view.string()
+    assert "switched-off" in text
+    assert "2 missed heartbeat(s)" in text
+
+
+def test_the_peer_section_is_absent_when_discovery_is_off(tmp_path):
+    """With a positive control: asserting only the absence would pass even if the
+    heading string were wrong, which is exactly how this test first passed.
+    """
+    on = make_app(tmp_path / "on")
+    on.open_dashboard()
+    assert PEERS_HEADING in on._dashboard.stats_view.string()
+
+    off = make_app(tmp_path / "off", peer_discovery_enabled=False)
+    off.open_dashboard()
+    assert PEERS_HEADING not in off._dashboard.stats_view.string()
+
+
+def _wait(predicate, timeout=3.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False

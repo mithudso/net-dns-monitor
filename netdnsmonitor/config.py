@@ -65,6 +65,35 @@ DEFAULT_CONFIG = {
     # How many recent pings the loss percentage in the menu bar averages over.
     # 12 at a 5-second cadence is the last minute.
     "ping_loss_window": 12,
+    # Forensic record of every down/up episode. The journal is appended to as
+    # each event happens, so an app killed mid-outage still leaves evidence; the
+    # per-episode documents are written when the network comes back. See
+    # forensic_log.py for what counts as one episode across the two detectors.
+    "forensic_log_path": "~/Library/Application Support/net-dns-monitor/forensic-log.jsonl",
+    "forensic_episodes_dir": "~/Library/Application Support/net-dns-monitor/episodes",
+    # How often the dashboard window repaints and picks up the results of any
+    # troubleshooting step run from it. Only costs a queue poll and a string
+    # comparison while the window is closed.
+    "ui_refresh_seconds": 1,
+    # --- LAN peer discovery ------------------------------------------------
+    # Announce this instance on the local network and look for other copies of
+    # the monitor. Off means no socket is opened and nothing is broadcast.
+    #
+    # This DISCLOSES this machine's hostname and whether its network is healthy
+    # to anything on the same LAN. That is the point of the feature, but it is a
+    # disclosure, so it has its own switch. Nothing received over this socket is
+    # ever used as a path, a command, or an argument; see peer_net.py.
+    "peer_discovery_enabled": True,
+    "peer_port": 45737,
+    # Re-announce and heartbeat every known peer on this cadence.
+    "peer_announce_seconds": 300,
+    # A peer heard from within this window counts as "current". Two announce
+    # intervals by default, so one dropped broadcast is not a demotion.
+    "peer_current_seconds": 600,
+    # Heard from within this window but not the one above: "recent". Older than
+    # this: "other", kept as history.
+    "peer_recent_seconds": 86400,
+    "peer_record_path": "~/Library/Application Support/net-dns-monitor/peers.json",
 }
 
 
@@ -104,6 +133,12 @@ def load_config(path: str) -> dict:
                 f"character-by-character by the code that consumes it."
             )
 
-    config["reports_dir"] = os.path.expanduser(config["reports_dir"])
-    config["resolution_log_path"] = os.path.expanduser(config["resolution_log_path"])
+    for path_key in (
+        "reports_dir",
+        "resolution_log_path",
+        "forensic_log_path",
+        "forensic_episodes_dir",
+        "peer_record_path",
+    ):
+        config[path_key] = os.path.expanduser(config[path_key])
     return config
