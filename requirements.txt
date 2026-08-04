@@ -1,5 +1,5 @@
 # Runtime deps for the frozen app. Pinned exactly on purpose: this is a
-# remote-less, CI-less desktop app whose launcher re-runs `pip install -r` on
+# remote-less desktop app whose launcher re-runs `pip install -r` on
 # every start (scripts/start.sh), so two people installing weeks apart would
 # otherwise freeze different versions into their bundles. The old
 # `anthropic>=0.40.0` floor had already drifted to 0.117.0, across many

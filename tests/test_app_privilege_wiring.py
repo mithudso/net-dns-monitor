@@ -24,7 +24,13 @@ def _no_real_window(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_privilege_calls(monkeypatch):
-    """A test that reached the real functions would prompt for a password."""
+    """A test that reached the real functions would prompt for a password.
+
+    `granted_commands_now` is the one the app asks -- a single `sudo -l` listing
+    answers both "is it granted" and "which interfaces" -- so that is what gets
+    stubbed. Default: nothing granted.
+    """
+    monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: [])
     monkeypatch.setattr(privileges, "is_granted", lambda *a, **k: False)
     monkeypatch.setattr(privileges, "dhcp_interfaces", lambda *a, **k: ["en0", "en9"])
     monkeypatch.setattr(privileges, "primary_interface", lambda *a, **k: "en9")
@@ -40,14 +46,35 @@ def _no_real_privilege_calls(monkeypatch):
     )
 
 
-def build_app(tmp_path):
-    return NetDnsMonitorApp(config_path=str(tmp_path / "no-config.yaml"))
+def grants(*specs):
+    """A `sudo -l` listing, already parsed, in which `specs` are granted."""
+    return list(specs)
+
+
+MDNS = "/usr/bin/killall -HUP mDNSResponder"
+
+
+def build_app(tmp_path, probed=True):
+    """`probed=True` by default: Grant refuses to prompt until the launch probe has
+    landed, and most tests here are about what happens after that point.
+    """
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-config.yaml"))
+    if probed:
+        app.privileges_probed = True
+        app.dhcp_interfaces = ["en0", "en9"]
+    return app
 
 
 def finish(app):
-    """Let the worker finish, then fold its result in on this thread."""
-    if app._privilege_thread is not None:
-        app._privilege_thread.join(timeout=5)
+    """Let both workers finish, then fold their results in on this thread.
+
+    Two handles, not one: the status probe and a grant/revoke used to share a
+    thread slot, which made an early Grant click report "Still working on the
+    previous permission change" when no permission change was in progress.
+    """
+    for thread in (app._privilege_status_thread, app._privilege_thread):
+        if thread is not None:
+            thread.join(timeout=5)
     app._drain_privilege_results()
 
 
@@ -92,16 +119,45 @@ def test_the_prompt_does_not_run_on_the_run_loop(tmp_path, monkeypatch):
     finish(app)
 
 
-def test_clicking_grant_before_the_launch_probe_lands_does_not_block_the_run_loop(
+def test_clicking_grant_before_the_launch_probe_lands_is_refused_not_approximated(
     tmp_path, monkeypatch
 ):
-    """`self.dhcp_interfaces` is empty until the launch probe drains through
-    ui_tick, so this is the ordinary startup race -- open the window, click Grant.
+    """The consent defect this pins, which the first fix introduced.
 
-    The first version fell back to `privileges.dhcp_interfaces()` inline, on the
-    run loop, which shells out to `ifconfig -l` with a 5-second timeout: the window
-    and all six timers would freeze for up to five seconds. The worker enumerates
-    instead.
+    `self.dhcp_interfaces` is empty until the launch probe drains, so this is the
+    ordinary startup race: open the window, click Grant. v1 shelled out to
+    `ifconfig -l` inline on the run loop (freezing the window for up to 5s). v2
+    moved that to the worker, which was worse in a different way -- it printed
+    `explanation([])`, listing only the mDNSResponder command, while the worker
+    re-enumerated and installed the ipconfig rules as well. Someone would have
+    authenticated for a grant strictly larger than the one they were shown, in the
+    one place where disclosure-before-consent is the entire safety property.
+
+    So it refuses and says why. No dialog is raised, and nothing is installed.
+    """
+    monkeypatch.setattr(
+        privileges,
+        "grant",
+        lambda *a, **k: pytest.fail("must not prompt before the interface list is known"),
+    )
+    app = build_app(tmp_path, probed=False)
+    output = []
+    app._append_output = output.append
+    assert app.dhcp_interfaces == []
+
+    app.handle_dashboard_action("grant_privileges")
+
+    text = "".join(output)
+    assert "try again in a moment" in text
+    # The consent text must not have been printed at all.
+    assert "any process running as you" not in text
+    assert app._privilege_thread is None
+    finish(app)
+
+
+def test_the_early_refusal_does_not_shell_out_on_the_run_loop(tmp_path, monkeypatch):
+    """The other half of the same history: whatever it does instead of prompting, it
+    must not be a subprocess on the AppKit main thread.
     """
     called_on = []
     monkeypatch.setattr(
@@ -109,19 +165,40 @@ def test_clicking_grant_before_the_launch_probe_lands_does_not_block_the_run_loo
         "dhcp_interfaces",
         lambda *a, **k: called_on.append(threading.current_thread().name) or ["en0"],
     )
-    monkeypatch.setattr(
-        privileges, "grant", lambda *a, **k: {"ok": True, "cancelled": False, "message": "Granted."}
-    )
-    app = build_app(tmp_path)
+    app = build_app(tmp_path, probed=False)
     app._append_output = lambda text: None
-    assert app.dhcp_interfaces == []
 
     app.handle_dashboard_action("grant_privileges")
-    main_thread_calls = [name for name in called_on if name == threading.current_thread().name]
-    assert main_thread_calls == []
-
+    assert threading.current_thread().name not in called_on
     finish(app)
-    assert called_on and called_on[0].startswith("privilege-")
+
+
+def test_the_grant_installs_exactly_the_list_that_was_shown(tmp_path, monkeypatch):
+    """Not a re-enumerated one. Re-enumerating in the worker was how the installed
+    grant could be larger than the printed one.
+    """
+    seen = {}
+
+    def fake_grant(user, interfaces, **kwargs):
+        seen["interfaces"] = list(interfaces)
+        return {"ok": True, "cancelled": False, "message": "Granted."}
+
+    monkeypatch.setattr(privileges, "grant", fake_grant)
+    # Not banned outright: re-reading the machine's interfaces *after* the grant is
+    # how the status row refreshes, and that is fine. What must not happen is the
+    # installed list being derived from anything other than what was consented to.
+    monkeypatch.setattr(privileges, "dhcp_interfaces", lambda *a, **k: ["en0", "en9", "en5"])
+    app = build_app(tmp_path)
+    app.dhcp_interfaces = ["en0"]
+    shown = []
+    app._append_output = shown.append
+
+    app.handle_dashboard_action("grant_privileges")
+    finish(app)
+
+    assert seen["interfaces"] == ["en0"]
+    assert "ipconfig set en0 DHCP" in "".join(shown)
+    assert "en5" not in "".join(shown)
 
 
 def test_a_successful_grant_updates_the_status_and_reports_it(tmp_path, monkeypatch):
@@ -131,7 +208,7 @@ def test_a_successful_grant_updates_the_status_and_reports_it(tmp_path, monkeypa
         lambda *a, **k: {"ok": True, "cancelled": False, "message": "Granted. en0 covered."},
     )
     # The re-probe after granting has to see the new state, not the old one.
-    monkeypatch.setattr(privileges, "is_granted", lambda *a, **k: True)
+    monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: grants(MDNS))
     app = build_app(tmp_path)
     output = []
     app._append_output = output.append
@@ -168,7 +245,7 @@ def test_the_status_is_re_probed_rather_than_assumed_from_the_return_value(tmp_p
     monkeypatch.setattr(
         privileges, "grant", lambda *a, **k: {"ok": True, "cancelled": False, "message": "Granted."}
     )
-    monkeypatch.setattr(privileges, "is_granted", lambda *a, **k: False)
+    monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: [])
     app = build_app(tmp_path)
     app._append_output = lambda text: None
     app.handle_dashboard_action("grant_privileges")
@@ -249,13 +326,16 @@ def test_the_launch_probe_runs_off_the_run_loop_and_says_nothing(tmp_path):
     """Two subprocesses, so not inline -- and no announcement, because telling
     someone at every login that they have not granted a permission is nagging.
     """
-    app = build_app(tmp_path)
+    app = build_app(tmp_path, probed=False)
     output = []
     app._append_output = output.append
     app._refresh_privilege_status()
+    assert app._privilege_status_thread is not None
+    assert app._privilege_status_thread.daemon is True
     finish(app)
     assert app.dhcp_interfaces == ["en0", "en9"]
     assert app.primary_dhcp_interface == "en9"
+    assert app.privileges_probed is True
     assert output == []
 
 

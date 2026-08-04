@@ -810,9 +810,30 @@ whole machine. It never edits `/etc/sudoers` itself; if the include line is
 missing it explains that and stops.
 
 The current state is shown in the window's **Permissions** section, checked with
-`sudo -n -l <command>`, which asks whether a command is permitted rather than
-running it. (Checking by running the real command would restart the DNS responder
-every time the window refreshed.)
+`sudo -n -k -l` — which lists the rules rather than running anything. (Checking by
+running the real command would restart the DNS responder every time the window
+refreshed.)
+
+It matches the rule in that listing rather than trusting sudo's exit status, and
+that distinction matters. `sudo -l <command>` exits 0 whenever the command is
+permitted *by policy*; macOS ships `%admin ALL=(ALL) ALL`, so for any admin
+account `killall` is already permitted and merely password-gated. An exit-status
+check therefore reports "granted" with no grant file at all — for anyone holding a
+cached credential from a recent terminal `sudo`, and (per `sudoers(5)`: "if the
+NOPASSWD tag is applied to any of a user's entries for the current host, the user
+will be able to run 'sudo -l' without a password") for anyone with any unrelated
+NOPASSWD rule from MDM or a VPN helper. Both produce the same expensive failure:
+the window claims a privilege the machine lacks, and the repair then blames a rule
+that was never installed.
+
+The section also lists **the interfaces the grant covers**, read from the same
+listing, not the interfaces the machine currently has. Those diverge as soon as a
+dock or USB adapter appears, and when the default route moves onto an interface the
+grant does not include, the row says so and tells you to re-grant.
+
+Status is re-probed whenever the window is opened, not just after a Grant or
+Revoke — the file itself invites `sudo rm`, so the privilege can disappear without
+this app being involved.
 
 **With the grant:** "Flush DNS cache" restarts mDNSResponder instead of
 reporting a partial result, and `renew_dhcp_lease` runs on the default-route

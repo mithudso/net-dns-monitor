@@ -401,6 +401,99 @@ def test_an_empty_pane_says_which_kind_of_empty_it_is(tmp_path):
     assert "switched off" in str(app._dashboard.log_view.string())
 
 
+def test_a_control_does_not_claim_a_re_read_that_never_happened(tmp_path):
+    """`log_view_enabled: false` still builds the log control buttons, and
+    `_start_log_read` returns immediately. The buttons used to print "re-reading the
+    last 1m" anyway -- and with the viewer off, no read would ever happen.
+    """
+    app = build_app(tmp_path, reader_returning(UNREACHABLE))
+    app.config["log_view_enabled"] = False
+    app.open_dashboard()
+    output = []
+    app._append_output = output.append
+
+    app.handle_dashboard_action("log_refresh")
+    app.handle_dashboard_action("log_toggle_level")
+
+    text = "".join(output)
+    assert "switched off" in text
+    assert "Re-reading the system log" not in text
+    assert "re-reading the last" not in text
+    assert app.log_reader.calls == []
+
+
+def test_the_level_button_still_reports_the_new_filter_when_no_read_ran(tmp_path):
+    """The filter did change even though nothing was re-read, so saying nothing at
+    all would be its own lie.
+    """
+    app = build_app(tmp_path, reader_returning(UNREACHABLE))
+    app.config["log_view_enabled"] = False
+    app.open_dashboard()
+    output = []
+    app._append_output = output.append
+    app.handle_dashboard_action("log_toggle_level")
+    assert app.log_errors_only is False
+    assert "all levels" in "".join(output).lower()
+
+
+def test_a_skipped_read_says_one_is_already_in_flight(tmp_path):
+    class FakeThread:
+        daemon = True
+
+        def is_alive(self):
+            return True
+
+    app = build_app(tmp_path, reader_returning(UNREACHABLE))
+    app._log_thread = FakeThread()
+    output = []
+    app._append_output = output.append
+    app.handle_dashboard_action("log_refresh")
+    assert "already in flight" in "".join(output)
+
+
+def test_an_all_filtered_pane_says_so_rather_than_looking_like_a_quiet_network(tmp_path):
+    """Every captured entry matched a noise pattern. An empty pane reading "no
+    network errors yet" would be indistinguishable from a healthy network.
+    """
+    app = build_app(tmp_path, reader_returning(CROWDSTRIKE_NOISE))
+    app._append_output = lambda text: None
+    read_now(app)
+    app.open_dashboard()
+    app._refresh_log_pane()
+
+    pane = str(app._dashboard.log_view.string())
+    assert "filtered out" in pane
+    assert "1 entries captured" in pane
+    assert "No network errors or faults" not in pane
+
+
+def test_the_forensic_record_is_not_truncated_by_the_announce_cap(tmp_path):
+    """`log_view_announce_limit` caps what is printed into the results pane. An
+    episode write-up that silently kept 3 of 12 error lines would be evidence with a
+    hole in it, and the "...and N more" note goes to the pane, not the episode.
+    """
+    lines = [
+        f"2026-08-04 12:5{i}:00.000 E  configd[1:a] [com.apple.network:] distinct failure {i}"
+        for i in range(6)
+    ]
+    app = build_app(tmp_path, reader_returning(*lines))
+    app.config["log_view_announce_limit"] = 2
+    app.forensic = ForensicRecorder(
+        journal_path=str(tmp_path / "journal.jsonl"),
+        episodes_dir=str(tmp_path / "episodes"),
+    )
+    app.forensic.note("down", "ping", reason="no reply", result="episode open")
+    announced = []
+    app._append_output = announced.append
+    read_now(app)
+
+    journal = (tmp_path / "journal.jsonl").read_text(encoding="utf-8")
+    for index in range(6):
+        assert f"distinct failure {index}" in journal, index
+    # The pane, by contrast, is capped.
+    assert "and 4 more" in "".join(announced)
+
+
 def test_the_pane_refresh_is_harmless_with_no_window_open(tmp_path):
     """ui_tick calls this every second for the life of the process, and the window
     is created lazily on first open.

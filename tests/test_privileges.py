@@ -5,10 +5,12 @@ authentication dialog, reads `/etc/sudoers`, or writes to `/etc/sudoers.d` -- a
 test suite that did any of those would be prompting for a password on every run
 and modifying the machine it is testing on.
 
-The generated file was checked against the real `visudo -cf` once, by hand, and
-`sudo -n -l` was confirmed to report the grant without executing the command. What
-these tests hold in place is everything around that: which commands are granted,
-what is refused, and how each failure is explained.
+Checked by hand against the real thing, once: `visudo -cf` accepts the generated
+file, `sudo -n -k -l` lists rules without executing anything, and the AppleScript
+layer was run with the privileges clause stripped to prove the string literal
+parses and the includedir guard fires before any write. What these tests hold in
+place is everything around that: which commands are granted, what is refused, how
+the grant is detected, and how each failure is explained.
 """
 
 from types import SimpleNamespace
@@ -17,6 +19,7 @@ import pytest
 
 from netdnsmonitor.privileges import (
     INVALID_SUDOERS,
+    MDNS_HUP,
     MISSING_INCLUDEDIR,
     SUDOERS_DIR,
     SUDOERS_PATH,
@@ -26,8 +29,11 @@ from netdnsmonitor.privileges import (
     explanation,
     grant,
     granted_commands,
+    granted_interfaces,
+    granted_interfaces_from,
     install_command,
     is_granted,
+    parse_granted_commands,
     primary_interface,
     revoke,
     status_command,
@@ -211,49 +217,110 @@ def test_the_script_never_edits_the_main_sudoers_file():
 # --- checking the grant ----------------------------------------------------
 
 
-def test_the_status_check_asks_whether_the_command_is_allowed_rather_than_running_it():
-    """`sudo -l <command>` reports permission without executing. Checking by
-    running the real command would restart the DNS responder every time the window
-    refreshed.
+def test_the_status_check_lists_rules_rather_than_asking_about_one_command():
+    """`sudo -l` with no command, because the answer has to come from the listing.
+
+    Two earlier versions asked `sudo -l <command>` and read the exit status, and
+    both were wrong for reasons documented in sudo's own man pages -- see
+    test_the_grant_is_detected_by_its_rule_not_by_policy below.
     """
-    command = status_command()
-    assert command[:4] == ["/usr/bin/sudo", "-n", "-k", "-l"]
-    assert command[4:] == ["/usr/bin/killall", "-HUP", "mDNSResponder"]
+    assert status_command() == ["/usr/bin/sudo", "-n", "-k", "-l"]
 
 
-def test_the_status_check_never_prompts():
-    """-n, so a missing grant fails immediately instead of blocking on a password
-    prompt with nobody there to answer it -- on the main thread, at that.
+def test_the_status_check_never_prompts_and_ignores_a_cached_credential():
+    """-n so a missing grant fails instead of blocking on a password prompt nobody
+    is there to answer; -k so a credential cached by a terminal `sudo` minutes ago
+    does not decide the answer.
     """
     assert "-n" in status_command()
-
-
-def test_the_status_check_ignores_a_cached_sudo_credential():
-    """The bug this pins, which shipped in the first version of this module.
-
-    `sudo -l <command>` exits 0 whenever the command is permitted *by policy*, and
-    macOS ships `%admin ALL=(ALL) ALL` -- so for an admin account `killall` is
-    already permitted, merely password-gated. With only `-n`, the check therefore
-    passed for anyone who had run `sudo` in a terminal in the last few minutes,
-    reporting "granted" with no grant file installed at all: the window claimed a
-    privilege the machine did not have, and `flush_dns_cache` took its granted
-    branch and then blamed the (nonexistent) rule for not working.
-
-    `-k` makes sudo ignore the cached credential for this one query, so only a real
-    NOPASSWD rule exits 0. Verified on a real admin account: without a grant,
-    `sudo -n -k -l /usr/bin/killall -HUP mDNSResponder` exits 1.
-
-    Asserted as a property of the argv because the semantics live in sudo, and
-    every consumer test here injects a fixed returncode -- so nothing else in the
-    suite can catch the flag going missing again.
-    """
     assert "-k" in status_command()
 
 
-def test_a_zero_exit_from_sudo_means_granted():
-    assert is_granted(recorder(ok())) is True
-    assert is_granted(recorder(ok(returncode=1))) is False
+SUDO_LIST_WITH_GRANT = """Matching Defaults entries for mitch.hudson on host:
+    !visiblepw, always_set_home
+
+User mitch.hudson may run the following commands on host:
+    (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder
+    (root) NOPASSWD: /usr/sbin/ipconfig set en0 DHCP
+    (root) NOPASSWD: /usr/sbin/ipconfig set en9 DHCP
+    (ALL) ALL
+"""
+
+# The exact machine state that defeated both earlier versions of this check: an
+# unrelated NOPASSWD rule (from MDM, a VPN helper, a dev convenience entry) plus
+# the `%admin ALL=(ALL) ALL` macOS ships. sudoers(5): "if the NOPASSWD tag is
+# applied to any of a user's entries for the current host, the user will be able
+# to run 'sudo -l' without a password." So the listing succeeds, `killall` is
+# policy-permitted, and an exit-status check reports a grant that is not there.
+SUDO_LIST_WITHOUT_GRANT = """User mitch.hudson may run the following commands on host:
+    (root) NOPASSWD: /usr/local/bin/some-vpn-helper
+    (ALL) ALL
+"""
+
+
+def test_granted_commands_are_read_out_of_the_listing():
+    specs = parse_granted_commands(SUDO_LIST_WITH_GRANT)
+    assert "/usr/bin/killall -HUP mDNSResponder" in specs
+    assert "/usr/sbin/ipconfig set en0 DHCP" in specs
+    # `(ALL) ALL` is not a NOPASSWD entry, so it must not be read as one.
+    assert "ALL" not in specs
+
+
+def test_several_specs_on_one_line_are_split():
+    """sudo renders a rule listing more than one command as a comma-separated line."""
+    specs = parse_granted_commands(
+        "    (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder, /bin/ls\n"
+    )
+    assert specs == ["/usr/bin/killall -HUP mDNSResponder", "/bin/ls"]
+
+
+def test_the_grant_is_detected_by_its_rule_not_by_policy():
+    """The HIGH finding this pins, which survived one round of fixing.
+
+    v1 ran `sudo -n -l <command>` and trusted the exit status. sudo(8): "the exit
+    value will only be 0 if the command is permitted by the security policy" -- and
+    macOS ships `%admin ALL=(ALL) ALL`, so `killall` is permitted for any admin,
+    merely password-gated. Anyone with a cached credential got a false "granted".
+
+    v2 added `-k`, which fixed only that subcase. Per sudoers(5), *any* NOPASSWD
+    entry lets `sudo -l` run without a password, so on a machine with an unrelated
+    NOPASSWD rule the listing still succeeds and the exit status is still 0 with no
+    grant file anywhere.
+
+    Both produce the same expensive failure: the window claims a privilege the
+    machine does not have, `flush_dns_cache` takes its granted branch, and the
+    outcome blames a sudoers rule that was never installed. Reading the rule out of
+    the listing cannot drift that way.
+    """
+    assert " ".join(MDNS_HUP) in parse_granted_commands(SUDO_LIST_WITH_GRANT)
+    assert " ".join(MDNS_HUP) not in parse_granted_commands(SUDO_LIST_WITHOUT_GRANT)
+
+    assert is_granted(recorder(ok(SUDO_LIST_WITH_GRANT))) is True
+    # Exit 0, an unrelated NOPASSWD rule, no grant -- False is the only right answer.
+    assert is_granted(recorder(ok(SUDO_LIST_WITHOUT_GRANT))) is False
+
+
+def test_a_listing_that_needs_a_password_means_not_granted():
+    """No NOPASSWD entry exists for this host at all, including ours."""
+    assert is_granted(recorder(ok("sudo: a password is required", returncode=1))) is False
     assert is_granted(recorder(OSError("no sudo"))) is False
+
+
+def test_the_covered_interfaces_come_from_the_grant_not_from_the_hardware():
+    """The sudoers file enumerates what existed at grant time. Dock a laptop and
+    `dhcp_interfaces()` grows a name the grant says nothing about, so reporting the
+    live enumeration as "covered" is a claim the file does not support -- and it is
+    wrong exactly when the DHCP step is about to fail on the new interface.
+    """
+    assert granted_interfaces(recorder(ok(SUDO_LIST_WITH_GRANT))) == ["en0", "en9"]
+    assert granted_interfaces(recorder(ok(SUDO_LIST_WITHOUT_GRANT))) == []
+
+
+def test_a_forged_interface_name_in_the_listing_is_ignored():
+    """The listing is another program's output being parsed, and the result is shown
+    to the user as what root may do.
+    """
+    assert granted_interfaces_from(["/usr/sbin/ipconfig set ../../etc DHCP"]) == []
 
 
 # --- outcomes --------------------------------------------------------------
@@ -420,4 +487,20 @@ def test_the_permissions_section_says_which_things_sudo_will_never_fix():
 def test_the_granted_section_names_the_interface_a_renewal_would_target():
     rows = dict(status_rows(granted=True, interfaces=["en0", "en9"], primary="en9"))
     assert "en9" in rows["Renew DHCP lease"]
-    assert rows["Interfaces covered"] == "en0, en9"
+    assert rows["Interfaces the grant covers"] == "en0, en9"
+
+
+def test_a_default_route_the_grant_does_not_cover_is_called_out():
+    """Dock a laptop after granting: the default route moves to a new interface the
+    sudoers file never mentioned. "yes -- on en5" would be false, and the DHCP step
+    is about to fail on exactly that interface.
+    """
+    rows = dict(status_rows(granted=True, interfaces=["en0"], primary="en5"))
+    assert rows["Renew DHCP lease"].startswith("no")
+    assert "en5" in rows["Renew DHCP lease"]
+    assert "Re-grant" in rows["Renew DHCP lease"]
+
+
+def test_no_default_route_is_reported_as_unknown_rather_than_yes():
+    rows = dict(status_rows(granted=True, interfaces=["en0"], primary=None))
+    assert rows["Renew DHCP lease"].startswith("unknown")

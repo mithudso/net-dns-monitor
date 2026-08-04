@@ -296,7 +296,17 @@ class NetDnsMonitorApp(rumps.App):
         # grant or revoke, and once at launch.
         self.privileges_granted = False
         self.dhcp_interfaces: list[str] = []
+        # What the installed grant covers, which is not the same set as the
+        # interfaces the machine has -- see privileges.granted_interfaces.
+        self.granted_interfaces: list[str] = []
         self.primary_dhcp_interface: Optional[str] = None
+        # False until the launch probe has answered. Clicking Grant before then
+        # would show a consent list built from an empty interface set.
+        self.privileges_probed = False
+        # Two handles, not one. They used to share `_privilege_thread`, so a Grant
+        # click during the launch probe was refused with "Still working on the
+        # previous permission change" -- and no permission change was in progress.
+        self._privilege_status_thread: Optional[threading.Thread] = None
         self._privilege_thread: Optional[threading.Thread] = None
         self._privilege_results: queue.Queue = queue.Queue()
 
@@ -812,8 +822,14 @@ class NetDnsMonitorApp(rumps.App):
         self._drain_log_results()
         self._start_log_read(self.config["log_view_poll_window"])
 
-    def _start_log_read(self, window: str, announce: bool = True):
+    def _start_log_read(self, window: str, announce: bool = True) -> bool:
         """Kick a read on a worker thread, unless one is already running.
+
+        Returns whether a read was actually started. Callers that announce a re-read
+        have to check: this returns early when the viewer is switched off, and while
+        a previous read is still running, and the buttons used to print "re-reading
+        the last 1m" regardless -- so with `log_view_enabled: false` the controls
+        claimed work that would never happen.
 
         Skipping rather than queueing, the same choice the ping and resolution
         workers make: a read that outran its cadence means the machine is busy,
@@ -829,9 +845,9 @@ class NetDnsMonitorApp(rumps.App):
         news.
         """
         if not self.config["log_view_enabled"]:
-            return
+            return False
         if self._log_thread is not None and self._log_thread.is_alive():
-            return
+            return False
         self._log_thread = threading.Thread(
             target=self._run_log_read,
             args=(window, announce),
@@ -839,6 +855,7 @@ class NetDnsMonitorApp(rumps.App):
             daemon=True,
         )
         self._log_thread.start()
+        return True
 
     def _run_log_read(self, window: str, announce: bool = True):
         """Worker thread. Reads, parses, and hands the result over -- it touches
@@ -904,7 +921,11 @@ class NetDnsMonitorApp(rumps.App):
         self._append_output("\n".join(lines) + "\n")
 
         if self.forensic.is_open:
-            for row in shown:
+            # `rows`, not `shown`: log_view_announce_limit caps how much is printed
+            # into the results pane, and an episode write-up that silently kept 3 of
+            # 12 error lines would be evidence with a hole in it -- the "...and N
+            # more" note goes to the pane, not to the episode.
+            for row in rows:
                 self.forensic.note(
                     forensic_log.OBSERVATION,
                     "system_log",
@@ -941,6 +962,7 @@ class NetDnsMonitorApp(rumps.App):
             errors=view["errors"],
             query=query,
             error=self.log_error,
+            captured=view["captured"],
         )
         if status != self._log_status_text:
             self._log_status_text = status
@@ -959,6 +981,16 @@ class NetDnsMonitorApp(rumps.App):
             return self.log_error + "\n"
         if query.strip():
             return f"Nothing in the captured log matches {query.strip()!r}.\n"
+        captured = len(self.log_buffer.entries())
+        if captured:
+            # Captured, then filtered away. Distinguished from a silent log because
+            # this is the state that most resembles a healthy network and least is:
+            # entries exist, and every one of them was suppressed.
+            return (
+                f"{captured} entries captured, all of them filtered out.\n"
+                "Every one matched log_view_noise_patterns"
+                + (" or is below error level.\n" if self.log_errors_only else ".\n")
+            )
         if self.log_errors_only:
             return (
                 "No network errors or faults in the system log yet.\n"
@@ -968,6 +1000,14 @@ class NetDnsMonitorApp(rumps.App):
 
     def _log_level_title(self) -> str:
         return "Errors only" if self.log_errors_only else "All levels"
+
+    def _log_read_refused_reason(self) -> str:
+        """Why `_start_log_read` declined, in words, so a control never claims work
+        it did not do.
+        """
+        if not self.config["log_view_enabled"]:
+            return "The system log viewer is switched off (log_view_enabled).\n"
+        return "A read is already in flight; this one was skipped.\n"
 
     def _toggle_log_level(self):
         """Switch between errors-and-faults and every network entry.
@@ -981,7 +1021,14 @@ class NetDnsMonitorApp(rumps.App):
         if self._dashboard is not None:
             self._dashboard.set_log_level_title(self._log_level_title())
         window = self.config["log_view_poll_window"]
-        self._start_log_read(window)
+        if not self._start_log_read(window):
+            # The filter flipped, but nothing was re-read -- say so rather than
+            # describing a read that did not happen.
+            self._append_output(
+                f"System log filter is now {self._log_level_title().lower()}. "
+                + self._log_read_refused_reason()
+            )
+            return
         if self.log_errors_only:
             self._append_output(
                 f"System log: errors and faults only, re-reading the last {window}.\n"
@@ -998,24 +1045,35 @@ class NetDnsMonitorApp(rumps.App):
     def _refresh_privilege_status(self):
         """Re-probe what is granted, on a worker thread.
 
-        Two subprocesses (`sudo -n -l` and `ifconfig -l`), so not on the run loop,
-        and cached rather than repeated: the window repaints every second and this
-        answer changes only when someone clicks Grant or Revoke.
+        Three subprocesses (`sudo -n -k -l`, `ifconfig -l`, `route get default`), so
+        not on the run loop, and cached rather than repeated -- the window repaints
+        every second.
+
+        Called at launch and again whenever the window is opened. Not only after a
+        Grant or Revoke click: the sudoers file this app writes tells its reader
+        "Delete this file to withdraw the grant", so the privilege can disappear
+        without this app being involved at all, and a status cached from launch would
+        keep claiming it for the rest of the session.
         """
-        if self._privilege_thread is not None and self._privilege_thread.is_alive():
+        if self._privilege_status_thread is not None and self._privilege_status_thread.is_alive():
             return
-        self._privilege_thread = threading.Thread(
+        self._privilege_status_thread = threading.Thread(
             target=self._run_privilege_status, name="privilege-status", daemon=True
         )
-        self._privilege_thread.start()
+        self._privilege_status_thread.start()
 
     def _run_privilege_status(self):
         try:
+            # One `sudo -l` listing answers both questions, so this does not pay for
+            # a second subprocess to find out which interfaces are covered.
+            granted_commands = privileges.granted_commands_now()
             self._privilege_results.put(
                 {
-                    "granted": privileges.is_granted(),
+                    "granted": " ".join(privileges.MDNS_HUP) in granted_commands,
                     "interfaces": privileges.dhcp_interfaces(),
+                    "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
                     "primary": privileges.primary_interface(),
+                    "probed": True,
                 }
             )
         except Exception:  # noqa: BLE001 - a status probe must not kill anything
@@ -1038,6 +1096,8 @@ class NetDnsMonitorApp(rumps.App):
             # Absent from a grant/revoke result, which has no reason to re-probe the
             # routing table; keep the last known answer rather than blanking it.
             self.primary_dhcp_interface = result.get("primary", self.primary_dhcp_interface)
+            self.granted_interfaces = result.get("granted_interfaces", self.granted_interfaces)
+            self.privileges_probed = self.privileges_probed or result.get("probed", False)
             if result.get("message"):
                 self._append_output(result["message"] + "\n")
 
@@ -1052,14 +1112,27 @@ class NetDnsMonitorApp(rumps.App):
         if self._privilege_thread is not None and self._privilege_thread.is_alive():
             self._append_output("Still working on the previous permission change.\n")
             return
-        # Last known list only -- deliberately NOT `or privileges.dhcp_interfaces()`.
-        # That fallback shelled out to `ifconfig -l` right here, and this method runs
-        # on the run loop: `self.dhcp_interfaces` is empty until the launch probe
-        # drains, so clicking Grant early (or on a machine with no en* interface)
-        # blocked the window and all six timers for up to the 5s subprocess timeout.
-        # The worker re-enumerates instead. Cost of doing it this way: in that early
-        # case the explanation below lists only the mDNSResponder command until the
-        # worker fills the rest in, which is a worse explanation but not a wrong one.
+
+        # Refused, not approximated, until the launch probe has answered.
+        #
+        # `self.dhcp_interfaces` is empty until then, and an earlier version went
+        # ahead and printed `explanation([])` -- which lists only the mDNSResponder
+        # command -- while the worker re-enumerated and installed the ipconfig rules
+        # as well. That has someone authenticating at the macOS dialog for a grant
+        # strictly larger than the one they were shown, in the one place where
+        # "disclosure precedes the point of no return" is the whole safety property.
+        # A short wait is a much smaller cost than an incomplete consent list.
+        #
+        # It cannot deadlock: the probe is kicked off in launch_tick and takes at
+        # most three 5s subprocesses.
+        if not self.privileges_probed:
+            self._refresh_privilege_status()
+            self._append_output(
+                "Still working out which interfaces to authorise -- try again in a "
+                "moment, so the list you approve is the list that gets installed.\n"
+            )
+            return
+
         interfaces = list(self.dhcp_interfaces)
         self._append_output("\n" + privileges.explanation(interfaces) + "\n")
         self._privilege_thread = threading.Thread(
@@ -1072,13 +1145,17 @@ class NetDnsMonitorApp(rumps.App):
 
     def _run_grant(self, interfaces: list):
         try:
-            # Enumerated here rather than on the run loop; see _grant_privileges.
-            interfaces = interfaces or privileges.dhcp_interfaces()
+            # Exactly the list that was shown and consented to -- no re-enumeration
+            # here. Re-enumerating was how the installed grant could end up larger
+            # than the one printed; _grant_privileges now refuses to prompt until it
+            # has a real list instead.
             outcome = privileges.grant(getpass.getuser(), interfaces)
+            granted_commands = privileges.granted_commands_now()
             self._privilege_results.put(
                 {
-                    "granted": privileges.is_granted(),
+                    "granted": " ".join(privileges.MDNS_HUP) in granted_commands,
                     "interfaces": privileges.dhcp_interfaces(),
+                    "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
                     "message": outcome["message"],
                 }
             )
@@ -1104,10 +1181,12 @@ class NetDnsMonitorApp(rumps.App):
     def _run_revoke(self):
         try:
             outcome = privileges.revoke()
+            granted_commands = privileges.granted_commands_now()
             self._privilege_results.put(
                 {
-                    "granted": privileges.is_granted(),
+                    "granted": " ".join(privileges.MDNS_HUP) in granted_commands,
                     "interfaces": self.dhcp_interfaces,
+                    "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
                     "message": outcome["message"],
                 }
             )
@@ -1156,6 +1235,10 @@ class NetDnsMonitorApp(rumps.App):
         # from config rather than from a click.
         dashboard.set_log_level_title(self._log_level_title())
         self._refresh_log_pane()
+        # Cheap (it self-skips while a probe is running) and necessary: the grant can
+        # be withdrawn with `sudo rm`, which is what the file itself suggests, and a
+        # status cached at launch would keep claiming it all session.
+        self._refresh_privilege_status()
         dashboard.show(activate=activate)
 
     def open_settings(self):
@@ -1244,7 +1327,8 @@ class NetDnsMonitorApp(rumps.App):
                 log_error=self.log_error,
                 permissions=privileges.status_rows(
                     granted=self.privileges_granted,
-                    interfaces=self.dhcp_interfaces,
+                    # What the grant covers, not what the machine has.
+                    interfaces=self.granted_interfaces,
                     primary=self.primary_dhcp_interface,
                 ),
             )
@@ -1297,8 +1381,10 @@ class NetDnsMonitorApp(rumps.App):
         # this method does not recognise falls through to step_by_name and reports
         # "Unknown step", i.e. a button that looks wired and does nothing useful.
         if action_id == "log_refresh":
-            self._start_log_read(self.config["log_view_poll_window"])
-            self._append_output("Re-reading the system log...\n")
+            if self._start_log_read(self.config["log_view_poll_window"]):
+                self._append_output("Re-reading the system log...\n")
+            else:
+                self._append_output(self._log_read_refused_reason())
             return
         if action_id == "log_toggle_level":
             self._toggle_log_level()

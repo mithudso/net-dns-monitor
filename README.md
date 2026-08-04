@@ -18,12 +18,16 @@ misconfigured upstream DNS server, or a captive portal -- those need a
 human. The diagnostic report is the primary deliverable for most real
 incidents, not a fallback.
 
-Repairs that need elevated privilege (renewing a DHCP lease, toggling a
-network interface) are stubbed as `NEEDS_PRIVILEGE` in this MVP rather than
-executed, because a sandboxed menu-bar app doesn't have the rights to do
-them. See `netdnsmonitor/repair_executor.py` and the design plan's
-sandbox/privileged-helper discussion for the path to adding a proper
-`SMAppService` helper later.
+Repairs that need root are no longer unconditionally stubbed. **Grant elevated
+permissions** in the window installs a narrow `/etc/sudoers.d` rule -- two exact
+commands, no wildcards, no shell -- after which the DNS cache flush completes and
+`renew_dhcp_lease` runs. Without the grant both still report why they cannot.
+See [Permissions](#permissions) for what that grant costs, and
+`netdnsmonitor/privileges.py` for the reasoning.
+
+Toggling a network interface stays unautomated on purpose, not for want of
+permission: down-then-up cannot be one command, and two risks leaving the machine
+offline with no network to fix it over.
 
 ## Setup
 
@@ -150,9 +154,10 @@ dns -crowdstrike      DNS lines that are not from CrowdStrike
 
 Four controls sit above the pane: **Refresh now**, **Errors only / All levels**
 (the label states the filter in force, not the action), **Clear search**, and
-**Empty buffer**. The status line under them tells "nothing captured" apart from
-"nothing matched your search" and from "the read failed" -- all three otherwise
-look like a quiet network.
+**Empty buffer**. The status line under them separates the four different reasons
+a pane can be empty -- the read failed, nothing was captured, everything captured
+was filtered out, or your search excluded it all -- because otherwise they all look
+like a quiet network, and only some of them are.
 
 Four measurements shaped the defaults, all `log show` on a real machine:
 
@@ -334,6 +339,15 @@ includes `/etc/sudoers.d` (otherwise the file would be ignored and the button
 would be lying) and validates the file with `visudo -cf` -- an invalid file in
 `sudoers.d` breaks `sudo` for the whole machine. It never edits `/etc/sudoers`
 itself; if the include line is missing it says so and stops.
+
+The Permissions section reads the grant out of `sudo -n -k -l`, matching the rule
+itself rather than trusting sudo's exit status. That distinction is not academic:
+`sudo -l <command>` exits 0 whenever a command is permitted *by policy*, and macOS
+ships `%admin ALL=(ALL) ALL`, so an exit-status check reports "granted" for any
+admin account that merely holds a cached credential — or, per `sudoers(5)`, that
+has *any* unrelated NOPASSWD rule. The section also lists the interfaces the
+installed file covers rather than the ones the machine currently has, and says so
+when the default route has moved onto an interface the grant does not include.
 
 **What it changes.** With the grant, "Flush DNS cache" also restarts
 mDNSResponder instead of reporting a partial result, and `renew_dhcp_lease` runs

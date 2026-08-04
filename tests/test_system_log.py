@@ -374,6 +374,30 @@ def test_nothing_captured_and_nothing_matched_read_differently():
     assert empty != no_match
 
 
+def test_captured_but_entirely_filtered_is_not_reported_as_nothing_captured():
+    """The state that most resembles a healthy network and least is one.
+
+    `total` is post-filter, so a quarter-hour in which every captured error matched
+    a noise pattern used to read "No network log entries captured yet." -- identical
+    to a silent log. The log was not silent; 300 entries arrived and every one was
+    suppressed.
+    """
+    silent = summarize(total=0, shown=0, errors=0, query="", error=None, captured=0)
+    filtered = summarize(total=0, shown=0, errors=0, query="", error=None, captured=300)
+    assert "no network log" in silent.lower()
+    assert "300" in filtered
+    assert "filtered out" in filtered
+    assert silent != filtered
+
+
+def test_the_view_reports_the_pre_filter_count_alongside_the_filtered_one():
+    buffer = LogBuffer()
+    buffer.add(parse_lines([UNREACHABLE, CROWDSTRIKE_NOISE]))
+    view = buffer.view(noise_patterns=DEFAULT_NOISE_PATTERNS)
+    assert view["captured"] == 2
+    assert view["total"] == 1
+
+
 def test_a_read_failure_replaces_the_counts_rather_than_hiding_behind_them():
     assert summarize(total=0, shown=0, errors=0, query="", error="boom") == "boom"
 

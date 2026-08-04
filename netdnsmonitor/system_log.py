@@ -315,16 +315,31 @@ def format_entries(entries: Iterable[dict], limit: Optional[int] = None) -> str:
     return "\n".join(format_entry(row) for row in rows) + "\n"
 
 
-def summarize(*, total: int, shown: int, errors: int, query: str, error: Optional[str]) -> str:
+def summarize(
+    *,
+    total: int,
+    shown: int,
+    errors: int,
+    query: str,
+    error: Optional[str],
+    captured: int = 0,
+) -> str:
     """The one-line status above the pane.
 
-    Says "no matches" separately from "nothing captured": a search that excludes
-    everything and a log query that returned nothing look identical in an empty
-    pane, and only one of them is a reason to worry about the network.
+    Four states, all of which produce an empty pane and only some of which say
+    anything about the network: the read failed, nothing was captured, everything
+    captured was filtered out, or the search excluded it all.
+
+    `captured` is the pre-filter count, and it exists to separate the middle two.
+    `total` is post-filter, so on its own it reports a quarter-hour in which every
+    captured error matched a noise pattern as "nothing captured yet" -- which is
+    indistinguishable from a silent log, and the log was not silent.
     """
     if error:
         return error
     if total == 0:
+        if captured:
+            return f"{captured} entries captured, all filtered out by the noise/level filters."
         return "No network log entries captured yet."
     parts = [f"{total} entries", f"{errors} error/fault"]
     if query.strip():
@@ -421,9 +436,13 @@ class LogBuffer:
         return {
             "text": format_entries(rows, limit=limit),
             "rows": rows,
+            # Post-filter, which is what the pane draws from.
             "total": len(kept),
             "shown": len(matched),
             "errors": sum(1 for entry in kept if is_error(entry)),
+            # Pre-filter. Without this the caller cannot tell "the log is quiet"
+            # from "everything captured was suppressed"; see summarize.
+            "captured": len(self._entries),
         }
 
 

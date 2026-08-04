@@ -339,34 +339,69 @@ def revoke_command() -> list[str]:
 
 
 def status_command() -> list[str]:
-    """`sudo -n -k -l <command>`: may this account run it *without a password*?
+    """`sudo -n -k -l`: list what this account may do, without prompting.
 
-    `-l` asks whether the command is permitted instead of running it, which is the
-    only acceptable way to check -- running the real command to find out would
-    restart the DNS responder every time the window refreshed. `-n` means a
-    missing grant fails immediately rather than blocking on a password prompt
-    nobody is there to answer.
+    The rules are then read out of stdout by `parse_granted_commands`. Exit status
+    cannot answer this question, and two earlier versions of this function got it
+    wrong by trying:
 
-    `-k` is the part that makes the answer mean what this module needs it to mean,
-    and leaving it out was a real bug. `sudo -l <command>` exits 0 whenever the
-    command is permitted *by policy*, and macOS ships `%admin ALL=(ALL) ALL` -- so
-    for any admin account `killall` is already permitted, just password-gated.
-    Without `-k`, `-n` then only fails while no credential is cached: run any
-    `sudo` in a terminal and for the next few minutes this check would report
-    "granted" with no grant file installed at all. The window would claim a
-    privilege the machine does not have, and `flush_dns_cache` would take its
-    granted branch and then report the "the granted sudo rule did not work"
-    message -- which sends the reader to the wrong fix entirely.
+    * `sudo -n -l <command>` exits 0 whenever the command is permitted *by
+      policy* (sudo(8): "the exit value will only be 0 if the command is permitted
+      by the security policy"), and macOS ships `%admin ALL=(ALL) ALL`. So for any
+      admin account `killall` is already permitted, merely password-gated, and the
+      check passed for anyone holding a cached credential from a recent terminal
+      `sudo`.
+    * Adding `-k` closed only that subcase. sudoers(5): "if the NOPASSWD tag is
+      applied to **any** of a user's entries for the current host, the user will be
+      able to run 'sudo -l' without a password." So on a machine with any unrelated
+      NOPASSWD rule -- one from MDM, a VPN or container helper, a dev convenience
+      entry -- the listing needs no password, `killall` is still policy-permitted,
+      and the exit status is 0 with no grant file anywhere on disk.
 
-    `-k` makes sudo ignore the cached credential for this one query, so a
-    password-gated command fails and only a NOPASSWD rule exits 0. Used with a
-    command rather than on its own, `-k` ignores the timestamp instead of removing
-    it, so this does not disturb an unrelated `sudo` session in a terminal.
+    Both failures are the same shape and it is the expensive one: the window
+    reports a privilege the machine does not have, `flush_dns_cache` takes its
+    granted branch, and the outcome then blames a sudoers rule that was never
+    installed. Reading the rule out of the listing cannot drift that way -- the
+    only thing that puts that exact line in the output is the grant.
+
+    `-n` so a missing grant fails instead of blocking on a password prompt nobody
+    is there to answer. `-k` so a cached credential does not decide the answer.
+    Used alongside `-l` rather than on its own, `-k` ignores the timestamp rather
+    than removing it, so an unrelated terminal `sudo` session is left alone.
     """
-    return [SUDO, "-n", "-k", "-l", *MDNS_HUP]
+    return [SUDO, "-n", "-k", "-l"]
 
 
-def is_granted(run_fn: RunFn = subprocess.run) -> bool:
+def parse_granted_commands(stdout: str) -> list[str]:
+    """The NOPASSWD command specs in `sudo -l` output, as whitespace-joined argv.
+
+    `sudo -l` lists entries like:
+
+        (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder
+        (ALL) ALL
+
+    Only NOPASSWD lines are of interest: a password-gated entry is exactly what
+    this module does not count as granted. Commas separate several specs on one
+    line, which is how sudo renders a rule listing more than one command.
+    """
+    specs: list[str] = []
+    for line in (stdout or "").splitlines():
+        _, marker, rest = line.partition("NOPASSWD:")
+        if not marker:
+            continue
+        for spec in rest.split(","):
+            collapsed = " ".join(spec.split())
+            if collapsed:
+                specs.append(collapsed)
+    return specs
+
+
+def granted_commands_now(run_fn: RunFn = subprocess.run) -> list[str]:
+    """Ask sudo what is currently granted. Empty on any failure.
+
+    Empty is the safe answer: it reads as "not granted", which costs a working
+    repair step and never claims a privilege that is absent.
+    """
     try:
         result = run_fn(
             status_command(),
@@ -377,8 +412,47 @@ def is_granted(run_fn: RunFn = subprocess.run) -> bool:
             timeout=5,
         )
     except (subprocess.SubprocessError, OSError, UnicodeError):
-        return False
-    return getattr(result, "returncode", 1) == 0
+        return []
+    if getattr(result, "returncode", 1) != 0:
+        # A listing that needs a password means no NOPASSWD entry exists for this
+        # host at all -- including ours -- so there is nothing to find.
+        return []
+    return parse_granted_commands(getattr(result, "stdout", "") or "")
+
+
+def is_granted(run_fn: RunFn = subprocess.run) -> bool:
+    """Is the mDNSResponder restart actually granted, by rule and not by policy?"""
+    return " ".join(MDNS_HUP) in granted_commands_now(run_fn)
+
+
+def granted_interfaces_from(specs: Iterable[str]) -> list[str]:
+    """The interfaces the *installed grant* covers, read out of an already-fetched
+    `sudo -l` listing.
+
+    Split from `granted_interfaces` so one listing can answer both questions --
+    whether the DNS restart is granted and which interfaces are covered -- instead
+    of paying for a second subprocess on a path that runs at every window open.
+
+    This is not the same set as the interfaces the machine currently has. The
+    sudoers file enumerates what existed at grant time; dock a laptop, or plug in a
+    USB Ethernet adapter, and `dhcp_interfaces()` grows a name the grant says
+    nothing about. Reporting the live enumeration as "covered" is a claim the file
+    does not support, and it is wrong in exactly the case where the DHCP step is
+    about to fail on the new interface carrying the default route.
+    """
+    prefix = f"{IPCONFIG} set "
+    suffix = " DHCP"
+    names = []
+    for spec in specs:
+        if spec.startswith(prefix) and spec.endswith(suffix):
+            name = spec[len(prefix) : -len(suffix)].strip()
+            if _INTERFACE_RE.match(name):
+                names.append(name)
+    return names
+
+
+def granted_interfaces(run_fn: RunFn = subprocess.run) -> list[str]:
+    return granted_interfaces_from(granted_commands_now(run_fn))
 
 
 def _authorisation_outcome(result) -> dict:
@@ -483,8 +557,28 @@ def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]
     States what each right actually unlocks rather than only whether it is held: a
     row reading "elevated permissions: no" tells someone nothing about what they
     are missing or whether they should care.
+
+    `interfaces` must be what the *grant* covers (`granted_interfaces`), not what
+    the machine currently has (`dhcp_interfaces`). Those diverge the moment a dock
+    or adapter appears, and the divergence matters: it is exactly when the DHCP step
+    is about to fail on the new interface while this section says it is covered.
     """
     names = list(interfaces)
+    # The step targets whichever interface carries the default route, so a covered
+    # set that does not include it is not a working DHCP renewal.
+    primary_covered = bool(primary) and primary in names
+    if not granted:
+        renew = "no -- the ladder step reports NEEDS_PRIVILEGE instead of running"
+    elif primary_covered:
+        renew = f"yes -- on {primary}"
+    elif primary:
+        renew = (
+            f"no -- the default route is on {primary}, which the grant does not cover. "
+            "Re-grant to include it."
+        )
+    else:
+        renew = "unknown -- nothing currently carries the default route"
+
     rows = [
         ("Elevated permissions", "granted" if granted else "not granted"),
         ("Sudoers file", SUDOERS_PATH if granted else f"{SUDOERS_PATH} (absent)"),
@@ -494,12 +588,7 @@ def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]
             if granted
             else "no -- Flush DNS cache clears the cache but cannot restart the resolver",
         ),
-        (
-            "Renew DHCP lease",
-            f"yes -- on {primary or 'the default-route interface'}"
-            if granted
-            else "no -- the ladder step reports NEEDS_PRIVILEGE instead of running",
-        ),
+        ("Renew DHCP lease", renew),
         (
             "Toggle network service",
             "no -- never granted, by choice: it needs two commands, and a crash "
@@ -511,5 +600,5 @@ def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]
         ),
     ]
     if names:
-        rows.append(("Interfaces covered", ", ".join(names)))
+        rows.append(("Interfaces the grant covers", ", ".join(names)))
     return rows

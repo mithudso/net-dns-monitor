@@ -1,0 +1,87 @@
+# The verify loop documented in requirements-dev.txt, run on every push and PR:
+#
+#   ruff check . && ruff format --check . && python -m pytest -q
+#
+# Split across two jobs because they have different platform requirements, and
+# only one of them actually needs a Mac:
+#
+#   lint  ubuntu -- ruff is a self-contained binary and needs none of the app's
+#                   dependencies, so this runs on the cheapest runner and gives
+#                   the fastest signal on the failure that is most common.
+#   test  macOS  -- required, not a preference. The suite imports AppKit: it
+#                   builds real NSWindows (tests/test_dashboard.py,
+#                   test_settings_window.py) and renders real NSImages
+#                   (test_dock_icon.py) rather than mocking them, because the
+#                   properties that matter -- retain policy, button wiring,
+#                   frame arithmetic -- are exactly the ones that fail silently
+#                   in a frozen bundle. pyobjc-framework-Cocoa does not install
+#                   on Linux.
+#
+# Both jobs pin the same ruff and pytest versions the repo pins, via
+# requirements-dev.txt, so a green local run and a green CI run mean the same
+# thing. A floating `pip install ruff` would drift and start failing this gate on
+# rules nobody chose to adopt.
+name: CI
+
+on:
+  push:
+  pull_request:
+  # So the gate can be exercised by hand on a branch before opening a PR.
+  workflow_dispatch:
+
+# A newer push to the same ref makes the in-flight run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff (lint + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.13 matches the interpreter the app is developed and frozen against.
+          # ruff itself reads target-version = "py39" from ruff.toml, so it keeps
+          # checking against the floor the code actually claims to support.
+          python-version: "3.13"
+
+      # Just ruff, at the pinned version -- installing the full dev requirements
+      # here would pull pyobjc and fail on Linux for no benefit.
+      - name: Install ruff
+        run: pip install "$(grep '^ruff==' requirements-dev.txt)"
+
+      - name: ruff check
+        run: ruff check .
+
+      # Separate step from `check` on purpose: "formatting differs" and "a lint
+      # rule was violated" are different problems with different fixes, and a
+      # combined step hides which one failed.
+      - name: ruff format --check
+        run: ruff format --check .
+
+  test:
+    name: pytest (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # tests/conftest.py redirects HOME to a per-test tmp dir and stubs the Dock
+      # icon call, so the suite never touches real user data or a real Dock. No
+      # test shells out to `log`, `osascript`, `sudo`, or /etc/sudoers.d -- every
+      # such call site takes an injected run_fn.
+      - name: pytest
+        run: python -m pytest -q
