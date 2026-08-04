@@ -20,28 +20,85 @@ healthy/incident split, both from data the app already computes:
   ever-stalled domain can stop resolving without external_reachable/dns_ok
   (checked against a single configured domain list) ever flipping.
 
-`NETWORK_GLYPH` is a constant network/signal symbol prefixed to every
-state, standing in for a real bundled .app icon (there isn't one -- this
-app ships as a plain script, not an .app bundle). The colored circle after
-it is the part that changes with status, the way a badge overlays an icon
+The leading segment is live network statistics -- round-trip time to the ping
+host, recent packet loss, and current throughput. It replaced a constant
+signal-bars glyph that carried no information at all. The coloured circle after
+it is still the part that changes with status, the way a badge overlays an icon
 rather than replacing it. `status_state` is the single place the
-healthy/flaky/incident decision is made; both the menu bar title here and
-the Dock icon in dock_icon.py call it, so the two indicators can't drift
-out of sync with each other.
+healthy/flaky/incident decision is made; the menu bar title here, the Dock
+tile in dock_icon.py, and the alert in alert.py all key off it, so the
+indicators can't drift out of sync with each other.
+
+A failing ping forces the incident state even while the anti-flap gate is still
+healthy. The gate debounces a 30-second poll of TCP reachability and is
+deliberately slow to react; the whole point of the 5-second heartbeat is to
+react fast. The gate keeps owning what gets *repaired* and reported, this owns
+what gets *shown*.
 """
 
 from typing import Optional
 
-NETWORK_GLYPH = "\U0001F4F6"  # 📶 signal bars -- reads as "network" at a glance
-ICONS = {"healthy": "\U0001F7E2", "flaky": "\U0001F7E1", "incident": "\U0001F534"}
+ICONS = {"healthy": "\U0001f7e2", "flaky": "\U0001f7e1", "incident": "\U0001f534"}
+
+# Deliberately digit-free. test_status pins that a title with no resolution
+# failures contains no part of the resolution total, so a placeholder like
+# "0ms" would turn that assertion into a landmine. It also shouldn't read as a
+# real measurement, because it isn't one -- it covers the few seconds before
+# the first ping comes back.
+STATS_UNKNOWN = "--ms"
+
+PING_DOWN_TEXT = "no reply"
 
 
-def status_state(flap_state: str, consecutive_failures: int = 0) -> str:
-    if flap_state == "incident":
+def status_state(
+    flap_state: str,
+    consecutive_failures: int = 0,
+    ping_down: bool = False,
+) -> str:
+    if flap_state == "incident" or ping_down:
         return "incident"
     if consecutive_failures > 0:
         return "flaky"
     return "healthy"
+
+
+def format_rate(bits_per_second: Optional[float]) -> str:
+    """A throughput figure short enough to sit in a menu bar."""
+    if bits_per_second is None:
+        return ""
+    if bits_per_second >= 1e9:
+        return f"{bits_per_second / 1e9:.1f}G"
+    if bits_per_second >= 1e6:
+        return f"{bits_per_second / 1e6:.1f}M"
+    if bits_per_second >= 1e3:
+        return f"{bits_per_second / 1e3:.0f}K"
+    return "0"
+
+
+def format_stats(
+    rtt_ms: Optional[float] = None,
+    loss_pct: Optional[float] = None,
+    down_bps: Optional[float] = None,
+    up_bps: Optional[float] = None,
+    ping_down: bool = False,
+) -> str:
+    """The stats segment that replaced the signal-bars glyph.
+
+    Loss is shown only when it is nonzero: menu bar width is the scarce
+    resource here, and "0%" on a healthy network spends it saying nothing.
+    """
+    if ping_down:
+        return PING_DOWN_TEXT
+
+    parts = []
+    if rtt_ms is not None:
+        parts.append(f"{rtt_ms:.0f}ms")
+    if loss_pct:
+        parts.append(f"{loss_pct:.0f}%")
+    if down_bps is not None or up_bps is not None:
+        parts.append(f"{format_rate(down_bps)}↓{format_rate(up_bps)}↑")
+
+    return " ".join(parts) if parts else STATS_UNKNOWN
 
 
 def build_title(
@@ -50,14 +107,22 @@ def build_title(
     consecutive_failures: int = 0,
     resolution_failed: Optional[int] = None,
     resolution_total: Optional[int] = None,
+    stats: Optional[str] = None,
+    ping_down: bool = False,
 ) -> str:
-    state = status_state(flap_state, consecutive_failures)
+    state = status_state(flap_state, consecutive_failures, ping_down)
+    prefix = stats or STATS_UNKNOWN
+
     if state == "incident":
-        title = f"{NETWORK_GLYPH}{ICONS['incident']} Net/DNS: {last_classification or 'unknown'} issue"
+        # A ping failure with a healthy gate labels itself a ping issue rather
+        # than borrowing `last_classification`, which may still hold a stale
+        # label from an unrelated incident hours ago.
+        reason = (last_classification or "unknown") if flap_state == "incident" else "ping"
+        title = f"{prefix} {ICONS['incident']} Net/DNS: {reason} issue"
     elif state == "flaky":
-        title = f"{NETWORK_GLYPH}{ICONS['flaky']} Net/DNS: flaky"
+        title = f"{prefix} {ICONS['flaky']} Net/DNS: flaky"
     else:
-        title = f"{NETWORK_GLYPH}{ICONS['healthy']} Net/DNS: healthy"
+        title = f"{prefix} {ICONS['healthy']} Net/DNS: healthy"
 
     if resolution_failed:
         title += f" | {resolution_failed}/{resolution_total} resolution fails"

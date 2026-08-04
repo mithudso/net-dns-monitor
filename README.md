@@ -69,12 +69,47 @@ source .venv/bin/activate
 python -m netdnsmonitor.app
 ```
 
-Either way, a status icon appears in the menu bar (🟢 healthy / 🟡 flaky --
-a probe just started failing but hasn't crossed the incident threshold
-yet / 🔴 incident) and polls on the configured interval. Click the menu
-bar item and choose "Open last report" to see the most recent incident
-report. See `HOWTO.md`'s Menu bar reference section for the full
-status-icon and resolution-monitor-badge behavior.
+Either way, the menu bar shows the current network statistics followed by a
+status dot (🟢 healthy / 🟡 flaky -- a probe just started failing but hasn't
+crossed the incident threshold yet / 🔴 incident):
+
+```
+61ms 1.2M↓0.3M↑ 🟢 Net/DNS: healthy
+```
+
+Round-trip time to `ping_host`, recent packet loss (shown only when nonzero),
+and current throughput in bits per second. The Dock tile carries the same
+round-trip time in the same status colour. Click the menu bar item and choose
+"Open last report" for the most recent incident report, or "Test network
+alert" to check that alerts actually reach you. See `HOWTO.md`'s Menu bar
+reference section for the full status-icon and resolution-monitor-badge
+behavior.
+
+## Ping heartbeat and network-failed alert
+
+Separately from incident detection, the app sends one ICMP echo request to
+`ping_host` (default `8.8.8.8`) every `ping_interval_seconds` (default 5).
+When a ping fails it **bounces the Dock icon and posts a "network failed"
+notification** naming the host and the error.
+
+The alert is edge-triggered: it fires when the network goes down and then
+stays quiet, rather than bouncing twelve times a minute for the length of an
+outage. Recovery re-arms it and cancels the bounce.
+
+Two knobs if the default is too noisy or too quiet:
+
+- `ping_failure_threshold` (default 1) -- consecutive failed pings before
+  alerting. 1 is literal: a single dropped echo request alerts. On Wi-Fi that
+  will occasionally be one lost packet rather than a real outage; set it to 2
+  to ignore those and still alert within 10 seconds of a real outage.
+- `ping_alert_repeat_seconds` (default 0 = one alert per outage) -- set to
+  e.g. 300 to be re-alerted every 5 minutes while the network stays down.
+
+This heartbeat only drives the display and the alert. It never runs the repair
+ladder, escalates to Claude, or writes a report -- that stays with the
+debounced 30-second incident poll, because acting on a false positive there
+costs flushed caches and API calls. It also uses ICMP where the incident
+prober deliberately uses TCP-connect; see `netdnsmonitor/ping.py` for why.
 
 ## Permissions
 
@@ -147,6 +182,10 @@ test suite, since it needs a real macOS run loop.
 - `repair_executor.py` -- dispatches ladder steps to real macOS commands
 - `dns_query.py` -- raw UDP query against a specific public resolver
 - `prober.py` -- TCP-connect reachability + DNS resolution aggregation
+- `ping.py` -- one-shot ICMP ping with round-trip-time parsing
+- `ping_monitor.py` -- loss window + the edge-triggered alert decision
+- `net_stats.py` -- interface byte counters and throughput derivation
+- `alert.py` -- Dock bounce + network-failed notification
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
 - `stall_log.py` -- selects every ever-stalled domain from the resolution log
 - `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)
@@ -155,7 +194,8 @@ test suite, since it needs a real macOS run loop.
 - `escalation.py` -- redaction + the escalate-or-not gate
 - `anthropic_escalator.py` -- the Claude API call itself
 - `report.py` / `report_storage.py` -- incident report schema + persistence
-- `status.py` -- menu bar title/icon logic
+- `status.py` -- menu bar title/stats-segment logic
+- `dock_icon.py` -- draws the Dock tile as the current reading
 - `state_machine.py` -- orchestrates all of the above
 - `config.py` -- YAML config loading with defaults
 - `app.py` -- the rumps menu bar shell

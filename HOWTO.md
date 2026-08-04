@@ -15,6 +15,7 @@ every DNS lookup that has ever stalled on this machine.
 - [Feature: DNS resolution monitor (every ever-stalled domain)](#feature-dns-resolution-monitor-every-ever-stalled-domain)
 - [Feature: Claude escalation](#feature-claude-escalation)
 - [Feature: incident reports](#feature-incident-reports)
+- [Feature: ping heartbeat and the network-failed alert](#feature-ping-heartbeat-and-the-network-failed-alert)
 - [Menu bar reference](#menu-bar-reference)
 - [Permissions](#permissions)
 - [Running the tests](#running-the-tests)
@@ -82,6 +83,12 @@ below (from `netdnsmonitor/config.py`). Config file lives at
 | `resolution_batch_deadline_seconds` | `240` | resolution monitor | Wall-clock ceiling on one batch; must stay below `resolution_interval_seconds` |
 | `resolution_timeout_seconds` | `2.0` | resolution monitor | Intended per-domain timeout. **Not enforceable** -- see [the note below](#the-timeout-that-isnt) |
 | `resolution_max_workers` | `10` | resolution monitor | Thread pool size for parallel resolution |
+| `ping_host` | `"8.8.8.8"` | ping heartbeat | Host sent one ICMP echo request every `ping_interval_seconds`. Point elsewhere if your network filters ICMP to it |
+| `ping_interval_seconds` | `5` | ping heartbeat | Heartbeat cadence -- how often the stats and the Dock tile refresh |
+| `ping_timeout_seconds` | `2.0` | ping heartbeat | Per-ping ceiling. A failed ping takes roughly this long to give up, so keep it well under the cadence |
+| `ping_failure_threshold` | `1` | ping heartbeat | Consecutive failed pings before the alert fires. `1` is literal; raise to `2` to ignore single dropped Wi-Fi packets |
+| `ping_alert_repeat_seconds` | `0` | ping heartbeat | `0` = one alert per outage. Set to e.g. `300` to be re-alerted every 5 minutes while the network stays down |
+| `ping_loss_window` | `12` | ping heartbeat | How many recent pings the loss percentage averages over. 12 at a 5s cadence is the last minute |
 
 Retired keys, ignored if still present in your `config.yaml`:
 `resolution_lookback`, `resolution_top_n` (the monitor no longer mines the
@@ -117,6 +124,13 @@ resolution_stall_seconds: 1.0
 resolution_batch_deadline_seconds: 240
 resolution_timeout_seconds: 2.0
 resolution_max_workers: 10
+
+ping_host: "8.8.8.8"
+ping_interval_seconds: 5
+ping_timeout_seconds: 2.0
+ping_failure_threshold: 1
+ping_alert_repeat_seconds: 0
+ping_loss_window: 12
 ```
 
 ## Running the app
@@ -381,15 +395,35 @@ Each report is self-contained:
   the Dock/Force-Quit/Cmd-Tab name falls back to "Python" -- that specific
   fix needs the real bundle's own `Info.plist` identity, which only the
   `.app` launch path provides.
-- **Dock icon:** a 📶-style network glyph tinted green/yellow/red for the
-  same three status states below, replacing the generic Python rocket.
+- **Dock icon:** the current round-trip time in milliseconds, drawn in the
+  status colour below (`✕` while pings go unanswered, `--` before the first
+  one comes back). This replaced a tinted `wifi` SF Symbol, which looked
+  identical whether the round trip was 12ms or 900ms.
+- **Network statistics**, at the front of the title, replacing what used to be
+  a constant 📶 glyph:
+
+  ```
+  61ms 1.2M↓0.3M↑ 🟢 Net/DNS: healthy
+  61ms 8% 340K↓12K↑ 🟢 Net/DNS: healthy
+  no reply 🔴 Net/DNS: ping issue
+  ```
+
+  Round-trip time to `ping_host`, then packet loss over the last
+  `ping_loss_window` pings *only when it is nonzero* (menu bar width is
+  scarce), then throughput in bits per second, down and up. All of it refreshes
+  every `ping_interval_seconds` (default 5). `--ms` means no ping has come back
+  yet, which is the first few seconds after launch.
 - **Status icon, three states from two small heuristics:**
   - 🟢 healthy -- no recent probe failures.
   - 🟡 flaky -- at least one consecutive probe failure, but still below
     `failure_threshold`, so no incident has been declared yet. An early
     warning the binary healthy/incident split wouldn't otherwise show.
   - 🔴 incident -- the anti-flap gate has declared one (with the layer,
-    e.g. "🔴 Net/DNS: dns issue").
+    e.g. "🔴 Net/DNS: dns issue"), **or** the ping heartbeat is failing, which
+    reads "🔴 Net/DNS: ping issue". The heartbeat drives the indicator
+    directly because the gate debounces a 30-second poll and would otherwise
+    leave the menu bar green for up to a minute after the network dropped. A
+    real gate-declared incident keeps its own more specific label.
   - Independent of all three: if the most recent resolution-monitor batch
     (see [resolution monitor](#feature-dns-resolution-monitor-every-ever-stalled-domain))
     had any failed domain, the title gets a `N/total resolution fails`
@@ -398,6 +432,60 @@ Each report is self-contained:
 - **"Open last report"** -- opens the most recent incident report's
   Markdown file in your default browser. Shows a notification instead if
   no incident has occurred yet.
+- **"Test network alert"** -- fires the network-failed alert on demand: the
+  Dock bounces and a notification appears. Use it once after installing to
+  confirm alerts actually reach you. Whether macOS draws a notification banner
+  depends on notification authorisation for this bundle, which the app cannot
+  check from the inside; if the Dock bounces but no banner appears, allow
+  Net-DNS-Monitor under System Settings → Notifications. Every alert also
+  writes an `[alert]` line to the app log, so `net-dns-monitor-service logs`
+  will show whether the app decided to alert regardless.
+
+## Feature: ping heartbeat and the network-failed alert
+
+Every `ping_interval_seconds` (default 5) the app sends one ICMP echo request
+to `ping_host` (default `8.8.8.8`) and reads the interface byte counters. That
+pair drives the statistics in the menu bar, the Dock tile, and the alert.
+
+When a ping fails, the app **bounces the Dock icon** (a critical-priority
+attention request, so it keeps bouncing until you activate the app) and posts a
+**"network failed" notification** naming the host and the error.
+
+The alert is edge-triggered. At a 5-second cadence, alerting on every failed
+ping would mean twelve bounces and twelve notifications a minute for as long as
+the network is down -- precisely when you can do least about it. So it fires on
+the transition into failure and then goes quiet. Recovery cancels the bounce
+and re-arms the alert, so the next outage alerts again.
+
+Tuning:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `ping_host` | `8.8.8.8` | What to ping. Point elsewhere if your network filters ICMP to this address. |
+| `ping_interval_seconds` | `5` | Heartbeat cadence. |
+| `ping_timeout_seconds` | `2.0` | Per-ping ceiling. A failed ping takes about this long to give up. |
+| `ping_failure_threshold` | `1` | Consecutive failed pings before alerting. Raise to `2` to ignore single dropped Wi-Fi packets. |
+| `ping_alert_repeat_seconds` | `0` | `0` = one alert per outage. Set to `300` to be re-alerted every 5 minutes while down. |
+| `ping_loss_window` | `12` | How many recent pings the loss percentage averages over. 12 at 5s is the last minute. |
+
+Two deliberate boundaries:
+
+- **The heartbeat never repairs anything.** It does not touch the anti-flap
+  gate, the troubleshooting ladder, Claude escalation, or incident reports.
+  Those stay behind the debounced 30-second poll, because acting on a false
+  positive there costs flushed DNS caches and API calls, while a false positive
+  here costs one unnecessary Dock bounce.
+- **It uses ICMP where the incident prober deliberately does not.** `prober.py`
+  avoids ICMP because it is widely filtered and a filtered target reads as a
+  false "down". That reasoning still holds for incident detection; for a
+  display-and-alert heartbeat against one host you named explicitly, a filtered
+  path only degrades the display. See `netdnsmonitor/ping.py`.
+
+The ping runs on a worker thread, never on the run loop: a failed ping takes
+about 3 seconds to give up, and doing that inline would freeze the UI and both
+other timers for most of every cycle throughout an outage. The consequence is
+that the display trails the ping by one cadence, the same trade the resolution
+batch already makes.
 
 ## Permissions
 
@@ -454,6 +542,10 @@ tested separately, on its own). The rest needs a real macOS run loop.
 - `repair_executor.py` -- dispatches ladder steps to real macOS commands
 - `dns_query.py` -- raw UDP query against a specific public resolver
 - `prober.py` -- TCP-connect reachability + DNS resolution aggregation
+- `ping.py` -- one-shot ICMP ping with round-trip-time parsing
+- `ping_monitor.py` -- packet-loss window + the edge-triggered alert decision
+- `net_stats.py` -- interface byte counters and throughput derivation
+- `alert.py` -- Dock bounce + the network-failed notification
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
 - `stall_log.py` -- selects every ever-stalled domain from the resolution log
 - `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)
@@ -463,6 +555,7 @@ tested separately, on its own). The rest needs a real macOS run loop.
 - `anthropic_escalator.py` -- the Claude API call itself
 - `report.py` / `report_storage.py` -- incident report schema + persistence
 - `status.py` -- menu bar title logic + the shared healthy/flaky/incident status decision
+- `dock_icon.py` -- draws the Dock tile as the current reading, in the status colour
 - `dock_icon.py` -- renders the tinted network-glyph Dock icon
 - `state_machine.py` -- orchestrates incident detection end to end
 - `config.py` -- YAML config loading with defaults

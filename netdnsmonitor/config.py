@@ -41,6 +41,30 @@ DEFAULT_CONFIG = {
     # accept the argument and ignore it too -- nothing honours this value.)
     "resolution_timeout_seconds": 2.0,
     "resolution_max_workers": 10,
+    # Fast liveness heartbeat, separate from the incident poll above. One ICMP
+    # echo request to a single host every few seconds; it drives the menu bar
+    # stats, the Dock tile, and the network-failed alert, and never the repair
+    # ladder or escalation. See ping.py for why this uses ICMP while prober.py
+    # deliberately does not.
+    "ping_host": "8.8.8.8",
+    "ping_interval_seconds": 5,
+    # Bounds the per-tick ping. A failed ping takes about this long, so keep it
+    # comfortably under ping_interval_seconds.
+    "ping_timeout_seconds": 2.0,
+    # Consecutive failed pings before the alert fires. 1 is the literal reading
+    # of "if it fails a ping, alert" and is the default. On Wi-Fi a lone lost
+    # echo request will occasionally trip it; raise to 2 to ignore single
+    # dropped packets and still alert within 10 seconds of a real outage.
+    "ping_failure_threshold": 1,
+    # 0 means one alert per outage: the alert fires on the failure edge and then
+    # stays quiet until pings succeed again. Set it to e.g. 300 to be re-alerted
+    # every 5 minutes while the network stays down. The Dock bounce is a
+    # critical-priority request that keeps bouncing until the app is activated,
+    # so a long outage stays visible without any repeat.
+    "ping_alert_repeat_seconds": 0,
+    # How many recent pings the loss percentage in the menu bar averages over.
+    # 12 at a 5-second cadence is the last minute.
+    "ping_loss_window": 12,
 }
 
 

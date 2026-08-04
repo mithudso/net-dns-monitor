@@ -1,0 +1,116 @@
+"""One-shot ICMP ping. This is the 5-second heartbeat that drives the menu bar
+stats, the Dock tile, and the network-failed alert.
+
+Deliberately ICMP, even though prober.py avoids ICMP on purpose (widely
+filtered and rate-limited, so a filtered target reads as a false "down").
+The two answer different questions and a false positive costs different
+amounts in each:
+
+  prober.py   decides whether to declare an incident, run the repair ladder,
+              and escalate to an LLM. A false positive there flushes DNS
+              caches and spends API calls, so it uses TCP-connect against
+              *any of several* targets and is debounced by the anti-flap gate.
+  this module  is a fast liveness reading of one operator-named target that
+              does answer ICMP (8.8.8.8, measured 61ms from this machine). It
+              never touches the flap gate, the ladder, or escalation -- it
+              only paints the indicators and raises the alert.
+
+So a filtered ICMP path degrades the heartbeat display and can raise a
+spurious alert; it cannot trigger a repair. `ping_host` is configurable for
+exactly that case.
+
+`/sbin/ping` by absolute path, not a bare `ping`: launchd starts this app with
+a minimal PATH, so a bare name resolves in an interactive shell and not in the
+installed bundle -- a bug that would appear only in production. (Same class as
+the missing LANG that produced 0-byte incident reports; see the LaunchAgent.)
+
+Flags, and what each one is load-bearing for:
+  -c 1     one echo request, then exit. This is polled every few seconds, not
+           streamed; without it ping never returns and the worker thread leaks.
+  -W <ms>  how long to wait for the reply, in milliseconds on BSD ping.
+  -t <s>   ceiling on the whole run, in seconds. This is the flag that
+           actually bounds the call -- measured 3.08s against an unroutable
+           address with `-t 3` -- which is what keeps a failed ping inside its
+           own 5s cadence.
+
+Exit codes are the success signal, measured on this machine: 0 with a reply,
+2 when nothing replied, 68 when the name will not resolve.
+"""
+
+import math
+import re
+import subprocess
+from typing import Callable, Optional
+
+RunFn = Callable[..., object]
+
+PING_BIN = "/sbin/ping"
+
+# `time<1 ms` is what a sub-millisecond LAN reply prints, so the separator has
+# to admit `<` as well as `=`; an `=`-only pattern silently drops those.
+RTT_PATTERN = re.compile(r"time[=<]\s*([0-9.]+)\s*ms")
+
+
+def _parse_rtt_ms(stdout: str) -> Optional[float]:
+    match = RTT_PATTERN.search(stdout or "")
+    if match is None:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:  # pragma: no cover - the pattern already restricts this
+        return None
+
+
+def ping_once(
+    host: str,
+    timeout_seconds: float = 2.0,
+    run_fn: RunFn = subprocess.run,
+) -> dict:
+    """Send a single echo request and report the outcome.
+
+    Returns {"ok": bool, "rtt_ms": float|None, "error": str|None}. Never
+    raises: the sole caller is a worker thread started from a rumps timer, and
+    an escaping exception there kills the heartbeat for the rest of the
+    process's life while the menu bar keeps showing the last good reading.
+
+    A reply whose time can't be parsed is still a success -- rtt is display
+    only, and treating it as a failure would fire the network-failed alert on a
+    network that answered.
+    """
+    # BSD ping reads `-t 0` as "no timeout", the opposite of a short one, so
+    # round up rather than truncate.
+    hard_timeout = max(1, math.ceil(timeout_seconds))
+    args = [
+        PING_BIN,
+        "-c",
+        "1",
+        "-W",
+        str(int(timeout_seconds * 1000)),
+        "-t",
+        str(hard_timeout),
+        host,
+    ]
+
+    try:
+        result = run_fn(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            # -t already bounds ping itself; this only covers a ping that
+            # ignores it or wedges before it arms.
+            timeout=hard_timeout + 2,
+        )
+    except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
+        return {"ok": False, "rtt_ms": None, "error": str(exc)}
+
+    if result.returncode == 0:
+        return {"ok": True, "rtt_ms": _parse_rtt_ms(result.stdout), "error": None}
+
+    stderr = (result.stderr or "").strip()
+    return {
+        "ok": False,
+        "rtt_ms": None,
+        "error": stderr.splitlines()[0] if stderr else f"no reply from {host}",
+    }

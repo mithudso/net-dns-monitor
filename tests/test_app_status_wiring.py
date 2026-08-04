@@ -4,9 +4,8 @@ recovery edge) left it stuck on red forever after the network recovered.
 tick() must read the state machine's LIVE flap_gate.state every call.
 """
 
-
 from netdnsmonitor.app import NetDnsMonitorApp
-from netdnsmonitor.status import NETWORK_GLYPH
+from netdnsmonitor.status import STATS_UNKNOWN
 
 
 class FakeFlapGate:
@@ -37,9 +36,14 @@ def test_title_reflects_live_recovery_even_with_no_report(tmp_path):
     assert "issue" not in app.title.lower()
 
 
-def test_initial_title_before_any_tick_already_shows_the_network_glyph(tmp_path):
+def test_initial_title_before_any_tick_already_shows_a_stats_placeholder(tmp_path):
+    """Regression on "menu bar showed no icon at all until the first tick"
+    (commit be16640), now pinned against the stats segment that replaced the
+    signal-bars glyph. The first ping is a cadence away, so this covers the
+    window where there is nothing to report yet.
+    """
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
-    assert app.title.startswith(NETWORK_GLYPH)
+    assert app.title.startswith(STATS_UNKNOWN)
 
 
 def test_title_shows_flaky_on_a_single_failure_below_threshold(tmp_path):
