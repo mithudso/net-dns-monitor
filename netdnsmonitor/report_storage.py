@@ -3,6 +3,7 @@ and Markdown (for a human to open and hand to IT) -- the automatic-save step
 that produces the artifact IT needs without anyone re-running diagnostics.
 """
 
+import contextlib
 import json
 import os
 import tempfile
@@ -64,8 +65,9 @@ def _atomic_write(path: str, text: str) -> None:
             f.write(text)
         os.replace(tmp, path)
     except BaseException:
-        try:
+        # suppress(OSError), because the cleanup must not replace the exception
+        # being propagated: if os.replace failed, the useful error is that one,
+        # not a follow-on failure to unlink the temp file.
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise

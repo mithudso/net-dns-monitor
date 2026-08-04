@@ -1,6 +1,8 @@
+import contextlib
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 from netdnsmonitor.classifier import Classification
 from netdnsmonitor.report import build_report, render_markdown
@@ -60,7 +62,7 @@ def test_markdown_is_written_utf8_even_though_json_would_survive_ascii(tmp_path)
 
     paths = save_report(report, str(tmp_path))
 
-    written = open(paths["markdown_path"], "rb").read().decode("utf-8")
+    written = Path(paths["markdown_path"]).read_bytes().decode("utf-8")
     assert written == render_markdown(report)
     assert "“no answer”" in written
 
@@ -88,7 +90,7 @@ def test_a_failed_render_leaves_the_previous_report_intact(tmp_path):
     """
     report = _report()
     paths = save_report(report, str(tmp_path))
-    good = open(paths["markdown_path"], "rb").read()
+    good = Path(paths["markdown_path"]).read_bytes()
 
     class Unrenderable(dict):
         def __getitem__(self, key):
@@ -97,12 +99,12 @@ def test_a_failed_render_leaves_the_previous_report_intact(tmp_path):
             return super().__getitem__(key)
 
     broken = Unrenderable(report)
-    try:
+    # The raise is the point of the fixture, not the thing under test -- what is
+    # under test is the file on disk afterwards.
+    with contextlib.suppress(RuntimeError):
         save_report(broken, str(tmp_path))
-    except RuntimeError:
-        pass
 
-    assert open(paths["markdown_path"], "rb").read() == good
+    assert Path(paths["markdown_path"]).read_bytes() == good
 
 
 def test_no_temp_files_are_left_behind(tmp_path):
