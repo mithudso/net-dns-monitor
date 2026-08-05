@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
+# Finder drops these into any directory it displays, including this one and
+# .github/. Not anchored to the repo root, so it covers subdirectories too.
+.DS_Store
 # config.yaml is NOT ignored: it is the shipped default config, tracked in the
 # repo, and tests/test_config.py asserts it matches DEFAULT_CONFIG. The live
 # per-machine config is ~/.config/net-dns-monitor/config.yaml, outside the repo,
