@@ -15,7 +15,33 @@ internal_targets: []
 domains: []
   # - "example.com"
 
+# A name expected to always resolve, probed alongside the list above. It is the
+# control that separates "this one name is dead" from "the resolver is broken",
+# which is what makes auto-learned domains safe (see below). Set to null to
+# drop it -- with no control and no configured domains, a dead learned name
+# cannot be identified as dead.
+#
+# The Anthropic API host is the default because the app already needs to resolve
+# it for LLM escalation: a failing control means escalation was going to fail
+# anyway, so the probe result carries operational meaning.
+control_domain: "api.anthropic.com"
+
+# On top of the list above, any domain the unified log shows FAILING DNS
+# resolution is added automatically -- evidence already on the machine that
+# you tried to reach a name and could not. A learned domain that fails while
+# other probed domains still resolve is a dead name rather than a broken
+# resolver, so it is dropped again and can't hold the app in a permanent false
+# incident. Domains you configured by hand are never dropped.
+learn_domains_from_logs: true
+learned_domains_path: "~/Library/Application Support/net-dns-monitor/learned_domains.json"
+max_learned_domains: 20
+# `log show` is slow, so don't scan every poll. Clamped to at least 2 x
+# poll_interval_seconds: scanning every tick re-adds a dead name as fast as
+# pruning drops it, which latches a permanent false incident.
+domain_learn_interval_seconds: 300
+
 poll_interval_seconds: 30
+probe_timeout_seconds: 2.0   # shared deadline for ALL domain lookups in a tick
 failure_threshold: 2   # consecutive failed checks before declaring an incident
 success_threshold: 2   # consecutive healthy checks before clearing one
 
@@ -27,3 +53,23 @@ sensitive_strings: []
   # - "corp.local"
 
 reports_dir: "~/Library/Application Support/net-dns-monitor/reports"
+
+# Notifications, sent once per incident onset after the report is written.
+# Only a redacted summary plus the local report path leaves the machine --
+# never the raw probe results or log excerpts.
+#
+# No credential lives in this file. Slack needs SLACK_WEBHOOK_URL in the
+# environment; SMTP auth needs SMTP_PASSWORD. Without those, the channel is
+# simply inactive.
+slack_enabled: true
+
+email_enabled: true
+email_recipients: []
+  # - "it-helpdesk@example.com"
+email_from: "net-dns-monitor@localhost"
+smtp_host: "localhost"
+smtp_port: 587
+smtp_username: null
+smtp_starttls: true
+
+notify_timeout_seconds: 5   # short on purpose: this runs while the net is down
