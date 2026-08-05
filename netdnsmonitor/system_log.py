@@ -363,6 +363,15 @@ class LogBuffer:
     interchangeable: coalesce turns two identical entries into one row reading
     `(x2)`, so without the de-duplication here every poll-overlap copy would
     inflate the count of an event that happened once.
+
+    De-duplication survives eviction, which it did not at first. `_trim` discards evicted
+    keys from `_seen`, so an entry pushed out of the buffer could be re-fetched by the next
+    overlapping poll and stored again as new -- double-announced, double-counted, and
+    duplicated in an open forensic episode. That needs the buffer to hold less than one poll
+    overlap, which cannot happen at the errors-only default (~60 entries/min against a 3,000
+    cap) but is reachable the moment "All levels" is pressed: roughly 6,000 entries a minute
+    against a 30-second overlap is the cap exactly, and log arrival is bursty. A high-water
+    mark of the newest evicted timestamp closes it without depending on capacity.
     """
 
     def __init__(self, max_entries: int = 3000):
@@ -373,6 +382,11 @@ class LogBuffer:
         self.max_entries = max_entries
         self._entries: list[dict] = []
         self._seen: set[tuple] = set()
+        # Newest timestamp ever evicted. Anything at or below it has already been through
+        # this buffer, so an overlapping poll re-fetching it is not news. `log show` emits
+        # oldest-first and "YYYY-MM-DD HH:MM:SS.ffffff" sorts lexicographically, so a string
+        # comparison is a time comparison here.
+        self._evicted_through: str = ""
 
     @staticmethod
     def _key(entry: dict) -> tuple:
@@ -386,6 +400,8 @@ class LogBuffer:
         """
         added = []
         for entry in entries:
+            if self._evicted_through and entry.get("timestamp", "") <= self._evicted_through:
+                continue
             key = self._key(entry)
             if key in self._seen:
                 continue
@@ -401,6 +417,9 @@ class LogBuffer:
             return
         for entry in self._entries[:overflow]:
             self._seen.discard(self._key(entry))
+            stamp = entry.get("timestamp", "")
+            if stamp > self._evicted_through:
+                self._evicted_through = stamp
         del self._entries[:overflow]
 
     def entries(self) -> list[dict]:
@@ -412,6 +431,9 @@ class LogBuffer:
     def clear(self):
         self._entries.clear()
         self._seen.clear()
+        # Emptying means "forget everything", including what was evicted -- otherwise
+        # "Empty buffer" would silently refuse to re-accept the recent past.
+        self._evicted_through = ""
 
     def view(
         self,

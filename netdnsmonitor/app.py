@@ -936,7 +936,7 @@ class NetDnsMonitorApp(rumps.App):
                     result=f"{row.get('count', 1)}x, most recently {row.get('time', '')}",
                 )
 
-    def _refresh_log_pane(self):
+    def _refresh_log_pane(self, force: bool = False):
         """Re-filter and repaint the pane, from the search box's current contents.
 
         The box is read every refresh rather than mirrored onto this object, so the
@@ -944,6 +944,11 @@ class NetDnsMonitorApp(rumps.App):
         when their text changed -- `setString_` resets scroll position.
         """
         if self._dashboard is None:
+            return
+        # Same guard as _refresh_dashboard: LogBuffer.view() is a full filter-and-coalesce
+        # pass over up to log_view_max_entries, and it was running once a second for a
+        # hidden window.
+        if not force and not self._dashboard.is_visible():
             return
         query = self._dashboard.search_query()
         view = self.log_buffer.view(
@@ -1056,6 +1061,15 @@ class NetDnsMonitorApp(rumps.App):
         keep claiming it for the rest of the session.
         """
         if self._privilege_status_thread is not None and self._privilege_status_thread.is_alive():
+            return
+        if self._privilege_thread is not None and self._privilege_thread.is_alive():
+            # A grant or revoke is in flight. Both re-probe when they finish, so nothing is
+            # lost by skipping -- and racing them is worse than skipping: authenticating at
+            # the macOS dialog makes this app frontmost, which fires the activation observer,
+            # which opens the dashboard, which starts a probe. That probe reads sudo before
+            # the privileged script's `mv` has landed the file, and whichever of the two
+            # finishes last wins the queue. The result was a results pane reading "Granted."
+            # above a Permissions section reading "not granted".
             return
         self._privilege_status_thread = threading.Thread(
             target=self._run_privilege_status, name="privilege-status", daemon=True
@@ -1234,7 +1248,7 @@ class NetDnsMonitorApp(rumps.App):
         # what makes it agree with the filter actually in force, which may have come
         # from config rather than from a click.
         dashboard.set_log_level_title(self._log_level_title())
-        self._refresh_log_pane()
+        self._refresh_log_pane(force=True)
         # Cheap (it self-skips while a probe is running) and necessary: the grant can
         # be withdrawn with `sudo rm`, which is what the file itself suggests, and a
         # status cached at launch would keep claiming it all session.
@@ -1303,6 +1317,12 @@ class NetDnsMonitorApp(rumps.App):
 
     def _refresh_dashboard(self, force: bool = False):
         if self._dashboard is None:
+            return
+        # `_dashboard` is assigned once and never cleared, and the window has no close
+        # delegate, so the red button hides it while the handle stays live. Without this the
+        # "costs a queue poll and a string comparison" claim above was false from the first
+        # open onward: every tick rendered the full stats block for a window nobody could see.
+        if not force and not self._dashboard.is_visible():
             return
         flap_gate = self.state_machine.flap_gate
         episode = self.forensic.episode

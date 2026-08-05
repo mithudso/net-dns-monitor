@@ -274,15 +274,47 @@ def test_the_buffer_is_bounded_and_forgets_the_oldest_first():
     assert [item["message"] for item in buffer.entries()] == ["m2", "m3", "m4"]
 
 
-def test_an_evicted_entry_can_be_stored_again():
-    """The de-duplication key set has to be trimmed alongside the entries, or a
-    message that recurs after eviction is silently dropped forever.
+def test_a_message_that_recurs_later_is_stored_again_after_eviction():
+    """The de-duplication key set has to be trimmed alongside the entries, or a message
+    that genuinely recurs after eviction is silently dropped forever.
+
+    The recurrence carries a *later* timestamp, which is what makes it a recurrence. The
+    earlier version of this test re-added the identical dict, so it could not tell 'this
+    happened again' from 'an overlapping poll re-fetched the same line' -- and the second
+    of those must be dropped, which the next test pins.
     """
     buffer = LogBuffer(max_entries=1)
-    first = entry(timestamp="t0", message="m0")
-    buffer.add([first])
-    buffer.add([entry(timestamp="t1", message="m1")])
-    assert len(buffer.add([first])) == 1
+    buffer.add([entry(timestamp="2026-08-04 12:00:00.000", message="m0")])
+    buffer.add([entry(timestamp="2026-08-04 12:00:01.000", message="m1")])
+    again = entry(timestamp="2026-08-04 12:00:02.000", message="m0")
+    assert len(buffer.add([again])) == 1
+
+
+def test_an_evicted_entry_re_fetched_by_an_overlapping_poll_is_not_stored_again():
+    """The poll window is longer than the poll interval on purpose, so every line arrives
+    about twice. If the buffer evicts one between the two, the second copy looks new.
+
+    Unreachable at the errors-only default (~60 entries/min against a 3,000 cap), reachable
+    the moment 'All levels' is pressed (~6,000/min against a 30s overlap). The consequence
+    was a duplicate announcement, an inflated since-launch count, an inflated coalesce (xN),
+    and duplicate rows in an open forensic episode.
+    """
+    buffer = LogBuffer(max_entries=1)
+    old_line = entry(timestamp="2026-08-04 12:00:00.000", message="m0")
+    buffer.add([old_line])
+    buffer.add([entry(timestamp="2026-08-04 12:00:01.000", message="m1")])
+    # Same line, same timestamp -- the overlapping window handing it over a second time.
+    assert buffer.add([old_line]) == []
+
+
+def test_emptying_the_buffer_forgets_what_was_evicted_too():
+    """Otherwise 'Empty buffer' would silently refuse to re-accept the recent past."""
+    buffer = LogBuffer(max_entries=1)
+    old_line = entry(timestamp="2026-08-04 12:00:00.000", message="m0")
+    buffer.add([old_line])
+    buffer.add([entry(timestamp="2026-08-04 12:00:01.000", message="m1")])
+    buffer.clear()
+    assert len(buffer.add([old_line])) == 1
 
 
 def test_the_buffer_counts_errors_separately_from_entries():

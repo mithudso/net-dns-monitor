@@ -96,11 +96,13 @@ IPCONFIG = "/usr/sbin/ipconfig"
 SUDO = "/usr/bin/sudo"
 OSASCRIPT = "/usr/bin/osascript"
 
-# The command `is_granted` probes. `sudo -n -k -l <command>` exits 0 only if this
-# account may run it without a password -- see status_command for why each of those
-# three flags is load-bearing. It reports on the command without running it;
-# checking by running it would restart the DNS responder every time the window
-# refreshed.
+# The exact argv the grant permits, and the exact string `is_granted` looks for in the
+# `sudo -l` listing.
+#
+# Do not reintroduce a `sudo -l <command>` exit-status probe here. That was the original
+# implementation and it was wrong twice over -- `status_command` documents why, and
+# `tests/test_privileges.py::test_the_grant_is_detected_by_its_rule_not_by_policy` fails if
+# it comes back. Nothing is executed to answer the question; the listing is parsed.
 MDNS_HUP = (KILLALL, "-HUP", "mDNSResponder")
 
 # Only physical Ethernet and Wi-Fi interfaces. `ifconfig -l` also lists loopback,
@@ -118,6 +120,10 @@ _INTERFACE_RE = re.compile(r"^en\d+\Z")
 # root, and there is no legitimate account name it excludes. `\Z` for the same
 # reason as above.
 _USER_RE = re.compile(r"^[A-Za-z0-9._-]+\Z")
+
+# Stands in for "every interface", when a blanket `NOPASSWD: ALL` rule is what grants
+# this rather than the file this app writes.
+ALL_INTERFACES_SENTINEL = ("(all, via a blanket NOPASSWD rule)",)
 
 # Markers the privileged script emits so the caller can explain a refusal rather
 # than reporting a bare non-zero exit.
@@ -420,9 +426,26 @@ def granted_commands_now(run_fn: RunFn = subprocess.run) -> list[str]:
     return parse_granted_commands(getattr(result, "stdout", "") or "")
 
 
+def covers(specs: Iterable[str], command: Iterable[str]) -> bool:
+    """Does this set of NOPASSWD specs permit `command`?
+
+    A bare `ALL` spec has to count. `mitch ALL=(ALL) NOPASSWD: ALL` -- the "dev convenience
+    entry" this module names elsewhere as realistic -- renders in `sudo -l` as
+    `(ALL) NOPASSWD: ALL`, and it genuinely does permit the command. Exact-string matching
+    alone answered "not granted" on such a machine while `sudo -n killall ...` would have
+    succeeded, so the window under-reported what the app could do and the repair step
+    refused to try something that would have worked.
+
+    This does not reopen the false positive that `status_command` guards against: macOS's
+    shipped `%admin ALL=(ALL) ALL` carries no `NOPASSWD:` prefix, so it never reaches this
+    function -- `parse_granted_commands` only collects specs from NOPASSWD lines.
+    """
+    return "ALL" in specs or " ".join(command) in specs
+
+
 def is_granted(run_fn: RunFn = subprocess.run) -> bool:
     """Is the mDNSResponder restart actually granted, by rule and not by policy?"""
-    return " ".join(MDNS_HUP) in granted_commands_now(run_fn)
+    return covers(granted_commands_now(run_fn), MDNS_HUP)
 
 
 def granted_interfaces_from(specs: Iterable[str]) -> list[str]:
@@ -442,6 +465,12 @@ def granted_interfaces_from(specs: Iterable[str]) -> list[str]:
     """
     prefix = f"{IPCONFIG} set "
     suffix = " DHCP"
+    specs = list(specs)
+    if "ALL" in specs:
+        # A blanket NOPASSWD covers every interface, but this function's contract is to
+        # name the ones the *file* enumerates. Returning [] here would make the window say
+        # "granted" and "covers no interfaces" simultaneously, so say what is true instead.
+        return list(ALL_INTERFACES_SENTINEL)
     names = []
     for spec in specs:
         if spec.startswith(prefix) and spec.endswith(suffix):
@@ -566,7 +595,8 @@ def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]
     names = list(interfaces)
     # The step targets whichever interface carries the default route, so a covered
     # set that does not include it is not a working DHCP renewal.
-    primary_covered = bool(primary) and primary in names
+    blanket = list(names) == list(ALL_INTERFACES_SENTINEL)
+    primary_covered = blanket or (bool(primary) and primary in names)
     if not granted:
         renew = "no -- the ladder step reports NEEDS_PRIVILEGE instead of running"
     elif primary_covered:

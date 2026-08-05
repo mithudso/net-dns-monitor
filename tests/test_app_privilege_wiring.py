@@ -20,6 +20,14 @@ def _no_real_window(monkeypatch):
         "netdnsmonitor.dashboard.DashboardWindow.show",
         lambda self, activate=True: None,
     )
+    # `show` is stubbed so no window flashes across the screen, which leaves the real
+    # `is_visible()` answering False -- and the refresh paths now skip a hidden window.
+    # A double that stubs the shower must also stub the observable it sets, or every
+    # assertion about painted content tests the guard instead of the content.
+    monkeypatch.setattr(
+        "netdnsmonitor.dashboard.DashboardWindow.is_visible",
+        lambda self: True,
+    )
 
 
 @pytest.fixture(autouse=True)

@@ -300,6 +300,34 @@ def test_the_grant_is_detected_by_its_rule_not_by_policy():
     assert is_granted(recorder(ok(SUDO_LIST_WITHOUT_GRANT))) is False
 
 
+def test_a_blanket_nopasswd_rule_counts_as_granted():
+    """The opposite error to the one -k fixed, and it shipped alongside it.
+
+    `mitch ALL=(ALL) NOPASSWD: ALL` -- the dev-convenience entry this module names as
+    realistic -- renders as `(ALL) NOPASSWD: ALL` and genuinely does permit the command.
+    Exact-string matching answered 'not granted' on such a machine, so the window said the
+    resolver could not be restarted while `sudo -n killall ...` would have succeeded, and
+    the repair refused to attempt something that worked.
+
+    This does not reopen the false positive: macOS's shipped `%admin ALL=(ALL) ALL` carries
+    no NOPASSWD prefix, so it never reaches the spec list at all.
+    """
+    blanket = "User mitch may run the following commands on host:\n    (ALL) NOPASSWD: ALL\n"
+    assert is_granted(recorder(ok(blanket))) is True
+    # ...and it must still refuse the policy-only case.
+    policy_only = "User mitch may run the following commands on host:\n    (ALL) ALL\n"
+    assert is_granted(recorder(ok(policy_only))) is False
+
+
+def test_a_blanket_rule_is_reported_as_covering_every_interface():
+    """Otherwise the window says 'granted' and 'covers no interfaces' at the same time."""
+    blanket = parse_granted_commands("    (ALL) NOPASSWD: ALL\n")
+    covered = granted_interfaces_from(blanket)
+    assert covered and covered != []
+    rows = dict(status_rows(granted=True, interfaces=covered, primary="en9"))
+    assert rows["Renew DHCP lease"].startswith("yes")
+
+
 def test_a_listing_that_needs_a_password_means_not_granted():
     """No NOPASSWD entry exists for this host at all, including ours."""
     assert is_granted(recorder(ok("sudo: a password is required", returncode=1))) is False
