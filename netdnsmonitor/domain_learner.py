@@ -61,6 +61,18 @@ _HOSTNAME_RE = re.compile(
 
 _REJECTED_SUFFIXES = (".arpa", ".in-addr.arpa", ".ip6.arpa")
 
+# Unified-log scaffolding lives in brackets: "[com.apple.mdns:resolver]", "[Q65460]",
+# "[com.apple.WiFiManager:]". Those are subsystem labels and query IDs, never a queried
+# hostname -- but "com.apple.mdns" has the exact shape of a domain, and was being
+# learned as one, probed, pruned, then learned again on the next scan. Strip bracketed
+# spans before looking for hostnames.
+_BRACKETED_RE = re.compile(r"\[[^\]]*\]")
+
+# Reverse-DNS bundle identifiers survive the bracket strip when they appear in free
+# text (com.apple.foo, org.mozilla.bar) and are not resolvable names. A real hostname
+# does not start with a TLD label.
+_REVERSE_DNS_FIRST_LABELS = ("com", "org", "net", "io", "co", "edu", "gov", "uk", "us")
+
 
 def is_probeable_domain(candidate: str) -> bool:
     domain = candidate.strip().strip(".").lower()
@@ -70,10 +82,12 @@ def is_probeable_domain(candidate: str) -> bool:
         return False
     # An IPv4 literal matches the hostname shape only if the last label is
     # alphabetic, but guard explicitly rather than rely on that coincidence.
-    last_label = domain.rsplit(".", 1)[-1]
-    if not last_label.isalpha():
+    labels = domain.split(".")
+    if not labels[-1].isalpha():
         return False
-    return all(0 < len(label) <= 63 for label in domain.split("."))
+    if labels[0] in _REVERSE_DNS_FIRST_LABELS:
+        return False
+    return all(0 < len(label) <= 63 for label in labels)
 
 
 def extract_failed_domains(log_lines: list[str]) -> list[str]:
@@ -88,7 +102,7 @@ def extract_failed_domains(log_lines: list[str]) -> list[str]:
             continue
         if any(marker in lowered for marker in SUCCESS_MARKERS):
             continue
-        for match in _HOSTNAME_RE.finditer(line):
+        for match in _HOSTNAME_RE.finditer(_BRACKETED_RE.sub(" ", line)):
             domain = match.group(1).strip(".").lower()
             if domain in seen or not is_probeable_domain(domain):
                 continue

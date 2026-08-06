@@ -95,6 +95,15 @@ evidence already on the machine that someone tried to reach a name and could
 not. That avoids the browser-history route, which would mean reading another
 app's data.
 
+**On a stock macOS install this finds nothing, and that is not a bug in the parser.**
+macOS masks hostnames in the unified log by default: mDNSResponder's resolver lines
+carry `<mask.hash: '...'>` or an opaque token (`BBUpzafn IN A?`) where the queried name
+would be, so there is no name to extract. Measured on one machine: 758 error-like
+lines, 198 of them explicitly masked, 0 learnable domains. Unmasking
+(`sudo log config --mode "private_data:on"`) is a **system-wide privacy change** and is
+not recommended lightly. Treat `domains` as the real probe list and this feature as
+opportunistic. `docs/SCRIPTS.md` shows how to check what your own log yields.
+
 Two guards keep this from making the monitor worse:
 
 - `dns_ok` is an all()-across-domains signal, so one dead name scraped out of a
@@ -166,6 +175,10 @@ the Claude escalation response if one occurred. Hand the `.md` file to IT.
 source .venv/bin/activate
 python -m pytest -v
 ```
+
+`docs/SCRIPTS.md` is the operator's manual for every entry point — including the
+one-shot module invocations that exercise the prober, the ladder, the log watcher, the
+domain learner and the notification text without starting a menu bar.
 
 All decision logic (classification, anti-flap gating, the troubleshooting
 ladder, escalation redaction/gating, the report builder, and the full

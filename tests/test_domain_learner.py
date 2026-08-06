@@ -170,6 +170,24 @@ def test_store_save_survives_an_unwritable_path(tmp_path):
     assert store.domains == ["a.example.com"]
 
 
+def test_extract_ignores_the_log_subsystem_label():
+    """Found against the real macOS log: "[com.apple.mdns:resolver]" has the exact
+    shape of a hostname, so the learner probed "com.apple.mdns" on every scan,
+    pruned it, and learned it again on the next one.
+    """
+    line = (
+        "2026-08-05 20:33:10.054 Df mDNSResponder[441:66b4fc] "
+        "[com.apple.mdns:resolver] [Q65460] query for real.example.com timed out"
+    )
+    assert extract_failed_domains([line]) == ["real.example.com"]
+
+
+def test_is_probeable_domain_rejects_reverse_dns_bundle_identifiers():
+    assert is_probeable_domain("com.apple.mdns") is False
+    assert is_probeable_domain("org.mozilla.firefox") is False
+    assert is_probeable_domain("apple.com") is True
+
+
 def test_extract_ignores_a_completed_lookup_that_merely_mentions_a_timeout():
     lines = ["DNS query for cache.example.com completed, timeout was 5000ms"]
     assert extract_failed_domains(lines) == []
