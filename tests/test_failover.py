@@ -36,9 +36,12 @@ class FakeRunner:
 
     def __init__(
         self, order=None, apply_result=None, list_fails=False, obey=True,
-        list_fails_after_apply=False,
+        list_fails_after_apply=False, enable_result=None, obey_enable=True,
     ):
         self.order = list(order or ORDER)
+        self.disabled = set(DISABLED)
+        self.enable_result = enable_result
+        self.obey_enable = obey_enable  # False = exit 0 but stay disabled
         self.apply_result = apply_result
         self.list_fails = list_fails
         # The nastiest case: the reorder lands, then the read-back fails -- the
@@ -61,13 +64,20 @@ class FakeRunner:
             if self.obey:
                 self.order = list(args[2:])
             return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[:2] == ["networksetup", "-setnetworkserviceenabled"]:
+            if self.enable_result is not None:
+                return self.enable_result
+            if self.obey_enable:
+                name, state = args[2], args[3]
+                self.disabled.discard(name) if state == "on" else self.disabled.add(name)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr="unexpected")
 
     def _listing(self):
         lines = ["An asterisk (*) denotes that a network service is disabled."]
         position = 0
         for name in self.order:
-            if name in DISABLED:
+            if name in self.disabled:
                 marker = "*"
             else:
                 position += 1
@@ -525,6 +535,171 @@ def test_manual_switching_works_with_automatic_switching_off(store):
     assert runner.order[0] == "Wi-Fi"
 
 
+# --- several backups, ranked by measured speed ------------------------------
+
+
+def multi(store, runner, speeds=None, reach=None, **kwargs):
+    speeds = speeds or {}
+    reach = reach if reach is not None else {"en12": True, "en11": True, "en0": True}
+    return build(
+        store, runner,
+        preferred_service="USB 10/100/1G/2.5G LAN",
+        backup_services=["M3100", "iPhone USB", "Wi-Fi"],
+        backup_service=None,
+        prober=lambda dev: reach.get(dev, False),
+        throughput_meter=lambda dev: speeds.get(dev),
+        **kwargs,
+    )
+
+
+def test_the_fastest_reachable_backup_is_chosen():
+    runner = FakeRunner()
+    failover = multi(
+        FailoverStore("/dev/null/nope"), runner,
+        speeds={"en12": 12.0, "en11": 48.5, "en0": 3.8},
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("ok:")
+    assert "iPhone USB" in outcome and "48.5 Mbps" in outcome
+    assert runner.order[0] == "iPhone USB"
+    assert failover.chosen_backup == "iPhone USB"
+
+
+def test_an_unreachable_backup_never_wins_however_fast(store):
+    runner = FakeRunner()
+    failover = multi(
+        store, runner,
+        reach={"en12": False, "en11": False, "en0": True},
+        speeds={"en12": 999.0, "en11": 999.0, "en0": 3.8},
+    )
+    outcome = failover.attempt_failover("network")
+    assert runner.order[0] == "Wi-Fi"
+    assert "Wi-Fi" in outcome
+
+
+def test_no_reachable_backup_means_no_switch(store):
+    runner = FakeRunner()
+    failover = multi(store, runner, reach={})
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("no switch:")
+    assert runner.applied_orders == []
+
+
+def test_only_reachable_candidates_are_benchmarked(store):
+    """Benchmarking costs seconds; there is nothing to measure on a dead path."""
+    measured = []
+    runner = FakeRunner()
+    failover = build(
+        store, runner,
+        preferred_service="USB 10/100/1G/2.5G LAN",
+        backup_services=["M3100", "iPhone USB", "Wi-Fi"],
+        backup_service=None,
+        prober=lambda dev: dev == "en0",
+        throughput_meter=lambda dev: measured.append(dev) or 5.0,
+    )
+    failover.attempt_failover("network")
+    assert measured == ["en0"]
+
+
+def test_a_missing_backup_is_skipped_not_fatal(store):
+    """One dead name among several must not disable the whole feature."""
+    runner = FakeRunner()
+    failover = build(
+        store, runner,
+        preferred_service="AX88179B",
+        backup_services=["NoSuchService", "Wi-Fi"],
+        backup_service=None,
+        prober=lambda dev: dev == "en0",
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("ok:")
+    assert runner.order[0] == "Wi-Fi"
+
+
+def test_all_backups_missing_reports_them_with_the_available_list(store):
+    runner = FakeRunner()
+    failover = build(
+        store, runner, preferred_service="AX88179B",
+        backup_services=["Nope", "AlsoNope"], backup_service=None,
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "'Nope'" in outcome and "Wi-Fi" in outcome
+
+
+def test_being_on_any_configured_backup_counts_as_failed_over(store):
+    """Otherwise a switch to a second candidate would read as being on the
+    preferred link and invite a switch on top of a switch.
+    """
+    runner = FakeRunner(order=["iPhone USB"] + [n for n in ORDER if n != "iPhone USB"])
+    failover = multi(store, runner)
+    assert failover.attempt_failover("network") == "no switch: already on the backup network"
+
+
+def test_the_singular_backup_key_still_works(store):
+    runner = FakeRunner()
+    failover = build(store, runner)  # backup_service="Wi-Fi"
+    assert failover.backup_services == ["Wi-Fi"]
+    assert failover.attempt_failover("network").startswith("ok:")
+
+
+# --- enabling a disabled service --------------------------------------------
+
+
+def test_a_disabled_backup_is_enabled_before_being_promoted(store):
+    """A disabled service is skipped by macOS wherever it sits in the order, so
+    promoting one on its own is a change that looks like a success and routes
+    nothing. Both of the real machine's hotspot paths ship disabled.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store, runner, preferred_service="AX88179B",
+        backup_services=["M3100"], backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("ok:")
+    assert "enabled the service" in outcome
+    enables = [c for c in runner.calls if c[1] == "-setnetworkserviceenabled"]
+    assert enables == [["networksetup", "-setnetworkserviceenabled", "M3100", "on"]]
+    assert runner.order[0] == "M3100"
+
+
+def test_an_already_enabled_backup_is_not_re_enabled(store):
+    runner = FakeRunner()
+    build(store, runner).attempt_failover("network")  # Wi-Fi, already enabled
+    assert [c for c in runner.calls if c[1] == "-setnetworkserviceenabled"] == []
+
+
+def test_a_refused_enable_is_reported_and_nothing_is_reordered(store):
+    runner = FakeRunner(
+        enable_result=SimpleNamespace(
+            returncode=1, stdout="", stderr="You must be running as root to use this command."
+        )
+    )
+    failover = build(
+        store, runner, preferred_service="AX88179B",
+        backup_services=["M3100"], backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("NEEDS_PRIVILEGE:")
+    assert runner.applied_orders == []
+
+
+def test_an_enable_that_silently_does_nothing_is_not_claimed(store):
+    runner = FakeRunner(obey_enable=False)
+    failover = build(
+        store, runner, preferred_service="AX88179B",
+        backup_services=["M3100"], backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "still disabled" in outcome
+    assert runner.applied_orders == []
+
+
 # --- snapshot (what the menu bar shows) -------------------------------------
 
 
@@ -535,10 +710,12 @@ def test_snapshot_reports_which_side_is_live(store):
     assert snap["active_side"] == "preferred"
     assert snap["active_service"] == "AX88179B"
     assert snap["preferred"] == {
-        "name": "AX88179B", "device": "en6", "found": True, "reachable": False
+        "name": "AX88179B", "device": "en6", "found": True, "reachable": False,
+        "enabled": True, "throughput_mbps": None,
     }
     assert snap["backup"] == {
-        "name": "Wi-Fi", "device": "en0", "found": True, "reachable": True
+        "name": "Wi-Fi", "device": "en0", "found": True, "reachable": True,
+        "enabled": True, "throughput_mbps": None,
     }
 
 

@@ -32,6 +32,44 @@ class FailoverDecision:
     reason: str
 
 
+@dataclass(frozen=True)
+class Candidate:
+    name: str
+    device: Optional[str] = None
+    reachable: Optional[bool] = None
+    throughput_mbps: Optional[float] = None
+    enabled: bool = True
+
+
+def rank_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Order backup candidates best-first.
+
+    Reachability is a gate, not a factor: only a candidate independently
+    confirmed to carry traffic (`reachable is True`) is eligible at all. A
+    fast-looking but unverified path must never beat a slow proven one, and
+    `None` -- not probed -- is not a licence to guess.
+
+    Among eligible candidates the fastest measured link wins outright. A
+    candidate whose speed could not be measured ranks *after* every measured
+    one but is still eligible, because "unknown speed" is a better bet than
+    no link at all. Ties keep the order they were given, so a stable config
+    order still decides when nothing distinguishes the options.
+    """
+    eligible = [c for c in candidates if c.reachable is True]
+    return sorted(
+        eligible,
+        key=lambda c: (
+            c.throughput_mbps is None,
+            -(c.throughput_mbps or 0.0),
+        ),
+    )
+
+
+def best_candidate(candidates: list[Candidate]) -> Optional[Candidate]:
+    ranked = rank_candidates(candidates)
+    return ranked[0] if ranked else None
+
+
 def next_preferred_streak(current: int, preferred_ok: Optional[bool]) -> int:
     """Count of consecutive checks where the preferred link answered.
 

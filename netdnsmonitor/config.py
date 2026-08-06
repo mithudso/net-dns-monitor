@@ -57,7 +57,21 @@ DEFAULT_CONFIG = {
     # reported as a failure with the available list, never fuzzy-matched.
     "failover_enabled": False,
     "failover_preferred_service": None,
+    # One backup, or an ordered list of them. With several, every one that is
+    # independently confirmed reachable gets benchmarked and the fastest wins
+    # outright -- the list order only breaks ties.
     "failover_backup_service": None,
+    "failover_backup_services": [],
+    # Throughput measurement. Set the host to "" to turn it off, in which case
+    # ranking falls back to reachability and configured order rather than
+    # inventing numbers. The default endpoint serves an exact byte count over
+    # plain HTTPS with no account or redirect, which is what makes it usable
+    # from an interface-bound socket.
+    "failover_speedtest_host": "speed.cloudflare.com",
+    "failover_speedtest_path": "/__down?bytes=2000000",
+    "failover_speedtest_port": 443,
+    "failover_speedtest_timeout_seconds": 5.0,
+    "failover_speedtest_max_bytes": 2000000,
     # Which incident classifications may move the link. Network-only: a DNS
     # fault is usually local, and changing the physical path will not fix it.
     "failover_trigger_classifications": ["network"],

@@ -32,6 +32,7 @@ from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.state_machine import StateMachine
 from netdnsmonitor.status import build_failover_lines, build_title
+from netdnsmonitor.throughput import make_throughput_meter
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 
@@ -120,12 +121,19 @@ def build_failover(config: dict):
     "helpful" default here would reorder the wrong physical link.
     """
     preferred = config.get("failover_preferred_service")
-    backup = config.get("failover_backup_service")
-    if not preferred or not backup or preferred == backup:
+    backups = failover_backup_names(config)
+    if not preferred or not backups:
         return None
     return NetworkFailover(
         preferred_service=preferred,
-        backup_service=backup,
+        backup_services=backups,
+        throughput_meter=make_throughput_meter(
+            host=config.get("failover_speedtest_host", ""),
+            path=config["failover_speedtest_path"],
+            port=int(config["failover_speedtest_port"]),
+            timeout=float(config["failover_speedtest_timeout_seconds"]),
+            max_bytes=int(config["failover_speedtest_max_bytes"]),
+        ),
         store=FailoverStore(config["failover_state_path"]),
         # Reachability is judged against the same external targets the ordinary
         # probe uses, but forced out of a specific interface.
@@ -139,6 +147,23 @@ def build_failover(config: dict):
         trigger_classifications=failover_trigger_classifications(config),
         auto_enabled=bool(config.get("failover_enabled")),
     )
+
+
+def failover_backup_names(config: dict) -> list[str]:
+    """The ordered backup list, however it was written.
+
+    The singular key stays accepted because most setups have exactly one
+    backup and a list of one is noise. Duplicates are collapsed and the
+    preferred service is refused as its own backup -- promoting a service above
+    itself is not a failover.
+    """
+    names: list[str] = []
+    for name in [config.get("failover_backup_service")] + list(
+        config.get("failover_backup_services") or []
+    ):
+        if name and name not in names and name != config.get("failover_preferred_service"):
+            names.append(name)
+    return names
 
 
 def failover_trigger_classifications(config: dict) -> frozenset:

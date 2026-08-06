@@ -35,6 +35,8 @@ from netdnsmonitor.failover_policy import (
     FAILBACK,
     FAILOVER,
     PREFERRED,
+    Candidate,
+    best_candidate,
     decide,
     next_preferred_streak,
 )
@@ -172,10 +174,12 @@ class NetworkFailover:
     def __init__(
         self,
         preferred_service: str,
-        backup_service: str,
-        store: FailoverStore,
-        interface_prober: Callable[[Optional[str]], Optional[bool]],
+        backup_service: Optional[str] = None,
+        store: FailoverStore = None,
+        interface_prober: Callable[[Optional[str]], Optional[bool]] = None,
         run_fn: Callable[[list[str]], object] = default_run,
+        backup_services: Optional[list[str]] = None,
+        throughput_meter: Optional[Callable[[Optional[str]], Optional[float]]] = None,
         failback_threshold: int = 3,
         cooldown_seconds: float = 300.0,
         max_switches_per_hour: int = 4,
@@ -189,7 +193,14 @@ class NetworkFailover:
         # feature before trusting it to act unattended.
         self.auto_enabled = auto_enabled
         self.preferred_service = preferred_service
-        self.backup_service = backup_service
+        # One backup or several. The singular form stays accepted because it is
+        # the simpler config and most setups have exactly one; internally there
+        # is only ever a list, so no code path has to care which was written.
+        names = list(backup_services) if backup_services else []
+        if backup_service and backup_service not in names:
+            names.insert(0, backup_service)
+        self.backup_services = names
+        self.throughput_meter = throughput_meter
         self.store = store
         self.interface_prober = interface_prober
         self.run_fn = run_fn
@@ -200,6 +211,19 @@ class NetworkFailover:
         self.time_fn = time_fn
         self.preferred_streak = 0
         self.last_event: Optional[str] = None
+        # Which backup was actually chosen last time, for the menu bar and the
+        # report. None until a choice has been made.
+        self.chosen_backup: Optional[str] = None
+
+    @property
+    def backup_service(self) -> Optional[str]:
+        """The backup currently in play: whichever was last chosen, else the
+        first configured. Kept so callers that only ever deal with one backup
+        do not have to know about ranking.
+        """
+        if self.chosen_backup:
+            return self.chosen_backup
+        return self.backup_services[0] if self.backup_services else None
 
     # --- system reads -------------------------------------------------------
 
@@ -210,9 +234,72 @@ class NetworkFailover:
         return parse_service_order(getattr(result, "stdout", "") or "")
 
     def _active_side(self, services) -> str:
-        return BACKUP if services and services[0].name == self.backup_service else PREFERRED
+        """Any configured backup sitting first counts as "on the backup" -- not
+        just the one most recently chosen. Otherwise a restart, or a switch to a
+        different candidate, would read as being on the preferred link and
+        invite a second switch on top of the first.
+        """
+        if not services:
+            return PREFERRED
+        return BACKUP if services[0].name in self.backup_services else PREFERRED
+
+    def evaluate_candidates(self, services, measure: bool = True) -> list[Candidate]:
+        """Probe (and optionally benchmark) every configured backup.
+
+        Benchmarking costs seconds per candidate, so it is skipped for anything
+        that did not answer a probe first -- there is nothing to measure on a
+        path that carries no traffic, and paying for it would put the whole
+        cost on the UI thread for no information.
+        """
+        candidates = []
+        for name in self.backup_services:
+            service = find_service(services, name)
+            if service is None:
+                candidates.append(Candidate(name=name, reachable=None))
+                continue
+            reachable = self.interface_prober(service.device)
+            throughput = None
+            if measure and reachable is True and self.throughput_meter is not None:
+                throughput = self.throughput_meter(service.device)
+            candidates.append(
+                Candidate(
+                    name=name,
+                    device=service.device,
+                    reachable=reachable,
+                    throughput_mbps=throughput,
+                    enabled=service.enabled,
+                )
+            )
+        return candidates
 
     # --- system write -------------------------------------------------------
+
+    def _enable_service(self, name: str) -> str:
+        """A disabled service is skipped by macOS no matter where it sits in the
+        order, so promoting one without enabling it produces a confident no-op.
+        Both of this machine's hotspot paths ship disabled, which is exactly the
+        case that made this necessary.
+
+        Returns "" when nothing needed doing, otherwise a failure string.
+        """
+        result = self.run_fn(["networksetup", "-setnetworkserviceenabled", name, "on"])
+        stderr = (getattr(result, "stderr", "") or "").strip()
+        stdout = (getattr(result, "stdout", "") or "").strip()
+        if getattr(result, "returncode", 1) != 0:
+            if _looks_like_privilege_error(stderr + " " + stdout):
+                return (
+                    f"NEEDS_PRIVILEGE: enabling '{name}' was refused; an "
+                    "administrator right is required"
+                )
+            return f"failed: could not enable '{name}': {stderr or stdout}"
+        after = self._list_services()
+        service = find_service(after, name) if after else None
+        if service is not None and not service.enabled:
+            return (
+                f"failed: '{name}' reports success but is still disabled in the "
+                "service order"
+            )
+        return ""
 
     def _apply_order(self, services, new_order: list[str]) -> str:
         """Apply and then verify. Returns an outcome string starting with
@@ -255,7 +342,7 @@ class NetworkFailover:
             return "disabled: automatic switching is off (manual switching still works)"
         return self._attempt(classification=classification, allow=FAILOVER)
 
-    def switch_now(self, target: str) -> str:
+    def switch_now(self, target: str, service: Optional[str] = None) -> str:
         """Manual switch from the menu bar.
 
         Skips the policy entirely -- the brakes exist to stop the app acting on
@@ -270,21 +357,32 @@ class NetworkFailover:
         services = self._list_services()
         if not services:
             return "failed: could not read the current network service order"
-        for name in (self.preferred_service, self.backup_service):
-            if find_service(services, name) is None:
-                return (
-                    f"failed: service '{name}' not found; available: "
-                    + ", ".join(s.name for s in services)
-                )
+        if find_service(services, self.preferred_service) is None:
+            return (
+                f"failed: service '{self.preferred_service}' not found; available: "
+                + ", ".join(s.name for s in services)
+            )
+
+        missing = [n for n in self.backup_services if find_service(services, n) is None]
+        if self.backup_services and len(missing) == len(self.backup_services):
+            return (
+                "failed: backup service(s) not found: "
+                f"{', '.join(repr(n) for n in missing)}; available: "
+                + ", ".join(s.name for s in services)
+            )
 
         active_side = self._active_side(services)
-        if target == BACKUP and active_side == BACKUP:
+        # Switching between two backups is a real request: "already on the
+        # backup" is only a no-op when no particular one was named.
+        if target == BACKUP and active_side == BACKUP and not service:
             return "no switch: already on the backup network"
+        if target == BACKUP and service and services[0].name == service:
+            return f"no switch: already on '{service}'"
         if target == PREFERRED and active_side == PREFERRED:
             return "no switch: already on the preferred network"
 
         outcome = (
-            self._do_failover(services)
+            self._do_failover(services, allow_unverified=True, prefer_name=service)
             if target == BACKUP
             else self._do_failback(services)
         )
@@ -315,20 +413,32 @@ class NetworkFailover:
         def describe(name: str) -> dict:
             service = find_service(services, name)
             if service is None:
-                return {"name": name, "device": None, "found": False, "reachable": None}
+                return {
+                    "name": name, "device": None, "found": False,
+                    "reachable": None, "enabled": None, "throughput_mbps": None,
+                }
             return {
                 "name": name,
                 "device": service.device,
                 "found": True,
+                "enabled": service.enabled,
                 "reachable": self.interface_prober(service.device),
+                "throughput_mbps": None,
             }
 
+        backups = [describe(name) for name in self.backup_services]
         return {
             "error": None,
             "active_side": self._active_side(services),
             "active_service": services[0].name,
             "preferred": describe(self.preferred_service),
-            "backup": describe(self.backup_service),
+            # The single `backup` key stays for callers that only show one; the
+            # list is what the console and the ranking actually use.
+            "backup": backups[0] if backups else
+            {"name": None, "device": None, "found": False, "reachable": None,
+             "enabled": None, "throughput_mbps": None},
+            "backups": backups,
+            "chosen_backup": self.chosen_backup,
             "auto_enabled": self.auto_enabled,
             "last_event": self.last_event,
         }
@@ -354,17 +464,19 @@ class NetworkFailover:
             return "failed: could not read the current network service order"
 
         preferred = find_service(services, self.preferred_service)
-        backup = find_service(services, self.backup_service)
         available = ", ".join(s.name for s in services)
         if preferred is None:
             return (
                 f"failed: preferred service '{self.preferred_service}' not found; "
                 f"available: {available}"
             )
-        if backup is None:
+        if not self.backup_services:
+            return "failed: no backup services configured"
+        missing = [n for n in self.backup_services if find_service(services, n) is None]
+        if len(missing) == len(self.backup_services):
             return (
-                f"failed: backup service '{self.backup_service}' not found; "
-                f"available: {available}"
+                "failed: backup service(s) not found: "
+                f"{', '.join(repr(n) for n in missing)}; available: {available}"
             )
 
         active_side = self._active_side(services)
@@ -390,9 +502,24 @@ class NetworkFailover:
             return "no switch: already on the backup network"
 
         preferred_ok = self.interface_prober(preferred.device)
-        # The backup only needs verifying when we are considering moving onto
-        # it; on the failback path its health is not part of the decision.
-        backup_ok = self.interface_prober(backup.device) if allow == FAILOVER else None
+        # The backups only need evaluating when we are considering moving onto
+        # one; on the failback path their health is not part of the decision,
+        # and benchmarking them there would be seconds spent for nothing.
+        candidates: list[Candidate] = []
+        winner: Optional[Candidate] = None
+        if allow == FAILOVER:
+            candidates = self.evaluate_candidates(services)
+            winner = best_candidate(candidates)
+        # Tri-state, deliberately. "Every candidate was probed and none
+        # answered" is a different fact from "no candidate could be probed at
+        # all" -- the second is the unplugged-dongle case, and the policy
+        # refuses it with a different reason.
+        if winner is not None:
+            backup_ok = True
+        elif any(c.reachable is False for c in candidates):
+            backup_ok = False
+        else:
+            backup_ok = None
         if active_side == BACKUP:
             self.preferred_streak = next_preferred_streak(
                 self.preferred_streak, preferred_ok
@@ -419,7 +546,7 @@ class NetworkFailover:
             return f"no switch: {decision.reason}"
 
         if decision.action == FAILOVER:
-            outcome = self._do_failover(services)
+            outcome = self._do_failover(services, winner)
         else:
             outcome = self._do_failback(services)
 
@@ -431,19 +558,73 @@ class NetworkFailover:
         self.last_event = outcome
         return outcome
 
-    def _do_failover(self, services) -> str:
-        new_order = promote(services, self.backup_service)
+    def _do_failover(
+        self,
+        services,
+        winner: Optional[Candidate] = None,
+        allow_unverified: bool = False,
+        prefer_name: Optional[str] = None,
+    ) -> str:
+        note_unverified = ""
+        if winner is None:
+            # Manual switches arrive without a ranking, so one is computed here
+            # rather than defaulting to the first configured name -- picking the
+            # fastest is the point of allowing several.
+            candidates = self.evaluate_candidates(services)
+            if prefer_name:
+                # An explicitly named target is an instruction, not a suggestion.
+                winner = next((c for c in candidates if c.name == prefer_name), None)
+                if winner is None:
+                    return (
+                        f"failed: '{prefer_name}' is not one of the configured backups "
+                        f"({', '.join(self.backup_services)})"
+                    )
+            else:
+                winner = best_candidate(candidates)
+            if winner is None and allow_unverified:
+                # A person asked for this. Refusing because nothing answered
+                # would make the button useless in exactly the situation it
+                # exists for -- but the outcome has to say the path is unproven.
+                winner = next(
+                    (c for c in candidates if c.device is not None), None
+                )
+                note_unverified = " -- WARNING: this path was not verified reachable"
+        if winner is None:
+            return "failed: no backup service is reachable"
+
+        target = winner.name
+        new_order = promote(services, target)
         if new_order is None:
-            return f"failed: backup service '{self.backup_service}' disappeared mid-check"
+            return f"failed: backup service '{target}' disappeared mid-check"
+
         # Recorded before the change, so failback can restore it exactly.
         self.store.original_order = [s.name for s in services]
         self.store.save()
+
+        # Enable before promoting. A disabled service sits in the order and is
+        # skipped, so promoting one on its own is a change that looks like a
+        # success and routes nothing.
+        note = ""
+        if not winner.enabled:
+            problem = self._enable_service(target)
+            if problem:
+                return problem
+            note = " (also enabled the service, which was off)"
+            # Re-read: enabling rewrites the listing, and the order about to be
+            # applied has to be a permutation of what is there *now*.
+            services = self._list_services() or services
+            new_order = promote(services, target) or new_order
+
         outcome = self._apply_order(services, new_order)
-        return (
-            f"{outcome} (failed over to backup '{self.backup_service}')"
-            if outcome.startswith("ok:")
-            else outcome
+        if not outcome.startswith("ok:"):
+            return outcome
+        self.chosen_backup = target
+        speed = (
+            f" at {winner.throughput_mbps:.1f} Mbps"
+            if winner.throughput_mbps is not None
+            else " (speed not measured)"
         )
+        return f"{outcome} (failed over to backup '{target}'{speed}){note}{note_unverified}"
 
     def _do_failback(self, services) -> str:
         current_names = {s.name for s in services}
