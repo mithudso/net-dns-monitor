@@ -33,9 +33,13 @@ def default_device_index(device: str) -> Optional[int]:
 
     An unplugged USB Ethernet adapter disappears from the interface list
     entirely, and that is *not* the same reading as "present but unreachable":
-    macOS has already routed around a missing interface on its own, so there is
-    nothing to fail over. Reported as None -- not probed -- so the policy layer
-    cannot mistake it for a failure.
+    macOS has already routed around a missing interface on its own.
+
+    Both readings happen to refuse the same switches today, so this is about
+    what gets *reported*, not what gets decided -- the incident report says
+    "the adapter is not there" rather than "the link is dead", which are
+    different things to hand a human. Collapsing them would also make the
+    policy's refusal reasons wrong the first time the two need to diverge.
     """
     try:
         return socket.if_nametoindex(device)

@@ -112,6 +112,11 @@ failover_backup_service: null      # e.g. "Wi-Fi"     -- the hotspot
 # usually local (resolver cache, /etc/resolver override) and changing the
 # physical path will not fix it. Add "dns" only if your wired link's resolver
 # is the thing that dies.
+#
+# An explicitly empty list ([]) means nothing triggers a switch, which is the
+# way to stage the feature — service names validated, nothing moving — before
+# arming it. Removing the key entirely is NOT the same thing; that takes the
+# "network" default.
 failover_trigger_classifications:
   - network
 

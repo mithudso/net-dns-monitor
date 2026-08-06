@@ -13,17 +13,21 @@ Where output is shown it is real, trimmed for length, never illustrative.
 ## The one rule
 
 **This app diagnoses far more than it fixes, and the report is the deliverable.** Of
-the eight ladder steps, exactly one mutates anything (`flush_dns_cache`), and even
-that one only half-works unprivileged — `dscacheutil -flushcache` succeeds,
-`killall -HUP mDNSResponder` does not, because signalling a process owned by another
-user is rejected regardless of the command's own permissions. It reports `partial`.
-Two more repairs are `NEEDS_PRIVILEGE` stubs. Read "Reading the output correctly" at
-the bottom before concluding this app fixed anything.
+the eight ladder steps present by default, exactly one mutates anything
+(`flush_dns_cache`), and even that one only half-works unprivileged —
+`dscacheutil -flushcache` succeeds, `killall -HUP mDNSResponder` does not, because
+signalling a process owned by another user is rejected regardless of the command's own
+permissions. It reports `partial`. Two more repairs are `NEEDS_PRIVILEGE` stubs.
+
+Enabling failover adds a ninth step, `switch_to_backup_network`, which is the only one
+that rewrites system network configuration. It is off by default and reports
+`NEEDS_PRIVILEGE` rather than acting when the administrator right is refused. Read
+"Reading the output correctly" at the bottom before concluding this app fixed anything.
 
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 224 tests; the whole decision surface
+python3 -m pytest -q          # 237 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -31,7 +35,7 @@ python3 -m pytest -q          # 224 tests; the whole decision surface
 | Command | For | Network |
 |---|---|---|
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 224 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 237 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -181,7 +185,7 @@ check_resolver_overrides: no /etc/resolver overrides configured
 resolve_against_public_resolver: example.com resolved via public resolver
 ```
 
-The eight steps and what they actually do:
+The nine steps (eight with failover disabled) and what they actually do:
 
 | Step | Kind | Runs | Privilege |
 |---|---|---|---|
@@ -193,6 +197,7 @@ The eight steps and what they actually do:
 | `flush_dns_cache` | **repair** | `dscacheutil` + `killall -HUP` | **partial** |
 | `renew_dhcp_lease` | repair | **nothing — stub** | needs helper |
 | `toggle_network_service` | repair | **nothing — stub** | needs helper |
+| `switch_to_backup_network` | **repair** | `networksetup -ordernetworkservices` | **needs admin — really attempted** |
 
 ### `log_watcher` — what evidence would a report carry?
 
@@ -504,7 +509,7 @@ the current one — by hand, you are the guard.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 224 passed
+python3 -m pytest -q            # 237 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -514,20 +519,20 @@ the whole suite. Current distribution:
 
 | Tests | File |
 |---|---|
-| 26 | `test_failover.py` |
-| 25 | `test_domain_learner.py` |
-| 24 | `test_failover_policy.py` |
-| 20 | `test_app_failover_wiring.py` |
-| 16 | `test_notifications.py` · `test_service_order.py` |
+| 34 | `test_failover.py` |
+| 25 | `test_domain_learner.py` · `test_failover_policy.py` |
+| 22 | `test_app_failover_wiring.py` |
+| 17 | `test_service_order.py` |
+| 16 | `test_notifications.py` |
 | 11 | `test_app_notification_wiring.py` · `test_repair_executor.py` |
-| 9 | `test_interface_probe.py` |
+| 10 | `test_interface_probe.py` |
 | 7 | `test_escalation.py` · `test_prober.py` |
 | 6 | `test_flap_gate.py` · `test_state_machine.py` |
 | 5 | `test_anthropic_escalator.py` · `test_classifier.py` · `test_config.py` · `test_ladder.py` · `test_report.py` |
 | 4 | `test_dns_query.py` · `test_log_watcher.py` · `test_status.py` |
 | 2 | `test_report_storage.py` |
 | 1 | `test_app_status_wiring.py` |
-| **224** | **total** |
+| **237** | **total** |
 
 **What the suite does not cover.** `default_resolve` and `default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

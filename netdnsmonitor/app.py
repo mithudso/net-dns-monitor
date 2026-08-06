@@ -138,10 +138,21 @@ def build_failover(config: dict):
         failback_threshold=int(config["failover_failback_threshold"]),
         cooldown_seconds=float(config["failover_cooldown_seconds"]),
         max_switches_per_hour=max(0, int(config["failover_max_switches_per_hour"])),
-        trigger_classifications=frozenset(
-            config.get("failover_trigger_classifications") or ["network"]
-        ),
+        trigger_classifications=failover_trigger_classifications(config),
     )
+
+
+def failover_trigger_classifications(config: dict) -> frozenset:
+    """An explicitly empty list means "nothing triggers a switch" and must be
+    honoured. `config.get(key) or [...]` would treat it as absent and re-arm
+    the default, so setting `failover_trigger_classifications: []` to stage the
+    feature inert while checking service names would still rewrite the service
+    order on the next incident. Only a missing or null key takes the default.
+    """
+    configured = config.get("failover_trigger_classifications")
+    if configured is None:
+        configured = ["network"]
+    return frozenset(configured)
 
 
 def failover_status_text(failover) -> str:
@@ -221,9 +232,7 @@ def build_state_machine(config: dict, failover=None) -> StateMachine:
         success_threshold=config["success_threshold"],
         sensitive_strings=config["sensitive_strings"],
         failover_classifications=(
-            frozenset(config.get("failover_trigger_classifications") or ["network"])
-            if failover
-            else frozenset()
+            failover_trigger_classifications(config) if failover else frozenset()
         ),
     )
 

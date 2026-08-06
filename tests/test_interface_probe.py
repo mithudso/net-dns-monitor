@@ -24,8 +24,9 @@ def test_returns_false_when_no_target_answers():
 
 
 def test_absent_device_is_none_not_false():
-    """An unplugged adapter is 'not probed'. Reporting False would let the
-    policy layer read a missing interface as a broken one.
+    """An unplugged adapter is 'not probed', which is a different thing to
+    report to a human than 'the link is dead' -- even though both refuse the
+    same switches today.
     """
     probe = make_interface_prober(
         TARGETS, timeout=2.0, connect_fn=lambda d, h, p, t: True, index_fn=lambda d: None
@@ -130,16 +131,18 @@ def test_ipv6_targets_select_the_ipv6_bind_option():
         def close(self):
             pass
 
-    real_socket = socket.socket
-    socket.socket = lambda fam, typ: FakeSocket(fam, typ)
-    try:
-        from netdnsmonitor.interface_probe import default_bound_connect
+    from netdnsmonitor import interface_probe
 
-        default_bound_connect.__globals__["default_device_index"] = lambda d: 15
-        default_bound_connect("en0", "2606:4700:4700::1111", 443, 1.0)
-        default_bound_connect("en0", "1.1.1.1", 443, 1.0)
+    real_socket = socket.socket
+    real_index = interface_probe.default_device_index
+    socket.socket = lambda fam, typ: FakeSocket(fam, typ)
+    interface_probe.default_device_index = lambda d: 15
+    try:
+        interface_probe.default_bound_connect("en0", "2606:4700:4700::1111", 443, 1.0)
+        interface_probe.default_bound_connect("en0", "1.1.1.1", 443, 1.0)
     finally:
         socket.socket = real_socket
+        interface_probe.default_device_index = real_index
 
     assert seen[0] == socket.AF_INET6
     assert seen[1] == (socket.IPPROTO_IPV6, 125)

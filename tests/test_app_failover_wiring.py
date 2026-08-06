@@ -89,6 +89,28 @@ def test_dns_can_be_opted_into_via_config():
     assert failover.trigger_classifications == frozenset({"network", "dns"})
 
 
+def test_an_explicitly_empty_trigger_list_is_honoured_not_re_armed():
+    """Staging the feature inert while checking service names must not still
+    rewrite the service order on the next incident.
+    """
+    cfg = enabled_config(failover_trigger_classifications=[])
+    assert build_failover(cfg).trigger_classifications == frozenset()
+    sm = build_state_machine(cfg)
+    assert sm.failover_classifications == frozenset()
+    assert ladder_for(Classification.NETWORK, sm.failover_classifications) == [
+        s for s in ladder_for(Classification.NETWORK, frozenset())
+    ]
+    assert "switch_to_backup_network" not in [
+        s.name for s in ladder_for(Classification.NETWORK, sm.failover_classifications)
+    ]
+
+
+def test_a_missing_trigger_key_still_defaults_to_network():
+    cfg = enabled_config()
+    del cfg["failover_trigger_classifications"]
+    assert build_failover(cfg).trigger_classifications == frozenset({"network"})
+
+
 # --- ladder -----------------------------------------------------------------
 
 

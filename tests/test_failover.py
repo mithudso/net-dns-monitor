@@ -34,22 +34,30 @@ DISABLED = {"USB 10/100/1G/2.5G LAN", "M3100"}
 class FakeRunner:
     """Reproduces the two networksetup calls this module makes."""
 
-    def __init__(self, order=None, apply_result=None, list_fails=False, obey=True):
+    def __init__(
+        self, order=None, apply_result=None, list_fails=False, obey=True,
+        list_fails_after_apply=False,
+    ):
         self.order = list(order or ORDER)
         self.apply_result = apply_result
         self.list_fails = list_fails
+        # The nastiest case: the reorder lands, then the read-back fails -- the
+        # system has been mutated and we cannot see it.
+        self.list_fails_after_apply = list_fails_after_apply
+        self.applied = False
         self.obey = obey  # False = exit 0 but ignore the request
         self.calls = []
 
     def __call__(self, args):
         self.calls.append(args)
         if args[:2] == ["networksetup", "-listnetworkserviceorder"]:
-            if self.list_fails:
+            if self.list_fails or (self.list_fails_after_apply and self.applied):
                 return SimpleNamespace(returncode=1, stdout="", stderr="boom")
             return SimpleNamespace(returncode=0, stdout=self._listing(), stderr="")
         if args[:2] == ["networksetup", "-ordernetworkservices"]:
             if self.apply_result is not None:
                 return self.apply_result
+            self.applied = True
             if self.obey:
                 self.order = list(args[2:])
             return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -236,6 +244,29 @@ def test_boolean_timestamps_are_rejected(tmp_path):
     store = FailoverStore(str(path))
     assert store.last_switch_at is None
     assert store.switch_times == []
+
+
+def test_a_switch_that_cannot_be_confirmed_is_not_claimed(store):
+    """The worst case: the reorder landed but the read-back failed, so the
+    system has been changed and we cannot see it. Reporting `ok:` here would be
+    a claim we cannot support; reporting `failed:` is a false negative in the
+    safe direction.
+    """
+    runner = FakeRunner(list_fails_after_apply=True)
+    outcome = build(store, runner).attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "confirm" in outcome
+    assert store.switch_times == [], "an unconfirmed switch spends no budget"
+
+
+def test_an_unconfirmable_switch_keeps_its_record_so_it_can_be_undone(store):
+    """This is exactly why the pre-failover order is written before the write
+    rather than after a success: without the record, a switch that landed but
+    could not be read back could never be reversed.
+    """
+    runner = FakeRunner(list_fails_after_apply=True)
+    build(store, runner).attempt_failover("network")
+    assert store.original_order == ORDER
 
 
 def test_unreadable_service_list_fails_loudly(store):
