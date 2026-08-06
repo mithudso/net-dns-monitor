@@ -315,3 +315,54 @@ def test_a_subcommand_is_required():
 
     with pytest.raises(SystemExit):
         build_parser().parse_args([])
+
+
+# --- window shell (the testable parts) --------------------------------------
+
+
+def test_dropdown_titles_flag_state_changing_commands():
+    """The label says so before the click, not after."""
+    from netdnsmonitor.window import command_menu_titles
+
+    titles = command_menu_titles()
+    assert len(titles) == len(CATALOG)
+    marked = [t for t in titles if t.startswith("!")]
+    assert any("enable" in t for t in marked)
+    assert all(not t.startswith("!") for t in titles if " nwi " in t)
+
+
+def test_dropdown_pick_inserts_rather_than_runs():
+    """Several entries change system state; a menu that fired on selection
+    would run one before the user had read it.
+    """
+    from netdnsmonitor.window import ConsoleWindowController
+
+    class FakeField:
+        def __init__(self):
+            self.value = None
+
+        def setStringValue_(self, text):
+            self.value = text
+
+    controller = ConsoleWindowController({})
+    controller.input_field = FakeField()
+    controller.insert_command(0)
+    assert controller.input_field.value == CATALOG[0].key
+
+
+def test_dropdown_pick_ignores_an_out_of_range_index():
+    from netdnsmonitor.window import ConsoleWindowController
+
+    controller = ConsoleWindowController({})
+    controller.insert_command(-1)   # the placeholder row
+    controller.insert_command(9999)
+    assert controller.input_field is None
+
+
+def test_window_module_imports_without_a_gui_session():
+    """The offline suite must be able to import it; AppKit window classes are
+    only touched inside show().
+    """
+    import netdnsmonitor.window as window
+
+    assert hasattr(window, "ConsoleWindowController")

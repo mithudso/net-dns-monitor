@@ -114,8 +114,35 @@ notify_timeout_seconds: 5   # short on purpose: this runs while the net is down
 #       with the manual button still available.
 #   either name unset                   -> feature off entirely.
 failover_enabled: false
-failover_preferred_service: null   # e.g. "AX88179B"  -- the wired link
-failover_backup_service: null      # e.g. "Wi-Fi"     -- the hotspot
+failover_preferred_service: null   # e.g. "USB 10/100/1G/2.5G LAN"
+
+# One backup, or several. With several, every candidate that is independently
+# confirmed reachable is benchmarked and the FASTEST wins outright -- the list
+# order only breaks ties. Use `netdns interfaces` to see the exact names.
+#
+# These must be network SERVICE names, not Wi-Fi network names. "Wi-Fi" is the
+# service; the SSID it joins is a different thing and will not be found here.
+failover_backup_service: null      # e.g. "M3100"
+failover_backup_services: []
+  # - "M3100"        # USB dongle to the hotspot
+  # - "iPhone USB"   # phone tethered over USB
+  # - "Wi-Fi"        # last resort
+
+# A disabled service (shown as (*) by `networksetup -listnetworkserviceorder`)
+# is skipped by macOS no matter where it sits in the order, so failing over to
+# one requires enabling it as well as promoting it. The app does both, and
+# reports NEEDS_PRIVILEGE if either is refused.
+
+# Throughput measurement, used to rank several backups. Set the host to "" to
+# turn it off, in which case ranking falls back to reachability and list order
+# rather than inventing numbers. The default endpoint serves an exact byte
+# count over plain HTTPS with no account and no redirect, which is what makes
+# it usable from a socket pinned to one interface.
+failover_speedtest_host: "speed.cloudflare.com"
+failover_speedtest_path: "/__down?bytes=2000000"
+failover_speedtest_port: 443
+failover_speedtest_timeout_seconds: 5.0
+failover_speedtest_max_bytes: 2000000
 
 # Which incidents may move the link. Network-only by default: a DNS fault is
 # usually local (resolver cache, /etc/resolver override) and changing the

@@ -286,8 +286,10 @@ class NetDnsMonitorApp(rumps.App):
             rumps.MenuItem("Switch back to preferred now", callback=self.switch_to_preferred),
             rumps.MenuItem("Refresh network status", callback=self.refresh_failover),
             None,
+            rumps.MenuItem("Open console…", callback=self.open_console),
             rumps.MenuItem("Open last report", callback=self.open_last_report),
         ]
+        self.console_window = None
         self._refresh_failover_menu()
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
@@ -380,6 +382,25 @@ class NetDnsMonitorApp(rumps.App):
         rumps.notification(
             "Net/DNS Monitor", "Network failover", failover_status_text(self.failover)
         )
+
+    def open_console(self, _sender):
+        """Imported here rather than at module scope: window.py touches AppKit
+        window classes, and a failure to build one must cost the console, not
+        the monitoring.
+        """
+        try:
+            from netdnsmonitor.window import ConsoleWindowController
+
+            if self.console_window is None:
+                self.console_window = ConsoleWindowController(self.config)
+            self.console_window.show()
+        except Exception as exc:  # noqa: BLE001
+            rumps.notification(
+                "Net/DNS Monitor",
+                "Console",
+                f"Could not open the console window ({type(exc).__name__}). "
+                "`python3 -m netdnsmonitor.cli console` does the same thing in a terminal.",
+            )
 
     def open_last_report(self, _sender):
         if self.last_report_path:

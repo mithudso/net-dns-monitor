@@ -31,6 +31,50 @@ administrator account without a helper. It is still tagged as needing
 privilege, and when the write is refused it reports `NEEDS_PRIVILEGE` and
 changes nothing. See "Automatic network failover" below.
 
+## Command line
+
+One entry point for everything the app does without a menu bar:
+
+```bash
+python3 -m netdnsmonitor.cli interfaces      # every service, live
+python3 -m netdnsmonitor.cli bench           # + measured throughput
+python3 -m netdnsmonitor.cli status          # classification + failover state
+python3 -m netdnsmonitor.cli failover backup # switch to the fastest backup
+python3 -m netdnsmonitor.cli console         # interactive
+python3 -m netdnsmonitor.cli guide           # what to do when it breaks
+```
+
+`interfaces` is the one to start with — it shows every service with its device,
+whether the service is enabled, whether it can actually reach anything, and
+(with `bench`) how fast:
+
+```
+ #  SERVICE                    DEVICE   SVC  REACHABLE     Mbps
+ 1  AX88179B                   en6      on   not probed       -
+ 3  USB 10/100/1G/2.5G LAN     en9      OFF  unreachable      -
+ 4  M3100                      en12     OFF  unreachable      -
+ 6  Wi-Fi                      en0      on   reachable      3.5
+```
+
+`SVC = OFF` is the trap worth knowing: **a disabled service is skipped by macOS
+no matter where it sits in the priority order.** Failing over to one requires
+enabling it as well as promoting it, which the app does.
+
+`not probed` is not `unreachable` — an unplugged adapter disappears from the
+interface list entirely, and calling that "unreachable" sends you looking for
+the wrong fault.
+
+### Console
+
+`netdns console` (or "Open console…" in the menu bar) is a REPL over the same
+catalogue: a usage guide, a numbered list of diagnostic commands you insert by
+picking a number, the live interface table, and priority editing.
+
+Commands that change system state are marked `!` and are never run on a bare
+keypress — the console shows the exact argv and asks first. A command with a
+placeholder (`ifconfig {device}`) asks for the value rather than shelling out
+with a literal `{device}` in it.
+
 ## Automatic network failover
 
 Optional, **off by default**. When the preferred network dies, the app can move
@@ -86,6 +130,20 @@ switch only happens when the other side is known to carry traffic. Binding the
 source address instead would not work: on Darwin the route lookup follows the
 destination, so a socket bound to the Wi-Fi address still leaves via whichever
 interface owns the route.
+
+**Several backups, fastest wins.** Give `failover_backup_services` a list and
+every candidate that is independently confirmed reachable gets benchmarked —
+a real bounded download forced out of that interface — with the fastest chosen
+outright. Reachability stays a gate rather than a factor: a fast-looking but
+unverified path never beats a slow proven one. A link whose speed could not be
+measured reports `None`, not `0.0`, so it ranks after measured links rather
+than below dead ones. Only reachable candidates are benchmarked, since there is
+nothing to measure on a path that carries no traffic and it costs seconds each.
+
+**It enables a disabled service.** macOS skips a disabled service wherever it
+sits in the order, so promoting one on its own is a change that looks like a
+success and routes nothing. The enable is verified by reading the listing back,
+exactly like the reorder.
 
 **It is built to be reluctant.** Four brakes must all release before anything
 moves: the incident must be a configured trigger (network-layer only by

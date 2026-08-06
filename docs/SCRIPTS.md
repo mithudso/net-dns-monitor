@@ -27,15 +27,19 @@ that rewrites system network configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 266 tests; the whole decision surface
+python3 -m pytest -q          # 330 tests; the whole decision surface
 ```
 
 ## Quick reference
 
 | Command | For | Network |
 |---|---|---|
+| `python3 -m netdnsmonitor.cli <cmd>` | **start here** — the CLI | varies |
+| `python3 -m netdnsmonitor.cli interfaces` | every service, live, with reachability | **yes** |
+| `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
+| `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 266 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 330 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -47,9 +51,67 @@ python3 -m pytest -q          # 266 tests; the whole decision surface
 | menu bar **Switch to backup now** | **mutates system network config** — the intended live check | **yes** |
 | **failover live check** by hand (below) | **mutates system network config** | **yes** |
 
-There is no `scripts/` directory and no CLI. That is deliberate — `app.py` is a thin
-rumps shell over tested modules, so the modules are the interface. Everything below
-runs from the repo root.
+There is no `scripts/` directory: the CLI is the interface, and `app.py` stays a thin
+rumps shell over the same tested modules. The one-shot `python3 -c` invocations further
+down predate the CLI and are kept because they show which module owns which decision —
+but for day-to-day use, reach for `netdnsmonitor.cli`. Everything runs from the repo
+root.
+
+### `python3 -m netdnsmonitor.cli` — the CLI
+
+| Subcommand | Does |
+|---|---|
+| `status` | classification, probe results, failover state. Exit 1 if unhealthy. |
+| `interfaces [--bench]` | every network service: device, enabled, reachable, speed |
+| `bench` | measure throughput per reachable interface |
+| `failover status\|backup\|preferred [--service NAME]` | show or change the live network |
+| `priority [--promote NAME]` | show or rewrite the service order |
+| `ladder network\|dns [--repair]` | run the troubleshooting ladder |
+| `commands` | the diagnostic command catalogue |
+| `run KEY [--value NAME=VAL] [--yes]` | run one catalogue command |
+| `guide` | what to do when the network breaks |
+| `console` | interactive |
+
+`--json` on `status`, `interfaces` and `bench` gives machine-readable output.
+
+Real output from this machine:
+
+```
+$ python3 -m netdnsmonitor.cli bench
+ #  SERVICE                    DEVICE   SVC  REACHABLE     Mbps
+---------------------------------------------------------------
+ 1  AX88179B                   en6      on   not probed       -
+ 2  USB 10/100/1000 LAN        en7      on   not probed       -
+ 3  USB 10/100/1G/2.5G LAN     en9      OFF  unreachable      -
+ 4  M3100                      en12     OFF  unreachable      -
+ 5  Thunderbolt Bridge         bridge0  on   unreachable      -
+ 6  Wi-Fi                      en0      on   reachable      3.5
+ 7  iPhone USB                 en11     on   not probed       -
+```
+
+Three columns worth reading carefully:
+
+- **`SVC = OFF`** means the network *service* is disabled. macOS skips it no matter
+  where it sits in the priority order, so promoting it alone does nothing — the app
+  enables it as well, and `netdns run enable --value service='M3100' --yes` does it by
+  hand.
+- **`not probed` is not `unreachable`.** An unplugged adapter disappears from the
+  interface list entirely; calling that "unreachable" would send you after the wrong
+  fault.
+- **`Mbps = -`** means not measured, never "zero". Only reachable interfaces are
+  benchmarked, because there is nothing to measure on a path carrying no traffic.
+
+### `python3 -m netdnsmonitor.cli console` — interactive
+
+A REPL over the same catalogue. `?` guide · `i` interfaces · `b` benchmark ·
+`c` commands · `s` failover status · `f` switch to fastest backup · `p` back to
+preferred · `q` quit. Pick a diagnostic by number or key.
+
+Commands that change system state are marked `!` and never run on a bare keypress —
+the console prints the exact argv and waits for `yes`. A command with a placeholder
+asks for the value rather than shelling out with a literal `{device}` in it.
+
+The same console is available as a window from the menu bar ("Open console…").
 
 ---
 
@@ -547,7 +609,7 @@ the current one — by hand, you are the guard.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 266 passed
+python3 -m pytest -q            # 330 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -557,11 +619,13 @@ the whole suite. Current distribution:
 
 | Tests | File |
 |---|---|
-| 47 | `test_failover.py` |
+| 59 | `test_failover.py` |
+| 39 | `test_cli_console.py` |
 | 30 | `test_app_failover_wiring.py` |
 | 25 | `test_domain_learner.py` · `test_failover_policy.py` |
 | 17 | `test_service_order.py` |
 | 16 | `test_notifications.py` |
+| 13 | `test_throughput.py` |
 | 12 | `test_status.py` |
 | 11 | `test_app_notification_wiring.py` · `test_repair_executor.py` |
 | 10 | `test_interface_probe.py` |
@@ -571,7 +635,7 @@ the whole suite. Current distribution:
 | 4 | `test_dns_query.py` · `test_log_watcher.py` |
 | 2 | `test_report_storage.py` |
 | 1 | `test_app_status_wiring.py` |
-| **266** | **total** |
+| **330** | **total** |
 
 **What the suite does not cover.** `default_resolve` and `default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,
