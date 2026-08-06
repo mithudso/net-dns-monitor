@@ -492,7 +492,14 @@ networksetup -listnetworkserviceorder
 # 4. Restore your original order from step 1.
 ```
 
-What each outcome means:
+What each outcome means. On the machine this was written for the first row is the
+likely one: `scselect -n <current-set>` — a deferred no-op selecting the location that
+was already active — wrote to root-owned
+`/Library/Preferences/SystemConfiguration/preferences.plist` (mtime moved, exit 0) from
+a non-root admin account with no password prompt. That is the same
+`system.services.systemconfiguration.network` authorization `networksetup` needs, so
+the right is satisfiable here without prompting. It is a strong prior, not proof:
+`scselect` and `networksetup` are different binaries, and `-n` defers the apply.
 
 | Result | Meaning |
 |---|---|
