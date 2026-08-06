@@ -25,6 +25,67 @@ them. See `netdnsmonitor/repair_executor.py` and the design plan's
 sandbox/privileged-helper discussion for the path to adding a proper
 `SMAppService` helper later.
 
+The one exception is the optional network-failover step, which is genuinely
+attempted rather than stubbed — reordering network services can succeed for an
+administrator account without a helper. It is still tagged as needing
+privilege, and when the write is refused it reports `NEEDS_PRIVILEGE` and
+changes nothing. See "Automatic network failover" below.
+
+## Automatic network failover
+
+Optional, **off by default**. When the preferred network dies, the app can move
+the machine onto a backup network by rewriting the macOS network service order,
+and move it back when the preferred one recovers.
+
+```yaml
+failover_enabled: true
+failover_preferred_service: "AX88179B"   # the wired link
+failover_backup_service: "Wi-Fi"         # the hotspot
+```
+
+Names must match `networksetup -listnetworkserviceorder` exactly; a name that
+doesn't match is reported as a failure listing the names that do exist, and
+nothing is reordered.
+
+**The one failure this addresses.** A link that is *up but not carrying
+traffic* — it has a cable and an address, so macOS keeps it primary and keeps
+routing into a hole. When a cable is simply unplugged the interface disappears
+and macOS fails over on its own; this feature correctly does nothing there.
+
+**It verifies the backup before moving.** Reachability is tested *through* the
+backup interface specifically, using the `IP_BOUND_IF` socket option, so a
+switch only happens when the other side is known to carry traffic. Binding the
+source address instead would not work: on Darwin the route lookup follows the
+destination, so a socket bound to the Wi-Fi address still leaves via whichever
+interface owns the route.
+
+**It is built to be reluctant.** Four brakes must all release before anything
+moves: the incident must be a configured trigger (network-layer only by
+default), the backup must be independently verified, the cooldown must have
+expired, and the hourly switch budget must not be spent. Failback is
+asymmetric — it waits for the preferred link to pass several consecutive checks
+— so a flapping link cannot drag the machine back and forth. Every refusal
+records *why*, and that reason appears in the incident report.
+
+**It restores your exact order.** The service order in place before the first
+failover is recorded and restored verbatim, rather than leaving the backup
+permanently in second place. The record survives a restart, so an app
+relaunched mid-outage can still put you back.
+
+**Privilege, honestly.** Reordering network services needs an administrator
+right. Whether that succeeds without a password prompt depends on your account
+and on the "Require an administrator password to access system-wide
+preferences" setting. If it is refused, the step reports `NEEDS_PRIVILEGE` and
+nothing changes. And because `networksetup` can exit 0 without doing anything,
+the order is read back and compared after every attempt — a switch is only
+reported as `ok` once the new order has been confirmed on disk.
+
+**Not yet verified live.** The decision logic, the parser, the rate brakes and
+the persistence are covered by offline tests, and the `IP_BOUND_IF` probing was
+confirmed by hand against real interfaces. The privileged
+`networksetup -ordernetworkservices` write itself has **not** been executed on a
+real machine — see `docs/SCRIPTS.md` for the manual verification runbook.
+
 ## Setup
 
 Requires Python 3.9+ (the code uses bare `list[...]`/`tuple[...]` generic
@@ -198,6 +259,10 @@ not, since that needs a real macOS event loop.
 - `prober.py` -- TCP-connect reachability + DNS resolution aggregation
 - `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
 - `escalation.py` -- redaction + the escalate-or-not gate
+- `service_order.py` -- parses/reorders the macOS network service list
+- `interface_probe.py` -- reachability forced out of a named interface
+- `failover_policy.py` -- the pure switch/don't-switch decision + rate brakes
+- `failover.py` -- executes the reorder, verifies it, persists the old order
 - `domain_learner.py` -- learns/validates/prunes domains from failed log lookups
 - `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
 - `anthropic_escalator.py` -- the Claude API call itself

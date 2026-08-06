@@ -27,6 +27,7 @@ def make_repair_executor(
     resolver_dir_exists_fn: Callable[[str], bool] = os.path.isdir,
     resolver_listdir_fn: Callable[[str], list] = os.listdir,
     probe_domain: str = "example.com",
+    failover_fn: Optional[Callable[[str], str]] = None,
 ):
     def run(args: list[str]) -> object:
         try:
@@ -89,7 +90,13 @@ def make_repair_executor(
         "resolve_against_public_resolver": resolve_against_public_resolver,
     }
 
-    def executor(step: LadderStep) -> str:
+    def executor(step: LadderStep, classification: Optional[str] = None) -> str:
+        # Failover is the one step that needs to know what it is responding to,
+        # because the policy refuses classifications it was not configured for.
+        if step.name == "switch_to_backup_network":
+            if failover_fn is None:
+                return "disabled: network failover is not configured"
+            return failover_fn(classification or "network")
         handler = dispatch.get(step.name)
         if handler is None:
             return f"unknown step: {step.name}"

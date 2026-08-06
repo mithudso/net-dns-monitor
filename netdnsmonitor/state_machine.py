@@ -18,7 +18,7 @@ from typing import Callable, Optional
 from netdnsmonitor.classifier import Classification, classify
 from netdnsmonitor.escalation import redact, should_escalate
 from netdnsmonitor.flap_gate import FlapGate
-from netdnsmonitor.ladder import ladder_for
+from netdnsmonitor.ladder import DEFAULT_FAILOVER_CLASSIFICATIONS, ladder_for
 from netdnsmonitor.report import build_report
 
 ProbeResult = dict
@@ -38,6 +38,7 @@ class StateMachine:
         failure_threshold: int = 2,
         success_threshold: int = 2,
         sensitive_strings: Optional[list[str]] = None,
+        failover_classifications: frozenset = DEFAULT_FAILOVER_CLASSIFICATIONS,
     ):
         self.prober = prober
         self.repair_executor = repair_executor
@@ -45,6 +46,7 @@ class StateMachine:
         self.log_watcher = log_watcher or (lambda: [])
         self.flap_gate = FlapGate(failure_threshold, success_threshold)
         self.sensitive_strings = sensitive_strings or []
+        self.failover_classifications = failover_classifications
 
     def tick(self) -> Optional[dict]:
         probe = self.prober()
@@ -67,8 +69,8 @@ class StateMachine:
 
         ladder_results = []
         repair_outcomes = []
-        for step in ladder_for(classification):
-            outcome = self.repair_executor(step)
+        for step in ladder_for(classification, self.failover_classifications):
+            outcome = self.repair_executor(step, classification.value)
             ladder_results.append(
                 {"name": step.name, "kind": step.kind, "outcome": outcome}
             )

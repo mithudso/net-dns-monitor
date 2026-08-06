@@ -16,9 +16,11 @@ class FakeProber:
 class FakeRepairExecutor:
     def __init__(self):
         self.executed_steps = []
+        self.classifications = []
 
-    def __call__(self, step):
+    def __call__(self, step, classification=None):
         self.executed_steps.append(step.name)
+        self.classifications.append(classification)
         return f"executed {step.name}"
 
 

@@ -3,7 +3,7 @@ import os
 from netdnsmonitor.config import DEFAULT_CONFIG, load_config
 
 
-EXPANDED_PATH_KEYS = ("reports_dir", "learned_domains_path")
+EXPANDED_PATH_KEYS = ("reports_dir", "learned_domains_path", "failover_state_path")
 
 
 def test_missing_file_returns_defaults(tmp_path):

@@ -48,6 +48,31 @@ DEFAULT_CONFIG = {
     "smtp_username": None,
     "smtp_starttls": True,
     "notify_timeout_seconds": 5,
+    # --- automatic network failover -------------------------------------
+    # Off by default, and deliberately so: this is the only feature that
+    # rewrites system network configuration, and it cannot guess which of the
+    # machine's services is the wired link the user actually prefers. Both
+    # service names must be given verbatim as they appear in
+    # `networksetup -listnetworkserviceorder`; a name that does not match is
+    # reported as a failure with the available list, never fuzzy-matched.
+    "failover_enabled": False,
+    "failover_preferred_service": None,
+    "failover_backup_service": None,
+    # Which incident classifications may move the link. Network-only: a DNS
+    # fault is usually local, and changing the physical path will not fix it.
+    "failover_trigger_classifications": ["network"],
+    # Asymmetric on purpose. Failover happens on the first qualifying incident
+    # (already debounced by failure_threshold); failback waits for the
+    # preferred link to prove itself over several consecutive checks, so a
+    # flapping link cannot drag the machine back and forth.
+    "failover_failback_threshold": 3,
+    "failover_cooldown_seconds": 300,
+    # A hard ceiling on churn. When it is reached the machine comes to rest on
+    # whichever side is currently carrying traffic. 0 disables switching.
+    "failover_max_switches_per_hour": 4,
+    "failover_state_path": (
+        "~/Library/Application Support/net-dns-monitor/failover.json"
+    ),
 }
 
 
@@ -59,6 +84,7 @@ def load_config(path: str) -> dict:
         config.update(user_config)
     config["reports_dir"] = os.path.expanduser(config["reports_dir"])
     config["learned_domains_path"] = os.path.expanduser(config["learned_domains_path"])
+    config["failover_state_path"] = os.path.expanduser(config["failover_state_path"])
 
     # A learn interval at or below the poll interval re-adds a dead domain on
     # every tick, so the flap gate's success counter can never reset and one

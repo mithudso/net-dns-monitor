@@ -18,6 +18,8 @@ from netdnsmonitor.domain_learner import (
     prune_dead_domains,
 )
 from netdnsmonitor.escalation import redact
+from netdnsmonitor.failover import FailoverStore, NetworkFailover
+from netdnsmonitor.interface_probe import make_interface_prober
 from netdnsmonitor.log_watcher import make_log_watcher
 from netdnsmonitor.notifications import (
     format_notification,
@@ -109,7 +111,64 @@ def build_domains_source(config: dict, log_watcher):
     return learner, store
 
 
-def build_state_machine(config: dict) -> StateMachine:
+def build_failover(config: dict):
+    """Returns a NetworkFailover, or None when the feature is off or not fully
+    configured.
+
+    Both service names are required and neither is guessed. The machine this
+    was written for has three wired adapters with near-identical names, so a
+    "helpful" default here would reorder the wrong physical link.
+    """
+    if not config.get("failover_enabled"):
+        return None
+    preferred = config.get("failover_preferred_service")
+    backup = config.get("failover_backup_service")
+    if not preferred or not backup or preferred == backup:
+        return None
+    return NetworkFailover(
+        preferred_service=preferred,
+        backup_service=backup,
+        store=FailoverStore(config["failover_state_path"]),
+        # Reachability is judged against the same external targets the ordinary
+        # probe uses, but forced out of a specific interface.
+        interface_prober=make_interface_prober(
+            targets=[tuple(t) for t in config["external_targets"]],
+            timeout=float(config.get("probe_timeout_seconds", 2.0)),
+        ),
+        failback_threshold=int(config["failover_failback_threshold"]),
+        cooldown_seconds=float(config["failover_cooldown_seconds"]),
+        max_switches_per_hour=int(config["failover_max_switches_per_hour"]),
+        trigger_classifications=frozenset(
+            config.get("failover_trigger_classifications") or ["network"]
+        ),
+    )
+
+
+def failover_status_text(failover) -> str:
+    """What the menu item reports. States "no switch has been attempted"
+    distinctly from "a switch happened": an operator reading this needs to be
+    able to tell the feature being idle apart from it having acted.
+    """
+    if failover is None:
+        return "Disabled (set failover_enabled and both service names in config.yaml)."
+    if failover.last_event is None:
+        return (
+            f"Enabled: preferred '{failover.preferred_service}', backup "
+            f"'{failover.backup_service}'. No switch attempted this session."
+        )
+    return f"Last attempt: {failover.last_event}"
+
+
+def build_state_machine(config: dict, failover=None) -> StateMachine:
+    """`failover` is passed in by the app so the ladder step and the tick-path
+    failback share one instance and therefore one set of counters. It is
+    derived from the config when omitted, so that a caller who forgets gets a
+    state machine that matches the config rather than one that silently drops
+    the switch step.
+    """
+    if failover is None:
+        failover = build_failover(config)
+
     external_targets = [tuple(t) for t in config["external_targets"]]
     internal_targets = [tuple(t) for t in config["internal_targets"]]
 
@@ -142,7 +201,9 @@ def build_state_machine(config: dict) -> StateMachine:
             )
             return probe
 
-    repair_executor = make_repair_executor()
+    repair_executor = make_repair_executor(
+        failover_fn=failover.attempt_failover if failover else None
+    )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         escalator = make_escalator(client=default_client())
@@ -159,6 +220,11 @@ def build_state_machine(config: dict) -> StateMachine:
         failure_threshold=config["failure_threshold"],
         success_threshold=config["success_threshold"],
         sensitive_strings=config["sensitive_strings"],
+        failover_classifications=(
+            frozenset(config.get("failover_trigger_classifications") or ["network"])
+            if failover
+            else frozenset()
+        ),
     )
 
 
@@ -166,13 +232,14 @@ class NetDnsMonitorApp(rumps.App):
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH):
         super().__init__(name="net-dns-monitor", title="Net/DNS: starting...")
         self.config = load_config(config_path)
-        self.state_machine = build_state_machine(self.config)
+        self.failover = build_failover(self.config)
+        self.state_machine = build_state_machine(self.config, self.failover)
         self.notifier = build_notifier(self.config)
         self.last_classification = None
         self.last_report_path = None
         self.last_notification_results = None
         self.last_tick_error = None
-        self.menu = ["Open last report"]
+        self.menu = ["Open last report", "Network failover status"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
 
@@ -207,7 +274,21 @@ class NetDnsMonitorApp(rumps.App):
                 self.config["sensitive_strings"],
             )
             self.last_notification_results = self.notifier(text)
+        elif self.failover is not None:
+            # Failback rides the probe path for the same reason dead-domain
+            # pruning does: recovery produces no report, so the healthy ticks
+            # when the preferred link should be reclaimed are exactly the ticks
+            # the state machine returns None on. Skipped when a report was
+            # produced, so a failover and a failback can never interleave
+            # within one tick.
+            self.failover.attempt_failback()
         self.title = build_title(self.state_machine.flap_gate.state, self.last_classification)
+
+    @rumps.clicked("Network failover status")
+    def show_failover_status(self, _sender):
+        rumps.notification(
+            "Net/DNS Monitor", "Network failover", failover_status_text(self.failover)
+        )
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

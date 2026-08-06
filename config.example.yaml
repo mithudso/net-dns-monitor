@@ -73,3 +73,64 @@ smtp_username: null
 smtp_starttls: true
 
 notify_timeout_seconds: 5   # short on purpose: this runs while the net is down
+
+# --- Automatic network failover ---------------------------------------------
+# Moves the machine onto a backup network when the preferred one dies, by
+# rewriting the macOS network service order, and moves it back when the
+# preferred one recovers.
+#
+# OFF by default. This is the only feature that changes system network
+# configuration, and it cannot guess which service you actually prefer -- a
+# machine with three USB Ethernet adapters has three plausible answers.
+#
+# It only helps with one specific failure: the preferred link is UP (it has a
+# link and an address, so macOS keeps routing over it) but carries no traffic.
+# When a cable is simply unplugged, macOS already falls back on its own and
+# this feature has nothing to do.
+#
+# Both names must match `networksetup -listnetworkserviceorder` EXACTLY. A name
+# that doesn't match is reported as a failure listing the names that do exist;
+# it is never fuzzy-matched onto a neighbouring adapter.
+#
+#   $ networksetup -listnetworkserviceorder
+#   (1) AX88179B
+#   (Hardware Port: AX88179B, Device: en6)
+#   ...
+#   (4) Wi-Fi
+#   (Hardware Port: Wi-Fi, Device: en0)
+#
+# Changing the service order needs an administrator right. Whether that
+# succeeds without a password prompt depends on your account and on the
+# "Require an administrator password to access system-wide preferences"
+# setting. If it is refused, the ladder step reports NEEDS_PRIVILEGE and
+# nothing changes -- it never reports a switch that did not happen.
+failover_enabled: false
+failover_preferred_service: null   # e.g. "AX88179B"  -- the wired link
+failover_backup_service: null      # e.g. "Wi-Fi"     -- the hotspot
+
+# Which incidents may move the link. Network-only by default: a DNS fault is
+# usually local (resolver cache, /etc/resolver override) and changing the
+# physical path will not fix it. Add "dns" only if your wired link's resolver
+# is the thing that dies.
+failover_trigger_classifications:
+  - network
+
+# Deliberately asymmetric. Failing over happens on the first qualifying
+# incident (already debounced by failure_threshold), but failing back waits for
+# the preferred link to prove itself over this many consecutive checks -- so a
+# link that flaps every 30s cannot drag the machine back and forth.
+failover_failback_threshold: 3
+
+# Minimum seconds between switches, in either direction.
+failover_cooldown_seconds: 300
+
+# Hard ceiling on churn. Once spent, the machine comes to rest on whichever
+# side is currently carrying traffic. Set to 0 to disable switching entirely
+# while leaving the rest of the feature configured.
+failover_max_switches_per_hour: 4
+
+# Records the exact service order in place before the first failover, so a
+# failback restores it verbatim rather than leaving the backup permanently
+# second. Also survives a restart, so an app relaunched mid-outage can still
+# put you back.
+failover_state_path: "~/Library/Application Support/net-dns-monitor/failover.json"

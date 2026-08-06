@@ -23,7 +23,7 @@ the bottom before concluding this app fixed anything.
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 129 tests; the whole decision surface
+python3 -m pytest -q          # 224 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -31,7 +31,7 @@ python3 -m pytest -q          # 129 tests; the whole decision surface
 | Command | For | Network |
 |---|---|---|
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 129 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 224 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -39,6 +39,8 @@ python3 -m pytest -q          # 129 tests; the whole decision surface
 | one-shot `query_public_dns` | bypass the system resolver entirely | **yes** |
 | one-shot `format_notification` | see the alert text without sending it | no |
 | one-shot `StateMachine` | the whole pipeline, offline, with fakes | no |
+| one-shot `service_order` + `interface_probe` | read-only failover dry run | **yes** |
+| **failover live check** (below) | **mutates system network config** | **yes** |
 
 There is no `scripts/` directory and no CLI. That is deliberate — `app.py` is a thin
 rumps shell over tested modules, so the modules are the interface. Everything below
@@ -426,10 +428,83 @@ rate limiter anywhere: the gate already provides it.
 
 ---
 
+### `service_order` + `interface_probe` — failover dry run (read-only)
+
+**Purpose.** Answer the two questions the failover decision rests on, without
+changing anything: does the configured service name exist, and does the backup
+interface actually carry traffic right now?
+
+**When to use it.** Before turning `failover_enabled` on, and any time a switch did
+not happen and you want to know which brake held.
+
+```bash
+python3 -c "
+from netdnsmonitor.failover import default_run
+from netdnsmonitor.service_order import parse_service_order, promote
+from netdnsmonitor.interface_probe import make_interface_prober
+
+services = parse_service_order(default_run(['networksetup','-listnetworkserviceorder']).stdout)
+for s in services:
+    print(f'{s.name!r:32} device={s.device} enabled={s.enabled}')
+
+probe = make_interface_prober([('1.1.1.1',443),('8.8.8.8',443)], timeout=2.0)
+for s in services:
+    print(f'{s.name!r:32} reachable={probe(s.device)}')
+
+print('order after a failover to Wi-Fi:', promote(services, 'Wi-Fi'))
+"
+```
+
+`reachable=None` means **not probed** — the interface is absent (an unplugged USB
+adapter disappears entirely). That is not the same as `False`, and the policy will not
+switch onto, or back to, an interface it could not ask.
+
+### Failover live check — **this one mutates system network config**
+
+Everything above is read-only. This is not. The offline suite covers the parser, the
+policy, the brakes and the persistence, and `IP_BOUND_IF` probing was confirmed by
+hand — but the privileged `networksetup -ordernetworkservices` write has **not** been
+executed against a real machine. Until someone runs this, treat "the switch works" as
+unverified.
+
+Run it when the wired adapters have **no link** (unplugged). With only Wi-Fi active,
+reordering changes the stored order but not the active route, so the blast radius is
+close to zero.
+
+```bash
+# 1. Record the current order. Keep this output -- it is your undo.
+networksetup -listnetworkserviceorder
+
+# 2. Apply the failover order by hand. Every service name must be present,
+#    including the disabled (*) ones, quoted exactly.
+networksetup -ordernetworkservices "Wi-Fi" "AX88179B" "USB 10/100/1000 LAN" \
+  "USB 10/100/1G/2.5G LAN" "M3100" "Thunderbolt Bridge" "iPhone USB"
+
+# 3. Confirm it landed. networksetup can exit 0 and do nothing, which is why
+#    the app reads the order back rather than trusting the exit code.
+networksetup -listnetworkserviceorder
+
+# 4. Restore your original order from step 1.
+```
+
+What each outcome means:
+
+| Result | Meaning |
+|---|---|
+| order changed, no prompt | the app's switch will work silently — the intended case |
+| a password prompt appeared | it works, but not unattended; the tick will block |
+| `You must be running as root` | the app reports `NEEDS_PRIVILEGE` and changes nothing |
+| exit 0, order unchanged | the app reports `failed: ... order is unchanged` |
+
+**Do not** run step 2 with a service name omitted. `-ordernetworkservices` rewrites the
+order to exactly the list it is given; a missing name removes that service. The app
+guards this with `is_order_intact`, which refuses any list that is not a permutation of
+the current one — by hand, you are the guard.
+
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 129 passed
+python3 -m pytest -q            # 224 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -439,16 +514,20 @@ the whole suite. Current distribution:
 
 | Tests | File |
 |---|---|
+| 26 | `test_failover.py` |
 | 25 | `test_domain_learner.py` |
-| 16 | `test_notifications.py` |
+| 24 | `test_failover_policy.py` |
+| 20 | `test_app_failover_wiring.py` |
+| 16 | `test_notifications.py` · `test_service_order.py` |
 | 11 | `test_app_notification_wiring.py` · `test_repair_executor.py` |
+| 9 | `test_interface_probe.py` |
 | 7 | `test_escalation.py` · `test_prober.py` |
 | 6 | `test_flap_gate.py` · `test_state_machine.py` |
 | 5 | `test_anthropic_escalator.py` · `test_classifier.py` · `test_config.py` · `test_ladder.py` · `test_report.py` |
 | 4 | `test_dns_query.py` · `test_log_watcher.py` · `test_status.py` |
 | 2 | `test_report_storage.py` |
 | 1 | `test_app_status_wiring.py` |
-| **129** | **total** |
+| **224** | **total** |
 
 **What the suite does not cover.** `default_resolve` and `default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,
