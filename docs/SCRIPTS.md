@@ -27,7 +27,7 @@ that rewrites system network configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 330 tests; the whole decision surface
+python3 -m pytest -q          # 347 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -39,7 +39,7 @@ python3 -m pytest -q          # 330 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 330 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 347 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -107,8 +107,9 @@ A REPL over the same catalogue. `?` guide · `i` interfaces · `b` benchmark ·
 `c` commands · `s` failover status · `f` switch to fastest backup · `p` back to
 preferred · `q` quit. Pick a diagnostic by number or key.
 
-Commands that change system state are marked `!` and never run on a bare keypress —
-the console prints the exact argv and waits for `yes`. A command with a placeholder
+Anything that changes system state — a catalogue command marked `!`, switching
+networks (`f`/`p`), or `promote` — prints the exact argv and waits for `yes`. Nothing
+that rewrites configuration happens on a single keypress. A command with a placeholder
 asks for the value rather than shelling out with a literal `{device}` in it.
 
 The same console is available as a window from the menu bar ("Open console…").
@@ -609,7 +610,7 @@ the current one — by hand, you are the guard.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 330 passed
+python3 -m pytest -q            # 347 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -619,13 +620,13 @@ the whole suite. Current distribution:
 
 | Tests | File |
 |---|---|
-| 59 | `test_failover.py` |
-| 39 | `test_cli_console.py` |
+| 63 | `test_failover.py` |
+| 45 | `test_cli_console.py` |
 | 30 | `test_app_failover_wiring.py` |
 | 25 | `test_domain_learner.py` · `test_failover_policy.py` |
+| 20 | `test_throughput.py` |
 | 17 | `test_service_order.py` |
 | 16 | `test_notifications.py` |
-| 13 | `test_throughput.py` |
 | 12 | `test_status.py` |
 | 11 | `test_app_notification_wiring.py` · `test_repair_executor.py` |
 | 10 | `test_interface_probe.py` |
@@ -635,7 +636,7 @@ the whole suite. Current distribution:
 | 4 | `test_dns_query.py` · `test_log_watcher.py` |
 | 2 | `test_report_storage.py` |
 | 1 | `test_app_status_wiring.py` |
-| **330** | **total** |
+| **347** | **total** |
 
 **What the suite does not cover.** `default_resolve` and `default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

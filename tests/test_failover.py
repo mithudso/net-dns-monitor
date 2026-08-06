@@ -480,7 +480,11 @@ def test_switch_now_ignores_the_policy_that_blocks_automatic_switching(store):
         cooldown_seconds=99_999.0, max_switches_per_hour=1,
     )
     assert failover.attempt_failover("network").startswith("no switch:")
-    assert failover.switch_now("backup").startswith("ok:")
+    outcome = failover.switch_now("backup")
+    assert outcome.startswith("ok:")
+    # The warning is the only thing keeping that `ok:` honest -- nothing was
+    # verified, and the outcome has to say so.
+    assert "not verified" in outcome
 
 
 def test_switch_now_still_refuses_to_corrupt_the_service_order(store):
@@ -783,3 +787,67 @@ def test_unwritable_state_path_does_not_raise():
     store.save()  # must not raise
     runner = FakeRunner()
     assert build(store, runner).attempt_failover("network").startswith("ok:")
+
+
+# --- the enable is undone, and a third service is not clobbered -------------
+
+
+def test_failback_re_disables_a_service_this_app_enabled(store):
+    """Leaving it on is a configuration change the user never asked for."""
+    runner = FakeRunner()
+    failover = build(
+        store, runner, preferred_service="AX88179B",
+        backup_services=["M3100"], backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.enabled_by_us == "M3100"
+    assert "M3100" not in runner.disabled
+
+    back = build(store, runner, preferred_service="AX88179B",
+                 backup_services=["M3100"], backup_service=None,
+                 prober=lambda dev: True)
+    for _ in range(3):
+        outcome = back.attempt_failback()
+    assert outcome.startswith("ok:")
+    assert "disabled 'M3100' again" in outcome
+    assert "M3100" in runner.disabled
+    assert store.enabled_by_us is None
+
+
+def test_a_service_we_did_not_enable_is_left_alone(store):
+    runner = failed_over(store)          # Wi-Fi, already enabled
+    assert store.enabled_by_us is None
+    failover = build(store, runner, prober=lambda dev: True)
+    for _ in range(3):
+        outcome = failover.attempt_failback()
+    assert outcome.startswith("ok:")
+    assert "disabled" not in outcome
+
+
+def test_a_third_service_at_the_head_does_not_destroy_the_restore_point(store):
+    """The user promoted something by hand while failed over. Clearing the
+    record there would strand the machine on neither side with no way back.
+    """
+    runner = failed_over(store)
+    runner.order = ["Thunderbolt Bridge"] + [
+        n for n in ORDER if n != "Thunderbolt Bridge"
+    ]
+    failover = build(store, runner, prober=lambda dev: True)
+    outcome = failover.attempt_failback()
+    assert store.original_order == ORDER, "the restore point must survive"
+    assert outcome is None or "neither" in outcome
+
+
+def test_a_named_backup_absent_from_the_order_is_reported_as_such(store):
+    """'not in the service order' is a different fact from 'disappeared
+    mid-check', and only one of them is true.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store, runner, backup_services=["Wi-Fi", "Ghost"], backup_service=None,
+    )
+    outcome = failover.switch_now("backup", service="Ghost")
+    assert outcome.startswith("failed:")
+    assert "not in the service order" in outcome
+    assert runner.applied_orders == []

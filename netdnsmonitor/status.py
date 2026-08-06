@@ -55,8 +55,25 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
 
     mode = "automatic" if snapshot.get("auto_enabled") else "manual only"
     active_side = snapshot.get("active_side")
-    return [
-        f"Active: {snapshot.get('active_service')} — failover is {mode}",
+    active_service = snapshot.get("active_service")
+
+    # Show the backup that is actually carrying traffic, not simply the first
+    # configured one. With several backups the filled marker would otherwise
+    # land on a service carrying nothing, which is the one thing this row is
+    # supposed to tell you.
+    backups = list(snapshot.get("backups") or [])
+    backup = next(
+        (b for b in backups if b.get("name") == active_service),
+        None,
+    ) or snapshot.get("backup")
+
+    lines = [
+        f"Active: {active_service} — failover is {mode}",
         _describe_side(snapshot["preferred"], "Preferred", active_side == "preferred"),
-        _describe_side(snapshot["backup"], "Backup", active_side == "backup"),
     ]
+    if backup:
+        label = "Backup" if len(backups) <= 1 else f"Backup (of {len(backups)})"
+        lines.append(
+            _describe_side(backup, label, backup.get("name") == active_service)
+        )
+    return lines

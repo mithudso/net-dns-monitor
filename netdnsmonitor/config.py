@@ -85,7 +85,9 @@ DEFAULT_CONFIG = {
     # until the rolling hour frees a slot -- including, if the budget ran out
     # mid-outage, on a preferred link that is still down. That is the cost of
     # bounding oscillation; raise the ceiling if you would rather have the
-    # switching. 0 disables switching entirely.
+    # switching. 0 disables AUTOMATIC switching; the menu bar buttons and
+    # `netdns failover backup` still work, because a person clicking a button
+    # has supplied the judgement the brakes stand in for.
     "failover_max_switches_per_hour": 4,
     "failover_state_path": (
         "~/Library/Application Support/net-dns-monitor/failover.json"

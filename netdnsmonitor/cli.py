@@ -97,13 +97,18 @@ NET/DNS CONSOLE -- what to do when the network breaks
      `ping-gw`     if the gateway answers, the fault is upstream of you
 
   4. Moving to another network
-     `interfaces`  every service with live reachability and speed
-     `bench`       measure throughput per interface before choosing
-     `switch`      move to the fastest reachable backup
-     `priority`    reorder services yourself
+     `i`           every service with live reachability
+     `b`           measure throughput per interface before choosing
+     `f`           move to the fastest reachable backup   (asks first)
+     `p`           move back to the preferred link        (asks first)
+     `priority`    show the service order
+     `promote <service name>`  move one to the top        (asks first)
 
-  Type a number from the command list, or a key like `dns`. `?` for this
-  guide, `i` for interfaces, `c` for the command list, `q` to quit."""
+  Typing a number or a key from the command list RUNS that command. Anything
+  that changes system state asks for confirmation first and shows you the
+  exact command before it runs.
+
+  `?` this guide · `c` the command list · `s` failover status · `q` quit."""
 
 
 def render_failover_status(snapshot: Optional[dict]) -> str:
@@ -148,6 +153,57 @@ def list_services(run_fn: Callable) -> list:
     if getattr(result, "returncode", 1) != 0:
         return []
     return parse_service_order(getattr(result, "stdout", "") or "")
+
+
+def run_catalog_command(key: str, values: dict) -> str:
+    """Run one catalogue command and return its output as text.
+
+    Every failure arrives as text rather than an exception: a missing binary, a
+    permission error or a timeout are all ordinary results of a diagnostic, and
+    a traceback out of the CLI (or out of the console REPL, which would end the
+    session) is not a useful way to report one. Each command carries its own
+    timeout because `traceroute` legitimately outlives the ladder's 5s ceiling.
+    """
+    command = BY_KEY.get(key)
+    argv = resolve(key, **values)
+    if command is None or argv is None:
+        return f"failed: cannot build a command for '{key}'"
+    header = f"$ {' '.join(argv)}"
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=command.timeout
+        )
+    except subprocess.TimeoutExpired:
+        return f"{header}\nfailed: timed out after {command.timeout:.0f}s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"{header}\nfailed: {type(exc).__name__}: {exc}"
+    body = (result.stdout or "").rstrip() or (result.stderr or "").rstrip()
+    return f"{header}\n{body or f'(no output, exit {result.returncode})'}"
+
+
+def promote_service(run_fn, services, name: str) -> str:
+    """Move a service to the top of the order, refusing to claim a no-op.
+
+    A disabled service is skipped by macOS wherever it sits, so promoting one
+    changes the stored order and routes nothing. Reporting `ok:` for that is
+    exactly the confident-wrong-answer this project forbids, so it is refused
+    with the fix named.
+    """
+    target = next((s for s in services if s.name == name), None)
+    if target is None:
+        return f"failed: '{name}' not found; available: " + ", ".join(
+            s.name for s in services
+        )
+    if not target.enabled:
+        return (
+            f"failed: '{name}' is DISABLED, so promoting it would change the order "
+            "and route nothing. Enable it first: "
+            f"netdns run enable --value service='{name}' --yes"
+        )
+    new_order = promote(services, name)
+    if new_order is None:
+        return f"failed: '{name}' disappeared mid-check"
+    return apply_service_order(run_fn, services, new_order)
 
 
 def interface_rows(run_fn, prober, meter=None, measure: bool = False) -> list[dict]:
@@ -240,12 +296,7 @@ def cmd_priority(args, config, out) -> int:
             for s in services
         ]))
         return 0
-    new_order = promote(services, args.promote)
-    if new_order is None:
-        out(f"failed: '{args.promote}' not found; available: "
-            + ", ".join(s.name for s in services))
-        return 1
-    outcome = apply_service_order(run_fn, services, new_order)
+    outcome = promote_service(run_fn, services, args.promote)
     out(outcome)
     return 0 if outcome.startswith("ok:") else 1
 
@@ -277,11 +328,9 @@ def cmd_run(args, config, out) -> int:
         out(f"'{args.key}' changes system state ({' '.join(command.argv)}). "
             "Re-run with --yes to confirm.")
         return 2
-    argv = resolve(args.key, **dict(args.value or []))
-    out(f"$ {' '.join(argv)}")
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
-    out((result.stdout or "").rstrip() or (result.stderr or "").rstrip())
-    return result.returncode
+    text = run_catalog_command(args.key, dict(args.value or []))
+    out(text)
+    return 1 if "\nfailed:" in text else 0
 
 
 def cmd_commands(args, config, out) -> int:
@@ -309,50 +358,61 @@ def _key_value(text: str):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Shared options live on a parent parser so they work *after* the
+    # subcommand too. Declared only on the top-level parser, `netdns status
+    # --json` is an error and only `netdns --json status` works, which is the
+    # opposite of what anyone types.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", default=DEFAULT_CONFIG_PATH)
+    common.add_argument("--json", action="store_true", help="machine-readable output")
+
     parser = argparse.ArgumentParser(
-        prog="netdns", description="Network and DNS monitor: diagnose, benchmark, fail over."
+        prog="netdns",
+        description="Network and DNS monitor: diagnose, benchmark, fail over.",
+        parents=[common],
     )
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
-    parser.add_argument("--json", action="store_true", help="machine-readable output")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("status", help="classification, probe results and failover state")
+    def add(name, **kwargs):
+        return sub.add_parser(name, parents=[common], **kwargs)
+
+    p = add("status", help="classification, probe results and failover state")
     p.set_defaults(func=cmd_status)
 
-    p = sub.add_parser("interfaces", help="every network service, live")
+    p = add("interfaces", help="every network service, live")
     p.add_argument("--bench", action="store_true", help="also measure throughput")
     p.set_defaults(func=cmd_interfaces)
 
-    p = sub.add_parser("bench", help="measure throughput per interface")
+    p = add("bench", help="measure throughput per interface")
     p.set_defaults(func=cmd_bench)
 
-    p = sub.add_parser("failover", help="show or change which network is in use")
+    p = add("failover", help="show or change which network is in use")
     p.add_argument("action", choices=["status", "backup", "preferred"])
     p.add_argument("--service", help="switch to this specific backup")
     p.set_defaults(func=cmd_failover)
 
-    p = sub.add_parser("priority", help="show or change the service order")
+    p = add("priority", help="show or change the service order")
     p.add_argument("--promote", help="move this service to the top")
     p.set_defaults(func=cmd_priority)
 
-    p = sub.add_parser("ladder", help="run the troubleshooting ladder")
+    p = add("ladder", help="run the troubleshooting ladder")
     p.add_argument("layer", choices=["network", "dns"])
     p.add_argument("--repair", action="store_true", help="also run repair steps")
     p.set_defaults(func=cmd_ladder)
 
-    p = sub.add_parser("commands", help="list the diagnostic command catalogue")
+    p = add("commands", help="list the diagnostic command catalogue")
     p.set_defaults(func=cmd_commands)
 
-    p = sub.add_parser("run", help="run one catalogue command")
+    p = add("run", help="run one catalogue command")
     p.add_argument("key")
     p.add_argument("--value", action="append", type=_key_value, metavar="NAME=VALUE")
     p.add_argument("--yes", action="store_true", help="confirm a state-changing command")
     p.set_defaults(func=cmd_run)
 
-    p = sub.add_parser("guide", help="what to do when the network breaks")
+    p = add("guide", help="what to do when the network breaks")
     p.set_defaults(func=cmd_guide)
 
-    p = sub.add_parser("console", help="interactive console")
+    p = add("console", help="interactive console")
     p.set_defaults(func=cmd_console)
     return parser
 

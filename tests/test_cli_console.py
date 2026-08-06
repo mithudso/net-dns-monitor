@@ -277,14 +277,67 @@ def test_a_mutating_command_with_a_placeholder_asks_for_both():
     assert "$ networksetup -setnetworkserviceenabled M3100 on" in text
 
 
-def test_shortcuts_are_named_actions_not_executed_inline():
+def test_read_only_shortcuts_are_named_actions_not_executed_inline():
     """`handle` stays pure; the loop performs the live ones."""
     for key, token in [
         ("__INTERFACES__", "i"), ("__BENCH__", "b"), ("__STATUS__", "s"),
-        ("__SWITCH_BACKUP__", "f"), ("__SWITCH_PREFERRED__", "p"),
+        ("__PRIORITY__", "priority"),
     ]:
         text, _ = handle(token, ConsoleState(), SERVICES, runner)
         assert text == key
+
+
+def test_switching_networks_asks_before_acting():
+    """Rewriting the service order is a bigger change than anything in the
+    catalogue, and `p` sits next to `?` on a keyboard.
+    """
+    for token, action in [("f", "__SWITCH_BACKUP__"), ("p", "__SWITCH_PREFERRED__")]:
+        text, state = handle(token, ConsoleState(), SERVICES, runner)
+        assert "Type 'yes' to confirm" in text
+        assert state.pending_action == action
+        confirmed, _ = handle("yes", state, SERVICES, runner)
+        assert confirmed == action
+
+
+def test_declining_a_switch_cancels_it():
+    _, state = handle("f", ConsoleState(), SERVICES, runner)
+    text, state = handle("n", state, SERVICES, runner)
+    assert text == "cancelled."
+    assert state.pending_action is None
+
+
+def test_promote_names_the_target_and_asks():
+    text, state = handle("promote Wi-Fi", ConsoleState(), SERVICES, runner)
+    assert "Wi-Fi" in text and "Type 'yes' to confirm" in text
+    assert state.pending_action == "__PROMOTE__"
+    assert state.values["service"] == "Wi-Fi"
+    confirmed, state = handle("yes", state, SERVICES, runner)
+    assert confirmed == "__PROMOTE__"
+    assert state.values["service"] == "Wi-Fi", "the target must survive confirmation"
+
+
+def test_promote_rejects_a_service_that_does_not_exist():
+    text, state = handle("promote Nope", ConsoleState(), SERVICES, runner)
+    assert "no service named" in text
+    assert state.pending_action is None
+
+
+def test_promote_refuses_a_disabled_service_rather_than_claiming_success():
+    """Promoting a disabled service changes the stored order and routes
+    nothing; reporting ok: for that is a repair that did not happen.
+    """
+    from netdnsmonitor.cli import promote_service
+
+    outcome = promote_service(runner, SERVICES, "M3100")  # M3100 is disabled
+    assert outcome.startswith("failed:")
+    assert "DISABLED" in outcome
+    assert "netdns run enable" in outcome
+
+
+def test_promote_of_an_enabled_service_goes_through():
+    from netdnsmonitor.cli import promote_service
+
+    assert promote_service(runner, SERVICES, "Wi-Fi").startswith(("ok:", "failed: networksetup"))
 
 
 def test_blank_input_does_nothing():
@@ -351,12 +404,23 @@ def test_dropdown_pick_inserts_rather_than_runs():
 
 
 def test_dropdown_pick_ignores_an_out_of_range_index():
+    """With no field assigned the bound check short-circuits and proves
+    nothing, so the field is set first.
+    """
     from netdnsmonitor.window import ConsoleWindowController
 
+    class FakeField:
+        def __init__(self):
+            self.value = "untouched"
+
+        def setStringValue_(self, text):
+            self.value = text
+
     controller = ConsoleWindowController({})
+    controller.input_field = FakeField()
     controller.insert_command(-1)   # the placeholder row
     controller.insert_command(9999)
-    assert controller.input_field is None
+    assert controller.input_field.value == "untouched"
 
 
 def test_window_module_imports_without_a_gui_session():

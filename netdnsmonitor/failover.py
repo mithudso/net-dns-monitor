@@ -40,6 +40,7 @@ from netdnsmonitor.failover_policy import (
     decide,
     next_preferred_streak,
 )
+from netdnsmonitor.throughput import measure_all
 from netdnsmonitor.service_order import (
     find_service,
     is_order_intact,
@@ -148,6 +149,8 @@ class FailoverStore:
     def __init__(self, path: str):
         self.path = os.path.expanduser(path)
         self.original_order: Optional[list[str]] = None
+        # A service this app turned on, so failback can turn it back off.
+        self.enabled_by_us: Optional[str] = None
         self.last_switch_at: Optional[float] = None
         self.switch_times: list[float] = []
         self.load()
@@ -166,6 +169,8 @@ class FailoverStore:
         self.original_order = (
             [str(n) for n in order] if isinstance(order, list) and order else None
         )
+        enabled_by_us = data.get("enabled_by_us")
+        self.enabled_by_us = enabled_by_us if isinstance(enabled_by_us, str) else None
         last = data.get("last_switch_at")
         self.last_switch_at = last if _is_finite_number(last) else None
         times = data.get("switch_times")
@@ -182,6 +187,7 @@ class FailoverStore:
                 json.dump(
                     {
                         "original_order": self.original_order,
+                        "enabled_by_us": self.enabled_by_us,
                         "last_switch_at": self.last_switch_at,
                         "switch_times": self.switch_times[-32:],
                     },
@@ -223,6 +229,7 @@ class NetworkFailover:
         run_fn: Callable[[list[str]], object] = default_run,
         backup_services: Optional[list[str]] = None,
         throughput_meter: Optional[Callable[[Optional[str]], Optional[float]]] = None,
+        measure_timeout: float = 5.0,
         failback_threshold: int = 3,
         cooldown_seconds: float = 300.0,
         max_switches_per_hour: int = 4,
@@ -244,6 +251,7 @@ class NetworkFailover:
             names.insert(0, backup_service)
         self.backup_services = names
         self.throughput_meter = throughput_meter
+        self.measure_timeout = measure_timeout
         self.store = store
         self.interface_prober = interface_prober
         self.run_fn = run_fn
@@ -294,26 +302,36 @@ class NetworkFailover:
         path that carries no traffic, and paying for it would put the whole
         cost on the UI thread for no information.
         """
-        candidates = []
+        found = []
         for name in self.backup_services:
             service = find_service(services, name)
             if service is None:
-                candidates.append(Candidate(name=name, reachable=None))
+                found.append((name, None, None, True))
                 continue
-            reachable = self.interface_prober(service.device)
-            throughput = None
-            if measure and reachable is True and self.throughput_meter is not None:
-                throughput = self.throughput_meter(service.device)
-            candidates.append(
-                Candidate(
-                    name=name,
-                    device=service.device,
-                    reachable=reachable,
-                    throughput_mbps=throughput,
-                    enabled=service.enabled,
-                )
+            found.append(
+                (name, service.device, self.interface_prober(service.device),
+                 service.enabled)
             )
-        return candidates
+
+        # Benchmark every reachable candidate at once against a single
+        # deadline. Serially this is one timeout each, on the timer thread,
+        # during the outage being diagnosed.
+        speeds: dict = {}
+        if measure and self.throughput_meter is not None:
+            devices = [d for _, d, ok, _ in found if ok is True and d]
+            if devices:
+                speeds = measure_all(devices, self.throughput_meter, self.measure_timeout)
+
+        return [
+            Candidate(
+                name=name,
+                device=device,
+                reachable=reachable,
+                throughput_mbps=speeds.get(device),
+                enabled=enabled,
+            )
+            for name, device, reachable, enabled in found
+        ]
 
     # --- system write -------------------------------------------------------
 
@@ -507,9 +525,22 @@ class NetworkFailover:
             # thread every tick, forever, across restarts. Clearing keys off
             # the live order rather than the outcome string, so a real failover
             # whose read-back failed keeps its record.
-            if self.store.original_order is not None:
+            #
+            # Only when the preferred service is *actually* at the head. A
+            # third service on top (the user promoted something by hand) also
+            # reads as "not on a backup", and clearing there would destroy the
+            # restore point while the machine is on neither side.
+            if (
+                self.store.original_order is not None
+                and services[0].name == self.preferred_service
+            ):
                 self.store.original_order = None
                 self.store.save()
+            if services[0].name != self.preferred_service:
+                return (
+                    f"no switch: '{services[0].name}' is at the head of the order, "
+                    "which is neither the preferred link nor a configured backup"
+                )
             return "no switch: already on the preferred network"
         if allow == FAILOVER and active_side == BACKUP:
             return "no switch: already on the backup network"
@@ -592,6 +623,14 @@ class NetworkFailover:
                         f"failed: '{prefer_name}' is not one of the configured backups "
                         f"({', '.join(self.backup_services)})"
                     )
+                if winner.device is None:
+                    # Configured, but not present in the live service order --
+                    # which is a different thing from vanishing mid-operation.
+                    return (
+                        f"failed: '{prefer_name}' is configured but not in the service "
+                        "order; available: "
+                        + ", ".join(s.name for s in services)
+                    )
             else:
                 winner = best_candidate(candidates)
             if winner is None and allow_unverified:
@@ -622,6 +661,12 @@ class NetworkFailover:
             problem = self._enable_service(target)
             if problem:
                 return problem
+            # Recorded so failback can put it back the way it was. Enabling is
+            # a change to the machine's configuration just as much as the
+            # reorder is, and leaving it on afterwards is a change the user
+            # never asked for and is not told about.
+            self.store.enabled_by_us = target
+            self.store.save()
             note = " (also enabled the service, which was off)"
             # Re-read: enabling rewrites the listing, and the order about to be
             # applied has to be a permutation of what is there *now*.
@@ -658,8 +703,27 @@ class NetworkFailover:
         if new_order is None:
             return f"failed: preferred service '{self.preferred_service}' disappeared mid-check"
         outcome = self._apply_order(services, new_order)
-        if outcome.startswith("ok:"):
-            self.store.original_order = None
-            self.store.save()
-            return f"{outcome} (failed back to preferred '{self.preferred_service}'){note}"
-        return outcome
+        if not outcome.startswith("ok:"):
+            return outcome
+
+        # Put back the enable this app made, so the machine ends up in the
+        # state it started in rather than one the user never asked for.
+        undone = ""
+        if self.store.enabled_by_us:
+            name = self.store.enabled_by_us
+            result = self.run_fn(
+                ["networksetup", "-setnetworkserviceenabled", name, "off"]
+            )
+            undone = (
+                f" and disabled '{name}' again, which this app had enabled"
+                if getattr(result, "returncode", 1) == 0
+                else f" (could not re-disable '{name}', which this app enabled)"
+            )
+            self.store.enabled_by_us = None
+
+        self.store.original_order = None
+        self.store.save()
+        return (
+            f"{outcome} (failed back to preferred '{self.preferred_service}'"
+            f"{undone}){note}"
+        )

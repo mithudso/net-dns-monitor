@@ -25,6 +25,10 @@ class DiagnosticCommand:
     # Filled in from the live service list when the command targets one.
     placeholder: Optional[str] = None
     notes: str = ""
+    # Seconds. The default matches the ladder's ceiling; a few commands are
+    # legitimately slower than that and would otherwise *always* time out and
+    # print the timeout text where their output should be.
+    timeout: float = 5.0
 
 
 CATALOG: list[DiagnosticCommand] = [
@@ -77,16 +81,18 @@ CATALOG: list[DiagnosticCommand] = [
     DiagnosticCommand(
         "ping", ["ping", "-c", "3", "1.1.1.1"],
         "raw reachability to a known-good address",
+        timeout=15.0,
         notes="ICMP is widely filtered; a failure here is weaker evidence than a TCP probe.",
     ),
     DiagnosticCommand(
         "ping-gw", ["ping", "-c", "3", "{gateway}"],
         "whether the local gateway answers -- separates LAN from uplink faults",
-        placeholder="gateway",
+        placeholder="gateway", timeout=15.0,
     ),
     DiagnosticCommand(
         "traceroute", ["traceroute", "-w", "1", "-m", "12", "1.1.1.1"],
         "where along the path packets stop",
+        timeout=45.0,
     ),
     # --- Wi-Fi ---
     DiagnosticCommand(
@@ -115,7 +121,7 @@ CATALOG: list[DiagnosticCommand] = [
     DiagnosticCommand(
         "renew-dhcp", ["ipconfig", "set", "{device}", "DHCP"],
         "force a fresh DHCP lease on one interface",
-        mutates=True, needs_admin=True, placeholder="device",
+        mutates=True, needs_admin=True, placeholder="device", timeout=20.0,
     ),
     DiagnosticCommand(
         "flush-dns", ["dscacheutil", "-flushcache"],
@@ -150,11 +156,24 @@ def resolve(key: str, **values) -> Optional[list[str]]:
     return argv
 
 
-def missing_placeholder(key: str, **values) -> Optional[str]:
-    """Which placeholder still needs a value, if any."""
+def placeholders_in(key: str) -> list[str]:
+    """Every placeholder the argv actually contains.
+
+    Derived from the argv rather than trusting the `placeholder` field, so the
+    two cannot disagree. A disagreement used to mean `missing_placeholder` said
+    "nothing needed" while `resolve` returned None, and the callers then did
+    `' '.join(None)` -- a TypeError out of the console loop, which ends the
+    REPL and the window's submit path.
+    """
     command = BY_KEY.get(key)
-    if command is None or command.placeholder is None:
-        return None
-    if values.get(command.placeholder) in (None, ""):
-        return command.placeholder
+    if command is None:
+        return []
+    return [t[1:-1] for t in command.argv if t.startswith("{") and t.endswith("}")]
+
+
+def missing_placeholder(key: str, **values) -> Optional[str]:
+    """The first placeholder still needing a value, if any."""
+    for name in placeholders_in(key):
+        if values.get(name) in (None, ""):
+            return name
     return None

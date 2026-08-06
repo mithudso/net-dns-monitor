@@ -24,17 +24,31 @@ def test_incident_state_with_no_classification_yet_says_unknown():
 # --- failover indicator rows ------------------------------------------------
 
 
+PREFERRED_ROW = {"name": "AX88179B", "device": "en6", "found": True, "reachable": True}
+BACKUP_ROW = {"name": "Wi-Fi", "device": "en0", "found": True, "reachable": True}
+
+
 def snapshot(**overrides):
+    """`active_service` is what the system reports; `active_side` is derived
+    from it. A fixture where the two disagree describes a state that cannot
+    happen, so the helper keeps them consistent unless told otherwise.
+    """
     snap = {
         "error": None,
         "active_side": "preferred",
         "active_service": "AX88179B",
-        "preferred": {"name": "AX88179B", "device": "en6", "found": True, "reachable": True},
-        "backup": {"name": "Wi-Fi", "device": "en0", "found": True, "reachable": True},
+        "preferred": dict(PREFERRED_ROW),
+        "backup": dict(BACKUP_ROW),
+        "backups": [dict(BACKUP_ROW)],
         "auto_enabled": True,
         "last_event": None,
     }
     snap.update(overrides)
+    if "active_service" not in overrides:
+        snap["active_service"] = (
+            snap["backup"]["name"] if snap["active_side"] == "backup"
+            else snap["preferred"]["name"]
+        )
     return snap
 
 

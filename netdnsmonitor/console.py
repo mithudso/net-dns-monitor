@@ -44,11 +44,16 @@ class ConsoleState:
     pending_key: Optional[str] = None
     pending_needs: Optional[str] = None
     pending_confirm: bool = False
+    # A named action (switch to backup / preferred) awaiting confirmation. Kept
+    # separate from pending_key because these are not catalogue commands.
+    pending_action: Optional[str] = None
     values: dict = field(default_factory=dict)
     quit: bool = False
 
 
-def _run_argv(argv: list[str], runner: Callable) -> str:
+def _run_argv(argv: Optional[list[str]], runner: Callable) -> str:
+    if not argv:
+        return "failed: could not build that command."
     result = runner(argv)
     stdout = (getattr(result, "stdout", "") or "").rstrip()
     stderr = (getattr(result, "stderr", "") or "").rstrip()
@@ -70,6 +75,15 @@ def _lookup(token: str):
 def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[str, ConsoleState]:
     """One input line in, text plus next state out. No I/O of its own."""
     text = line.strip()
+
+    # A pending switch is waiting for confirmation.
+    if state.pending_action:
+        action = state.pending_action
+        values = dict(state.values)
+        if text.lower() not in ("y", "yes"):
+            return "cancelled.", ConsoleState()
+        # Carry the target through so the loop knows what to promote.
+        return action, ConsoleState(values=values)
 
     # A pending command is waiting for something before it may run.
     if state.pending_key:
@@ -110,10 +124,39 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
         return "__BENCH__", state
     if lowered in ("s", "status"):
         return "__STATUS__", state
+    if lowered in ("priority", "order"):
+        # `order` is also a catalogue key; both land here, which is what a user
+        # typing either word means.
+        return "__PRIORITY__", state
+    if lowered.startswith("promote "):
+        target = text.split(" ", 1)[1].strip()
+        if not any(s.name == target for s in services or []):
+            names = ", ".join(s.name for s in (services or []))
+            return f"no service named '{target}'. Available: {names}", state
+        return (
+            f"Promote '{target}' to the top of the service order?\n"
+            "This rewrites the system service order. Type 'yes' to confirm.",
+            ConsoleState(
+                pending_action="__PROMOTE__", pending_confirm=True,
+                values={"service": target},
+            ),
+        )
+    # Switching rewrites the service order and can enable a disabled service.
+    # That is a bigger change than anything in the catalogue, so it goes
+    # through the same confirmation `flush_dns_cache` does rather than firing
+    # on one keypress -- especially since `p` sits next to `?` on a keyboard.
     if lowered in ("f", "fastest", "switch"):
-        return "__SWITCH_BACKUP__", state
+        return (
+            "Switch to the fastest reachable BACKUP network?\n"
+            "This rewrites the system service order. Type 'yes' to confirm.",
+            ConsoleState(pending_action="__SWITCH_BACKUP__", pending_confirm=True),
+        )
     if lowered in ("p", "preferred"):
-        return "__SWITCH_PREFERRED__", state
+        return (
+            "Switch back to the PREFERRED network?\n"
+            "This rewrites the system service order. Type 'yes' to confirm.",
+            ConsoleState(pending_action="__SWITCH_PREFERRED__", pending_confirm=True),
+        )
 
     command = _lookup(text)
     if command is None:
@@ -148,12 +191,19 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
 
 def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input) -> int:
     """The I/O shell around `handle`. Everything decision-shaped lives above."""
+    from netdnsmonitor.cli import list_services
+
     prober, meter, failover, run_fn = build_context(config)
 
-    def services():
-        from netdnsmonitor.cli import list_services
+    # Read once and refresh only when something could have changed it. Calling
+    # networksetup on every input line -- blank lines and `?` included -- costs
+    # a subprocess each time, and in the menu bar window that runs on the main
+    # thread and can stall it for the full 5s ceiling per keystroke.
+    cached = {"services": list_services(run_fn)}
 
-        return list_services(run_fn)
+    def refresh_services():
+        cached["services"] = list_services(run_fn)
+        return cached["services"]
 
     out(BANNER)
     out("")
@@ -165,27 +215,44 @@ def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input
         except (EOFError, KeyboardInterrupt):
             out("")
             return 0
-        text, state = handle(line, state, services(), run_fn)
+        text, state = handle(line, state, cached["services"], run_fn)
 
         # The loop owns the handful of actions that need live context; `handle`
         # stays pure and names them instead of performing them.
         if text == "__INTERFACES__":
+            refresh_services()
             text = render_interfaces(interface_rows(run_fn, prober))
         elif text == "__BENCH__":
             out("benchmarking reachable interfaces, this takes a few seconds...")
+            refresh_services()
             text = render_interfaces(interface_rows(run_fn, prober, meter, measure=True))
         elif text == "__STATUS__":
             text = render_failover_status(failover.snapshot() if failover else None)
-        elif text == "__SWITCH_BACKUP__":
+        elif text == "__PRIORITY__":
+            text = render_interfaces([
+                {"name": s.name, "device": s.device, "enabled": s.enabled,
+                 "reachable": None, "throughput_mbps": None}
+                for s in refresh_services()
+            ]) + "\n\nType `promote <service name>` to move one to the top."
+        elif text == "__PROMOTE__":
+            text = _promote(run_fn, refresh_services(), state.values.get("service"))
+            refresh_services()
+        elif text in ("__SWITCH_BACKUP__", "__SWITCH_PREFERRED__"):
+            side = "backup" if text == "__SWITCH_BACKUP__" else "preferred"
             text = (
-                failover.switch_now("backup") if failover
+                failover.switch_now(side) if failover
                 else "failover is not configured."
             )
-        elif text == "__SWITCH_PREFERRED__":
-            text = (
-                failover.switch_now("preferred") if failover
-                else "failover is not configured."
-            )
+            refresh_services()
         if text:
             out(text)
     return 0
+
+
+def _promote(run_fn, services, name: Optional[str]) -> str:
+    """Reorder from the console, through the same guarded path the CLI uses."""
+    from netdnsmonitor.cli import promote_service
+
+    if not name:
+        return "failed: no service named."
+    return promote_service(run_fn, services, name)

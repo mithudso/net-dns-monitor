@@ -3,8 +3,15 @@ en0 measured 3.8 Mbps against Cloudflare's endpoint, and every inactive
 interface returned None rather than 0.0.
 """
 
+import time
+
 from netdnsmonitor.failover_policy import Candidate, best_candidate, rank_candidates
-from netdnsmonitor.throughput import make_throughput_meter
+from netdnsmonitor.throughput import (
+    is_success_status,
+    make_throughput_meter,
+    mbps,
+    measure_all,
+)
 
 
 # --- meter ------------------------------------------------------------------
@@ -50,6 +57,7 @@ def test_measurement_parameters_reach_the_measure_function():
         host="h", path="/p", port=8443, timeout=9.0, max_bytes=5, measure_fn=capture
     )
     meter("en3")
+    seen.pop("address", None)  # resolved once by the meter, not a caller concern
     assert seen == {
         "device": "en3", "host": "h", "path": "/p",
         "port": 8443, "timeout": 9.0, "max_bytes": 5,
@@ -126,3 +134,61 @@ def test_zero_throughput_is_a_real_reading_not_a_missing_one():
 def test_best_candidate_is_none_when_nothing_is_eligible():
     assert best_candidate([]) is None
     assert best_candidate([Candidate("x", "en1", reachable=False)]) is None
+
+
+# --- the pieces of default_measure that can be tested without a socket ------
+
+
+def test_status_line_split_across_reads_is_still_2xx():
+    """A first TCP/TLS segment shorter than the status line used to read as
+    non-2xx, reporting a healthy link as unmeasurable.
+    """
+    assert is_success_status(b"HTTP/1.1 200 OK\r\n") is True
+    assert is_success_status(b"HTTP/1.1 2") is True
+    assert is_success_status(b"HTTP/1.1 204 No Content\r\n") is True
+
+
+def test_non_2xx_is_rejected_so_a_broken_target_is_not_a_slow_interface():
+    assert is_success_status(b"HTTP/1.1 301 Moved Permanently\r\n") is False
+    assert is_success_status(b"HTTP/1.1 500 Server Error\r\n") is False
+    assert is_success_status(b"garbage") is False
+    assert is_success_status(b"") is False
+
+
+def test_mbps_arithmetic():
+    assert mbps(1_000_000, 1.0) == 8.0
+    assert mbps(2_000_000, 2.0) == 8.0
+
+
+def test_mbps_is_none_rather_than_zero_when_it_would_be_meaningless():
+    assert mbps(0, 1.0) is None      # nothing transferred
+    assert mbps(1000, 0.0) is None   # no elapsed time
+    assert mbps(1000, -1.0) is None  # clock went backwards
+
+
+def test_measure_all_shares_one_deadline_across_interfaces():
+    """Serially this is one timeout each on the UI thread; the whole point is
+    that the round costs roughly one.
+    """
+    def slow(device):
+        time.sleep(0.3)
+        return 1.0
+
+    started = time.monotonic()
+    results = measure_all(["a", "b", "c", "d"], slow, timeout=2.0)
+    elapsed = time.monotonic() - started
+    assert set(results) == {"a", "b", "c", "d"}
+    assert elapsed < 1.0, "measurements must run concurrently, not one after another"
+
+
+def test_measure_all_reports_a_slow_interface_as_unmeasured_not_a_wait():
+    def never(device):
+        time.sleep(30)
+        return 1.0
+
+    results = measure_all(["stuck"], never, timeout=0.2)
+    assert results == {"stuck": None}
+
+
+def test_measure_all_with_no_devices_is_empty():
+    assert measure_all([], lambda d: 1.0, timeout=1.0) == {}

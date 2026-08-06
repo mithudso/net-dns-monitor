@@ -67,13 +67,18 @@ the wrong fault.
 ### Console
 
 `netdns console` (or "Open console…" in the menu bar) is a REPL over the same
-catalogue: a usage guide, a numbered list of diagnostic commands you insert by
-picking a number, the live interface table, and priority editing.
+catalogue: a usage guide, a numbered list of diagnostic commands, the live
+interface table, and service-order editing (`priority`, `promote <name>`).
 
-Commands that change system state are marked `!` and are never run on a bare
-keypress — the console shows the exact argv and asks first. A command with a
-placeholder (`ifconfig {device}`) asks for the value rather than shelling out
-with a literal `{device}` in it.
+Anything that changes system state — a catalogue command marked `!`, switching
+networks, or promoting a service — shows you the exact command and waits for
+`yes`. Nothing that rewrites configuration happens on a single keypress. A
+command with a placeholder (`ifconfig {device}`) asks for the value rather than
+shelling out with a literal `{device}` in it.
+
+In the terminal console a number **runs** the command (after confirming, if it
+mutates); in the menu bar window the dropdown **inserts** it into the input box
+so you can read it first.
 
 ## Automatic network failover
 
