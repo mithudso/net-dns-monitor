@@ -174,11 +174,68 @@ def test_other_failures_are_not_labelled_needs_privilege(store):
     assert "NEEDS_PRIVILEGE" not in outcome
 
 
-def test_a_failed_switch_is_not_counted_against_the_budget(store):
+def test_a_failed_switch_spends_no_budget_but_still_arms_the_cooldown(store):
+    """Failures should slow switching down without using up the user's ability
+    to switch once it would finally work.
+    """
     runner = FakeRunner(obey=False)
     build(store, runner).attempt_failover("network")
-    assert store.switch_times == []
+    assert store.switch_times == [], "budget is for switches that happened"
+    assert store.last_switch_at == 1_000_000.0, "cooldown must space out the retry"
+
+
+def test_a_persistently_failing_failback_does_not_retry_every_tick(store):
+    """The mirror of the stuck-gate bug: while genuinely on the backup, the
+    self-heal cannot fire, so nothing but the cooldown stops a failing failback
+    from re-running the full reorder on every single poll.
+    """
+    now = [1_000_000.0]
+    runner = failed_over(store)
+    runner.obey = False  # every subsequent reorder silently does nothing
+    failover = build(
+        store, runner, prober=lambda dev: True, cooldown_seconds=900.0,
+        time_fn=lambda: now[0],
+    )
+    # Clear the successful failover's own cooldown, then earn the streak and
+    # let the first (doomed) failback attempt happen.
+    now[0] += 901
+    for _ in range(3):
+        failover.attempt_failback()
+    assert len(runner.applied_orders) == 2, "one failover + one failed failback"
+
+    # Twenty more ticks, 30s apart: 600s total, well inside the fresh 900s
+    # cooldown armed by the failed attempt.
+    for _ in range(20):
+        now[0] += 30
+        failover.attempt_failback()
+    assert len(runner.applied_orders) == 2, "cooldown must hold off the retry"
+
+    # Past it, exactly one more attempt -- not one per tick.
+    now[0] += 301
+    failover.attempt_failback()
+    assert len(runner.applied_orders) == 3
+
+
+# --- hostile state file -----------------------------------------------------
+
+
+def test_nan_timestamps_cannot_disable_the_rate_brakes(tmp_path):
+    """json.load accepts bare NaN, and every comparison against NaN is False --
+    which would read as "cooldown expired" and "budget window empty" at once.
+    """
+    path = tmp_path / "failover.json"
+    path.write_text('{"last_switch_at": NaN, "switch_times": [NaN, Infinity]}')
+    store = FailoverStore(str(path))
     assert store.last_switch_at is None
+    assert store.switch_times == []
+
+
+def test_boolean_timestamps_are_rejected(tmp_path):
+    path = tmp_path / "failover.json"
+    path.write_text('{"last_switch_at": true, "switch_times": [true]}')
+    store = FailoverStore(str(path))
+    assert store.last_switch_at is None
+    assert store.switch_times == []
 
 
 def test_unreadable_service_list_fails_loudly(store):
@@ -264,6 +321,55 @@ def test_failback_is_skipped_entirely_when_never_failed_over(store):
     assert failover.attempt_failback() is None
     assert runner.calls == []
     assert probes == []
+
+
+def test_a_refused_switch_does_not_leave_the_failback_gate_stuck_open(store):
+    """The pre-failover order is recorded *before* the write, so that a switch
+    whose read-back fails can still be undone. The cost of that is a record
+    left behind when the write is refused outright -- which on a locked-down
+    machine is every time. If it is never cleared, the cheap failback gate is
+    permanently open and every healthy tick spends a networksetup subprocess on
+    the UI thread, forever, across restarts.
+    """
+    runner = FakeRunner(
+        apply_result=SimpleNamespace(
+            returncode=1, stdout="", stderr="You must be running as root to use this command."
+        )
+    )
+    # Default prober: preferred down, backup up -- the state that warrants a switch.
+    failover = build(store, runner)
+    assert failover.attempt_failover("network").startswith("NEEDS_PRIVILEGE:")
+    assert store.original_order is not None, "record is written before the attempt"
+
+    # One tick is enough to notice we are still on preferred and self-heal.
+    runner.calls.clear()
+    assert failover.attempt_failback() is None
+    assert store.original_order is None
+
+    # And from then on the gate is shut: no subprocess at all.
+    runner.calls.clear()
+    assert failover.attempt_failback() is None
+    assert runner.calls == []
+
+
+def test_self_heal_does_not_discard_a_real_failover(store):
+    """Clearing must key off the live order, not the outcome string: a switch
+    that landed but could not be read back still needs its record kept.
+    """
+    runner = failed_over(store)
+    assert runner.order[0] == "Wi-Fi"
+    failover = build(store, runner, prober=lambda dev: False)
+    assert failover.attempt_failback() is None
+    assert store.original_order == ORDER, "still on backup -- the record must survive"
+
+
+def test_manual_reorder_back_to_preferred_clears_the_record(store):
+    """The user fixed it by hand while we were failed over."""
+    runner = failed_over(store)
+    runner.order = list(ORDER)
+    failover = build(store, runner, prober=lambda dev: True)
+    assert failover.attempt_failback() is None
+    assert store.original_order is None
 
 
 def test_stale_recorded_order_falls_back_to_promote_and_says_so(store):

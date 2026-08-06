@@ -71,7 +71,10 @@ def _brakes(
         if elapsed < cooldown_seconds:
             return f"cooldown: {cooldown_seconds - elapsed:.0f}s remaining since the last switch"
     recent = _recent_switches(switch_times, now)
-    if max_switches_per_hour >= 0 and len(recent) >= max_switches_per_hour:
+    # Fail closed on a nonsense ceiling. Treating a negative as "unlimited"
+    # would turn a config typo into no ceiling at all, on a link whose whole
+    # problem is that it flaps.
+    if len(recent) >= max(0, max_switches_per_hour):
         return (
             f"switch budget exhausted: {len(recent)} switch(es) in the last hour, "
             f"limit {max_switches_per_hour}"

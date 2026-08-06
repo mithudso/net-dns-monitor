@@ -137,7 +137,7 @@ def build_failover(config: dict):
         ),
         failback_threshold=int(config["failover_failback_threshold"]),
         cooldown_seconds=float(config["failover_cooldown_seconds"]),
-        max_switches_per_hour=int(config["failover_max_switches_per_hour"]),
+        max_switches_per_hour=max(0, int(config["failover_max_switches_per_hour"])),
         trigger_classifications=frozenset(
             config.get("failover_trigger_classifications") or ["network"]
         ),

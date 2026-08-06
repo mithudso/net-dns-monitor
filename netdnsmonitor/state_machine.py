@@ -23,7 +23,9 @@ from netdnsmonitor.report import build_report
 
 ProbeResult = dict
 Prober = Callable[[], ProbeResult]
-RepairExecutor = Callable[[object], str]
+# Takes (step) or (step, classification): the failover step needs to know what
+# it is responding to, every other step ignores the second argument.
+RepairExecutor = Callable[..., str]
 Escalator = Callable[[dict], Optional[dict]]
 LogWatcher = Callable[[], list]
 

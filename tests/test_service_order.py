@@ -151,6 +151,14 @@ def test_is_order_intact_rejects_duplicates_and_extras():
     assert is_order_intact(services, names + ["Ethernet"]) is False
 
 
+def test_is_order_intact_rejects_a_flag_shaped_service_name():
+    """Each name becomes its own argv token for networksetup; a name starting
+    with '-' would be read as a flag.
+    """
+    services = parse_service_order("(1) -v\n(2) Wi-Fi\n")
+    assert is_order_intact(services, ["-v", "Wi-Fi"]) is False
+
+
 def test_is_order_intact_rejects_empty_current_list():
     """An unparseable listing must never authorize a reorder."""
     assert is_order_intact([], []) is False

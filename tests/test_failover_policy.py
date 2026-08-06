@@ -142,6 +142,12 @@ def test_zero_budget_disables_switching_entirely():
     assert "budget exhausted" in decision.reason
 
 
+def test_negative_budget_fails_closed_not_open():
+    """A config typo must not silently remove the ceiling on a flapping link."""
+    decision = failover_case(max_switches_per_hour=-4)
+    assert decision.action == NONE
+
+
 # --- failback ---------------------------------------------------------------
 
 

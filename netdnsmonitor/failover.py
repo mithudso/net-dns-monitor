@@ -23,6 +23,7 @@ Three properties this module is built around:
 """
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -61,13 +62,32 @@ def _looks_like_privilege_error(text: str) -> bool:
     return any(marker in lowered for marker in _PRIVILEGE_MARKERS)
 
 
+def _is_finite_number(value) -> bool:
+    """`json.load` accepts bare NaN and Infinity, and both are instances of
+    float. A NaN timestamp then defeats both rate brakes at once -- every
+    comparison against it is False, so the cooldown looks expired and the
+    hourly window looks empty. Booleans are rejected for the same reason they
+    are not timestamps, despite being ints.
+    """
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def default_run(args: list[str]) -> object:
     """A subprocess failure has to arrive as data, not an exception: this runs
     under the rumps timer, where an escaping error kills monitoring for the
     rest of the session.
     """
+    # 5s to match repair_executor's ladder commands. A failover attempt spends
+    # three of these back to back (list, reorder, read back), all on the rumps
+    # timer thread, and networksetup contends with SystemConfiguration during
+    # exactly the network churn being diagnosed -- a longer ceiling turns one
+    # attempt into a menu-bar freeze.
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=15)
+        return subprocess.run(args, capture_output=True, text=True, timeout=5)
     except (subprocess.SubprocessError, OSError) as exc:
         return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
 
@@ -102,10 +122,10 @@ class FailoverStore:
             [str(n) for n in order] if isinstance(order, list) and order else None
         )
         last = data.get("last_switch_at")
-        self.last_switch_at = float(last) if isinstance(last, (int, float)) else None
+        self.last_switch_at = last if _is_finite_number(last) else None
         times = data.get("switch_times")
         self.switch_times = (
-            [float(t) for t in times if isinstance(t, (int, float))]
+            [float(t) for t in times if _is_finite_number(t)]
             if isinstance(times, list)
             else []
         )
@@ -127,6 +147,20 @@ class FailoverStore:
             # Losing the record degrades failback to a promote(); it must never
             # take down the tick.
             pass
+
+    def record_attempt(self, at: float) -> None:
+        """Arms the cooldown without spending hourly budget.
+
+        A write that was refused or silently did nothing still has to space out
+        the retry. Without this, a failback that keeps failing -- an admin
+        right revoked after the failover, or networksetup exiting 0 without
+        doing anything -- re-runs the whole reorder on every single tick,
+        because nothing else about the situation changes. Budget is deliberately
+        not spent: failures should slow switching down, not use up a user's
+        ability to switch when it would finally work.
+        """
+        self.last_switch_at = at
+        self.save()
 
     def record_switch(self, at: float) -> None:
         self.last_switch_at = at
@@ -253,6 +287,18 @@ class NetworkFailover:
         # request needs no probe at all to answer.
         if allow == FAILBACK and active_side == PREFERRED:
             self.preferred_streak = 0
+            # Self-heal the failback gate. The pre-failover order is recorded
+            # before the write, so a switch that landed but could not be read
+            # back is still undoable -- the cost is a record left behind when
+            # the write was refused outright, which on a machine that denies
+            # the administrator right is every time. Left alone it holds the
+            # gate open and spends a networksetup subprocess on the timer
+            # thread every tick, forever, across restarts. Clearing keys off
+            # the live order rather than the outcome string, so a real failover
+            # whose read-back failed keeps its record.
+            if self.store.original_order is not None:
+                self.store.original_order = None
+                self.store.save()
             return "no switch: already on the preferred network"
         if allow == FAILOVER and active_side == BACKUP:
             return "no switch: already on the backup network"
@@ -294,6 +340,8 @@ class NetworkFailover:
         if outcome.startswith("ok:"):
             self.store.record_switch(self.time_fn())
             self.preferred_streak = 0
+        else:
+            self.store.record_attempt(self.time_fn())
         self.last_event = outcome
         return outcome
 

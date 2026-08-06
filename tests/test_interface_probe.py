@@ -99,6 +99,54 @@ def test_all_targets_share_one_deadline():
     assert all(b <= 0.1 for b in budgets)
 
 
+def test_ipv6_targets_select_the_ipv6_bind_option():
+    """The ordinary prober accepts an IPv6 external target, so this one must
+    too -- forcing every probe through AF_INET would report a link that had
+    recovered over IPv6 as unreachable, and it would never be failed back to.
+    Both option numbers were confirmed against Darwin's headers and a live
+    interface; here we only assert the family/option selection.
+    """
+    import socket
+
+    from netdnsmonitor.interface_probe import IP_BOUND_IF, IPV6_BOUND_IF
+
+    assert (IP_BOUND_IF, IPV6_BOUND_IF) == (25, 125)
+
+    seen = []
+
+    class FakeSocket:
+        def __init__(self, family, type_):
+            seen.append(family)
+
+        def setsockopt(self, level, option, value):
+            seen.append((level, option))
+
+        def settimeout(self, t):
+            pass
+
+        def connect(self, addr):
+            pass
+
+        def close(self):
+            pass
+
+    real_socket = socket.socket
+    socket.socket = lambda fam, typ: FakeSocket(fam, typ)
+    try:
+        from netdnsmonitor.interface_probe import default_bound_connect
+
+        default_bound_connect.__globals__["default_device_index"] = lambda d: 15
+        default_bound_connect("en0", "2606:4700:4700::1111", 443, 1.0)
+        default_bound_connect("en0", "1.1.1.1", 443, 1.0)
+    finally:
+        socket.socket = real_socket
+
+    assert seen[0] == socket.AF_INET6
+    assert seen[1] == (socket.IPPROTO_IPV6, 125)
+    assert seen[2] == socket.AF_INET
+    assert seen[3] == (socket.IPPROTO_IP, 25)
+
+
 def test_device_index_is_checked_before_connecting():
     """No connect attempt at all for an absent interface."""
     calls = []

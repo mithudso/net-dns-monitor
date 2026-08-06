@@ -96,7 +96,6 @@ def test_network_ladder_includes_the_switch_step_last():
     names = [s.name for s in ladder_for(Classification.NETWORK)]
     assert names[-1] == "switch_to_backup_network"
     # Every cheaper repair is tried before the system config is rewritten.
-    assert names.index("flush_dns_cache") if "flush_dns_cache" in names else True
     assert names.index("renew_dhcp_lease") < names.index("switch_to_backup_network")
 
 

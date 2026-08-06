@@ -18,9 +18,11 @@ import socket
 import time
 from typing import Callable, Optional
 
-# From Darwin's netinet/in.h. CPython exposes no constant for it, so the raw
-# option number is used; it is stable ABI, not a version-specific detail.
+# From Darwin's netinet/in.h and netinet6/in6.h. CPython exposes no constants
+# for these, so the raw option numbers are used; they are stable ABI, not
+# version-specific details. Both were confirmed against a live interface.
 IP_BOUND_IF = 25
+IPV6_BOUND_IF = 125
 
 BoundConnectFn = Callable[[str, str, int, float], bool]
 DeviceIndexFn = Callable[[str], Optional[int]]
@@ -45,9 +47,19 @@ def default_bound_connect(device: str, host: str, port: int, timeout: float) -> 
     index = default_device_index(device)
     if index is None:
         return False
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # The bind option is family-specific. The ordinary prober uses
+    # socket.create_connection, which is family-agnostic, so an IPv6 external
+    # target is a perfectly valid thing to find in the config -- forcing every
+    # probe through AF_INET would report such a target as unreachable rather
+    # than unprobed, and a preferred link that had recovered over IPv6 would
+    # never be failed back to.
+    if ":" in host:
+        family, level, option = socket.AF_INET6, socket.IPPROTO_IPV6, IPV6_BOUND_IF
+    else:
+        family, level, option = socket.AF_INET, socket.IPPROTO_IP, IP_BOUND_IF
+    sock = socket.socket(family, socket.SOCK_STREAM)
     try:
-        sock.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, index)
+        sock.setsockopt(level, option, index)
         sock.settimeout(timeout)
         sock.connect((host, port))
         return True

@@ -83,4 +83,10 @@ def is_order_intact(services: list[NetworkService], new_order: list[str]) -> boo
         return False
     if len(set(new_order)) != len(new_order):
         return False
+    # Each name is passed to networksetup as its own argv token, so a service
+    # named like a flag would be read as one. There is no shell involved and
+    # names round-trip from the machine's own listing, so this is a long shot --
+    # but refusing costs nothing and this command rewrites system state.
+    if any(name.startswith("-") for name in new_order):
+        return False
     return set(new_order) == set(current)

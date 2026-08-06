@@ -67,8 +67,11 @@ DEFAULT_CONFIG = {
     # flapping link cannot drag the machine back and forth.
     "failover_failback_threshold": 3,
     "failover_cooldown_seconds": 300,
-    # A hard ceiling on churn. When it is reached the machine comes to rest on
-    # whichever side is currently carrying traffic. 0 disables switching.
+    # A hard ceiling on churn. Once spent, the machine stays wherever it is
+    # until the rolling hour frees a slot -- including, if the budget ran out
+    # mid-outage, on a preferred link that is still down. That is the cost of
+    # bounding oscillation; raise the ceiling if you would rather have the
+    # switching. 0 disables switching entirely.
     "failover_max_switches_per_hour": 4,
     "failover_state_path": (
         "~/Library/Application Support/net-dns-monitor/failover.json"
