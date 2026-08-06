@@ -291,6 +291,130 @@ def test_a_raising_failback_cannot_kill_the_timer(tmp_path):
     assert app.title
 
 
+# --- manual-only mode -------------------------------------------------------
+
+
+def test_service_names_alone_give_a_manual_only_failover():
+    """auto off + both names set is a real mode: the button works, nothing
+    moves on its own. It is how you try this before trusting it unattended.
+    """
+    failover = build_failover(config(
+        failover_enabled=False,
+        failover_preferred_service="AX88179B",
+        failover_backup_service="Wi-Fi",
+    ))
+    assert failover is not None
+    assert failover.auto_enabled is False
+
+
+def test_manual_only_mode_keeps_the_switch_step_off_the_ladder():
+    cfg = config(
+        failover_enabled=False,
+        failover_preferred_service="AX88179B",
+        failover_backup_service="Wi-Fi",
+    )
+    sm = build_state_machine(cfg)
+    assert sm.failover_classifications == frozenset()
+    assert "switch_to_backup_network" not in [
+        s.name for s in ladder_for(Classification.NETWORK, sm.failover_classifications)
+    ]
+
+
+def test_manual_only_mode_refuses_automatic_switching():
+    failover = build_failover(config(
+        failover_enabled=False,
+        failover_preferred_service="AX88179B",
+        failover_backup_service="Wi-Fi",
+    ))
+    assert failover.attempt_failover("network").startswith("disabled:")
+    assert failover.attempt_failback() is None
+
+
+def test_no_names_means_no_failover_at_all():
+    assert build_failover(config(failover_enabled=False)) is None
+
+
+# --- menu indicator rows ----------------------------------------------------
+
+
+class FakeFailoverForMenu:
+    def __init__(self, snap):
+        self.snap = snap
+        self.switched = []
+        self.preferred_service = "AX88179B"
+        self.backup_service = "Wi-Fi"
+        self.last_event = None
+
+    def snapshot(self):
+        if isinstance(self.snap, Exception):
+            raise self.snap
+        return self.snap
+
+    def switch_now(self, target):
+        self.switched.append(target)
+        return "ok: switched"
+
+    def attempt_failback(self):
+        return None
+
+
+MENU_SNAPSHOT = {
+    "error": None,
+    "active_side": "backup",
+    "active_service": "Wi-Fi",
+    "preferred": {"name": "AX88179B", "device": "en6", "found": True, "reachable": False},
+    "backup": {"name": "Wi-Fi", "device": "en0", "found": True, "reachable": True},
+    "auto_enabled": True,
+    "last_event": None,
+}
+
+
+def test_menu_rows_show_active_preferred_and_backup(tmp_path):
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "none.yaml"))
+    app.failover = FakeFailoverForMenu(MENU_SNAPSHOT)
+    app._refresh_failover_menu()
+    titles = [row.title for row in app.failover_rows]
+    assert "Wi-Fi" in titles[0]
+    assert "AX88179B" in titles[1] and "en6" in titles[1] and "unreachable" in titles[1]
+    assert "Wi-Fi" in titles[2] and "en0" in titles[2] and "reachable" in titles[2]
+    assert titles[1].startswith("○") and titles[2].startswith("●")
+
+
+def test_unconfigured_failover_leaves_no_blank_rows(tmp_path):
+    """A blank title renders as an empty clickable-looking row."""
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "none.yaml"))
+    app.failover = None
+    app._refresh_failover_menu()
+    assert all(row.title.strip() != "" or row.title == " " for row in app.failover_rows)
+    assert "not configured" in app.failover_rows[0].title
+
+
+def test_a_broken_snapshot_does_not_take_down_the_menu(tmp_path):
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "none.yaml"))
+    app.failover = FakeFailoverForMenu(RuntimeError("networksetup exploded"))
+    app._refresh_failover_menu()  # must not raise
+    assert "unavailable" in app.failover_rows[0].title
+    assert "RuntimeError" in app.failover_rows[0].title
+
+
+def test_the_switch_buttons_call_through_to_the_failover(tmp_path):
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "none.yaml"))
+    failover = FakeFailoverForMenu(MENU_SNAPSHOT)
+    app.failover = failover
+    notes = []
+    import netdnsmonitor.app as app_module
+
+    real_notification = app_module.rumps.notification
+    app_module.rumps.notification = lambda *a, **k: notes.append(a)
+    try:
+        app.switch_to_backup(None)
+        app.switch_to_preferred(None)
+    finally:
+        app_module.rumps.notification = real_notification
+    assert failover.switched == ["backup", "preferred"]
+    assert len(notes) == 2
+
+
 # --- status text ------------------------------------------------------------
 
 

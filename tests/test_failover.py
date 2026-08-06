@@ -73,7 +73,7 @@ class FakeRunner:
                 position += 1
                 marker = str(position)
             lines.append(f"({marker}) {name}")
-            lines.append(f"(Hardware Port: {name}, Device: {DEVICES[name]})")
+            lines.append(f"(Hardware Port: {name}, Device: {DEVICES.get(name, 'en99')})")
             lines.append("")
         return "\n".join(lines)
 
@@ -445,6 +445,122 @@ def test_budget_exhaustion_stops_switching(store):
         now[0] += 1
     outcome = failover.attempt_failover("network")
     assert "budget exhausted" in outcome
+
+
+# --- manual switching from the menu bar -------------------------------------
+
+
+def test_switch_now_moves_to_the_backup(store):
+    runner = FakeRunner()
+    outcome = build(store, runner).switch_now("backup")
+    assert outcome.startswith("ok:")
+    assert runner.order[0] == "Wi-Fi"
+
+
+def test_switch_now_ignores_the_policy_that_blocks_automatic_switching(store):
+    """A person clicking a button has already supplied the judgement the
+    brakes exist to substitute for: no incident, backup unverified, cooldown
+    running, budget spent -- none of it applies.
+    """
+    runner = FakeRunner()
+    store.last_switch_at = 1_000_000.0
+    store.switch_times = [1_000_000.0] * 10
+    failover = build(
+        store, runner, prober=lambda dev: None,  # nothing verified at all
+        cooldown_seconds=99_999.0, max_switches_per_hour=1,
+    )
+    assert failover.attempt_failover("network").startswith("no switch:")
+    assert failover.switch_now("backup").startswith("ok:")
+
+
+def test_switch_now_still_refuses_to_corrupt_the_service_order(store):
+    """What a manual switch does NOT skip: the permutation guard."""
+    runner = FakeRunner(order=["AX88179B", "-v", "Wi-Fi"])
+    outcome = build(store, runner).switch_now("backup")
+    assert outcome.startswith("failed:")
+    assert runner.order == ["AX88179B", "-v", "Wi-Fi"], "nothing applied"
+
+
+def test_switch_now_still_verifies_the_result(store):
+    runner = FakeRunner(obey=False)
+    outcome = build(store, runner).switch_now("backup")
+    assert outcome.startswith("failed:")
+    assert "unchanged" in outcome
+
+
+def test_switch_now_back_to_preferred_restores_the_original_order(store):
+    runner = failed_over(store)
+    outcome = build(store, runner).switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert runner.order == ORDER
+
+
+def test_switch_now_is_a_no_op_in_the_direction_already_taken(store):
+    runner = FakeRunner()
+    failover = build(store, runner)
+    assert failover.switch_now("preferred") == "no switch: already on the preferred network"
+    assert runner.applied_orders == []
+
+
+def test_switch_now_reports_an_unknown_service_rather_than_guessing(store):
+    runner = FakeRunner()
+    outcome = build(store, runner, backup_service="AirPort").switch_now("backup")
+    assert outcome.startswith("failed:")
+    assert "not found" in outcome and "Wi-Fi" in outcome
+
+
+def test_a_manual_switch_arms_the_brakes_for_automatic_ones(store):
+    """Otherwise an automatic switch could fire the instant after a manual one."""
+    runner = FakeRunner()
+    failover = build(store, runner)
+    failover.switch_now("backup")
+    assert store.switch_times == [1_000_000.0]
+
+
+def test_manual_switching_works_with_automatic_switching_off(store):
+    runner = FakeRunner()
+    failover = build(store, runner, auto_enabled=False)
+    assert failover.attempt_failover("network").startswith("disabled:")
+    assert failover.switch_now("backup").startswith("ok:")
+    assert runner.order[0] == "Wi-Fi"
+
+
+# --- snapshot (what the menu bar shows) -------------------------------------
+
+
+def test_snapshot_reports_which_side_is_live(store):
+    runner = FakeRunner()
+    snap = build(store, runner).snapshot()
+    assert snap["error"] is None
+    assert snap["active_side"] == "preferred"
+    assert snap["active_service"] == "AX88179B"
+    assert snap["preferred"] == {
+        "name": "AX88179B", "device": "en6", "found": True, "reachable": False
+    }
+    assert snap["backup"] == {
+        "name": "Wi-Fi", "device": "en0", "found": True, "reachable": True
+    }
+
+
+def test_snapshot_follows_a_switch(store):
+    runner = failed_over(store)
+    snap = build(store, runner).snapshot()
+    assert snap["active_side"] == "backup"
+    assert snap["active_service"] == "Wi-Fi"
+
+
+def test_snapshot_marks_a_service_that_is_not_there(store):
+    runner = FakeRunner()
+    snap = build(store, runner, preferred_service="Ethernet").snapshot()
+    assert snap["preferred"]["found"] is False
+    assert snap["preferred"]["reachable"] is None
+
+
+def test_snapshot_reports_an_unreadable_order_instead_of_inventing_one(store):
+    runner = FakeRunner(list_fails=True)
+    snap = build(store, runner).snapshot()
+    assert snap["error"]
+    assert "active_side" not in snap
 
 
 # --- persistence ------------------------------------------------------------

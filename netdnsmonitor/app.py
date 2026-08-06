@@ -18,7 +18,7 @@ from netdnsmonitor.domain_learner import (
     prune_dead_domains,
 )
 from netdnsmonitor.escalation import redact
-from netdnsmonitor.failover import FailoverStore, NetworkFailover
+from netdnsmonitor.failover import BACKUP, PREFERRED, FailoverStore, NetworkFailover
 from netdnsmonitor.interface_probe import make_interface_prober
 from netdnsmonitor.log_watcher import make_log_watcher
 from netdnsmonitor.notifications import (
@@ -31,7 +31,7 @@ from netdnsmonitor.prober import make_prober
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.state_machine import StateMachine
-from netdnsmonitor.status import build_title
+from netdnsmonitor.status import build_failover_lines, build_title
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 
@@ -119,8 +119,6 @@ def build_failover(config: dict):
     was written for has three wired adapters with near-identical names, so a
     "helpful" default here would reorder the wrong physical link.
     """
-    if not config.get("failover_enabled"):
-        return None
     preferred = config.get("failover_preferred_service")
     backup = config.get("failover_backup_service")
     if not preferred or not backup or preferred == backup:
@@ -139,6 +137,7 @@ def build_failover(config: dict):
         cooldown_seconds=float(config["failover_cooldown_seconds"]),
         max_switches_per_hour=max(0, int(config["failover_max_switches_per_hour"])),
         trigger_classifications=failover_trigger_classifications(config),
+        auto_enabled=bool(config.get("failover_enabled")),
     )
 
 
@@ -149,6 +148,10 @@ def failover_trigger_classifications(config: dict) -> frozenset:
     feature inert while checking service names would still rewrite the service
     order on the next incident. Only a missing or null key takes the default.
     """
+    if not config.get("failover_enabled"):
+        # Manual-only mode: the menu bar button still switches, but no incident
+        # puts the failover step on the ladder.
+        return frozenset()
     configured = config.get("failover_trigger_classifications")
     if configured is None:
         configured = ["network"]
@@ -248,7 +251,19 @@ class NetDnsMonitorApp(rumps.App):
         self.last_report_path = None
         self.last_notification_results = None
         self.last_tick_error = None
-        self.menu = ["Open last report", "Network failover status"]
+        # Indicator rows carry no callback, which is what greys them out: they
+        # are readouts, not actions. Titles are set by _refresh_failover_menu.
+        self.failover_rows = [rumps.MenuItem(f"failover-row-{i}") for i in range(3)]
+        self.menu = [
+            *self.failover_rows,
+            None,
+            rumps.MenuItem("Switch to backup now", callback=self.switch_to_backup),
+            rumps.MenuItem("Switch back to preferred now", callback=self.switch_to_preferred),
+            rumps.MenuItem("Refresh network status", callback=self.refresh_failover),
+            None,
+            rumps.MenuItem("Open last report", callback=self.open_last_report),
+        ]
+        self._refresh_failover_menu()
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
 
@@ -283,6 +298,9 @@ class NetDnsMonitorApp(rumps.App):
                 self.config["sensitive_strings"],
             )
             self.last_notification_results = self.notifier(text)
+            # An incident may have run the failover ladder step, so the
+            # indicator is stale.
+            self._refresh_failover_menu()
         elif self.failover is not None:
             # Failback rides the probe path for the same reason dead-domain
             # pruning does: recovery produces no report, so the healthy ticks
@@ -290,16 +308,54 @@ class NetDnsMonitorApp(rumps.App):
             # the state machine returns None on. Skipped when a report was
             # produced, so a failover and a failback can never interleave
             # within one tick.
-            self.failover.attempt_failback()
+            if self.failover.attempt_failback() is not None:
+                # Only when something was actually attempted -- a refresh costs
+                # a subprocess and two probes, which is not an every-tick price.
+                self._refresh_failover_menu()
         self.title = build_title(self.state_machine.flap_gate.state, self.last_classification)
 
-    @rumps.clicked("Network failover status")
-    def show_failover_status(self, _sender):
+    def _refresh_failover_menu(self):
+        """Repaint the three indicator rows. Never raises: this runs from menu
+        callbacks and from the tick guard, and a broken indicator must not take
+        anything else down with it.
+        """
+        try:
+            snapshot = self.failover.snapshot() if self.failover else None
+            lines = build_failover_lines(snapshot)
+        except Exception as exc:  # noqa: BLE001 - an indicator is not worth a crash
+            lines = [f"Failover: status unavailable ({type(exc).__name__})"]
+        for row, text in zip(self.failover_rows, lines + [""] * len(self.failover_rows)):
+            # An empty title would leave a clickable-looking blank row.
+            row.title = text or " "
+
+    def _manual_switch(self, target: str, label: str):
+        if self.failover is None:
+            rumps.notification(
+                "Net/DNS Monitor",
+                "Network failover",
+                "Not configured — set failover_preferred_service and "
+                "failover_backup_service in config.yaml.",
+            )
+            return
+        try:
+            outcome = self.failover.switch_now(target)
+        except Exception as exc:  # noqa: BLE001 - report it, never crash the menu
+            outcome = f"failed: {type(exc).__name__}: {exc}"
+        self._refresh_failover_menu()
+        rumps.notification("Net/DNS Monitor", f"Switch to {label}", outcome)
+
+    def switch_to_backup(self, _sender):
+        self._manual_switch(BACKUP, "backup")
+
+    def switch_to_preferred(self, _sender):
+        self._manual_switch(PREFERRED, "preferred")
+
+    def refresh_failover(self, _sender):
+        self._refresh_failover_menu()
         rumps.notification(
             "Net/DNS Monitor", "Network failover", failover_status_text(self.failover)
         )
 
-    @rumps.clicked("Open last report")
     def open_last_report(self, _sender):
         if self.last_report_path:
             # as_uri() percent-encodes: the default reports_dir sits under

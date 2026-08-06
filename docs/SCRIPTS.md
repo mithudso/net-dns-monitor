@@ -27,7 +27,7 @@ that rewrites system network configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 237 tests; the whole decision surface
+python3 -m pytest -q          # 266 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -35,7 +35,7 @@ python3 -m pytest -q          # 237 tests; the whole decision surface
 | Command | For | Network |
 |---|---|---|
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 237 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 266 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -44,7 +44,8 @@ python3 -m pytest -q          # 237 tests; the whole decision surface
 | one-shot `format_notification` | see the alert text without sending it | no |
 | one-shot `StateMachine` | the whole pipeline, offline, with fakes | no |
 | one-shot `service_order` + `interface_probe` | read-only failover dry run | **yes** |
-| **failover live check** (below) | **mutates system network config** | **yes** |
+| menu bar **Switch to backup now** | **mutates system network config** — the intended live check | **yes** |
+| **failover live check** by hand (below) | **mutates system network config** | **yes** |
 
 There is no `scripts/` directory and no CLI. That is deliberate — `app.py` is a thin
 rumps shell over tested modules, so the modules are the interface. Everything below
@@ -110,6 +111,28 @@ incident  None  -> 🔴 Net/DNS: unknown issue
 **The title is driven by the live flap-gate state, not by the last report.** That is a
 fixed bug, not a detail: recovery produces no report, so a title read off "last
 report" stayed red forever after the network came back.
+
+**The menu.** Three greyed indicator rows (readouts, not actions), then the controls:
+
+```
+Active: Wi-Fi — failover is automatic
+○ Preferred: AX88179B (en6) — unreachable
+● Backup: Wi-Fi (en0) — reachable
+─────────────────────────
+Switch to backup now
+Switch back to preferred now
+Refresh network status
+─────────────────────────
+Open last report
+```
+
+`●` is the side currently carrying traffic. Reachability is tri-state and says
+`not probed` for an absent adapter rather than `unreachable`, because an unplugged
+cable is not a dead link.
+
+The rows are repainted on startup, after any switch, and on "Refresh network status" —
+**not** every tick. A refresh costs a `networksetup` subprocess plus two interface
+probes, which is not an every-30-seconds price to pay on the UI thread.
 
 ---
 
@@ -472,9 +495,17 @@ hand — but the privileged `networksetup -ordernetworkservices` write has **not
 executed against a real machine. Until someone runs this, treat "the switch works" as
 unverified.
 
-Run it when the wired adapters have **no link** (unplugged). With only Wi-Fi active,
-reordering changes the stored order but not the active route, so the blast radius is
-close to zero.
+**The intended way is the button**, not the shell. Set both service names, leave
+`failover_enabled: false` (manual-only mode), start the app, and click
+**Switch to backup now**. That runs the same guarded path the automatic switch does —
+permutation guard, then read-back verification — and the notification tells you exactly
+which of the outcomes below you got. Click **Switch back to preferred now** to undo.
+
+Do it when the wired adapters have **no link** (unplugged) for a first try: with only
+Wi-Fi active, reordering changes the stored order but not the active route, so the
+blast radius is close to zero.
+
+The by-hand equivalent, if you want to watch it without the app:
 
 ```bash
 # 1. Record the current order. Keep this output -- it is your undo.
@@ -516,7 +547,7 @@ the current one — by hand, you are the guard.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 237 passed
+python3 -m pytest -q            # 266 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -526,20 +557,21 @@ the whole suite. Current distribution:
 
 | Tests | File |
 |---|---|
-| 34 | `test_failover.py` |
+| 47 | `test_failover.py` |
+| 30 | `test_app_failover_wiring.py` |
 | 25 | `test_domain_learner.py` · `test_failover_policy.py` |
-| 22 | `test_app_failover_wiring.py` |
 | 17 | `test_service_order.py` |
 | 16 | `test_notifications.py` |
+| 12 | `test_status.py` |
 | 11 | `test_app_notification_wiring.py` · `test_repair_executor.py` |
 | 10 | `test_interface_probe.py` |
 | 7 | `test_escalation.py` · `test_prober.py` |
 | 6 | `test_flap_gate.py` · `test_state_machine.py` |
 | 5 | `test_anthropic_escalator.py` · `test_classifier.py` · `test_config.py` · `test_ladder.py` · `test_report.py` |
-| 4 | `test_dns_query.py` · `test_log_watcher.py` · `test_status.py` |
+| 4 | `test_dns_query.py` · `test_log_watcher.py` |
 | 2 | `test_report_storage.py` |
 | 1 | `test_app_status_wiring.py` |
-| **237** | **total** |
+| **266** | **total** |
 
 **What the suite does not cover.** `default_resolve` and `default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

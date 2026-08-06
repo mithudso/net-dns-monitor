@@ -47,6 +47,34 @@ Names must match `networksetup -listnetworkserviceorder` exactly; a name that
 doesn't match is reported as a failure listing the names that do exist, and
 nothing is reordered.
 
+**Menu bar controls.** Three indicator rows show which service is carrying
+traffic (`●`) and which is not (`○`), each with its device and whether it can
+actually reach anything right now:
+
+```
+Active: Wi-Fi — failover is automatic
+○ Preferred: AX88179B (en6) — unreachable
+● Backup: Wi-Fi (en0) — reachable
+Switch to backup now
+Switch back to preferred now
+Refresh network status
+```
+
+The switch buttons skip the policy — a person clicking a button has already
+supplied the judgement the rate brakes exist to substitute for — but not the
+execution safety: the permutation guard and the read-back verification still
+apply, and the result is reported in a notification.
+
+**Three modes**, set by which keys you fill in:
+
+| `failover_enabled` | Both names set | Behaviour |
+|---|---|---|
+| `false` | no | Off entirely |
+| `false` | yes | **Manual only** — buttons work, nothing moves on its own |
+| `true` | yes | Automatic, buttons still available |
+
+Manual-only is the way to try this before trusting it unattended.
+
 **The one failure this addresses.** A link that is *up but not carrying
 traffic* — it has a cable and an address, so macOS keeps it primary and keeps
 routing into a hole. When a cable is simply unplugged the interface disappears
@@ -84,7 +112,11 @@ reported as `ok` once the new order has been confirmed on disk.
 the persistence are covered by offline tests, and the `IP_BOUND_IF` probing was
 confirmed by hand against real interfaces. The privileged
 `networksetup -ordernetworkservices` write itself has **not** been executed on a
-real machine — see `docs/SCRIPTS.md` for the manual verification runbook.
+real machine. Clicking "Switch to backup now" is the way to find out: it runs
+the same guarded path the automatic switch does and reports exactly what
+happened. Evidence suggests it will work without a password prompt — `scselect
+-n` wrote to root-owned `preferences.plist` from a non-root admin account
+silently, using the same authorization right — but that is a prior, not proof.
 
 ## Setup
 

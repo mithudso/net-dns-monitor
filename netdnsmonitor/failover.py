@@ -181,7 +181,13 @@ class NetworkFailover:
         max_switches_per_hour: int = 4,
         trigger_classifications: frozenset = frozenset({"network"}),
         time_fn: Callable[[], float] = time.time,
+        auto_enabled: bool = True,
     ):
+        # Automatic switching and manual switching are separate capabilities.
+        # With auto off and both service names set, the menu bar button still
+        # works and nothing ever moves on its own -- which is how you try this
+        # feature before trusting it to act unattended.
+        self.auto_enabled = auto_enabled
         self.preferred_service = preferred_service
         self.backup_service = backup_service
         self.store = store
@@ -245,7 +251,87 @@ class NetworkFailover:
 
     def attempt_failover(self, classification: str) -> str:
         """Ladder repair step. Runs once per incident onset."""
+        if not self.auto_enabled:
+            return "disabled: automatic switching is off (manual switching still works)"
         return self._attempt(classification=classification, allow=FAILOVER)
+
+    def switch_now(self, target: str) -> str:
+        """Manual switch from the menu bar.
+
+        Skips the policy entirely -- the brakes exist to stop the app acting on
+        its own judgement too often, and a person clicking a button has already
+        supplied the judgement. What it does NOT skip is the execution safety:
+        the permutation guard still refuses a corrupting order, and the result
+        is still read back before anything is claimed.
+
+        The switch is recorded, so an automatic switch cannot immediately
+        follow a manual one.
+        """
+        services = self._list_services()
+        if not services:
+            return "failed: could not read the current network service order"
+        for name in (self.preferred_service, self.backup_service):
+            if find_service(services, name) is None:
+                return (
+                    f"failed: service '{name}' not found; available: "
+                    + ", ".join(s.name for s in services)
+                )
+
+        active_side = self._active_side(services)
+        if target == BACKUP and active_side == BACKUP:
+            return "no switch: already on the backup network"
+        if target == PREFERRED and active_side == PREFERRED:
+            return "no switch: already on the preferred network"
+
+        outcome = (
+            self._do_failover(services)
+            if target == BACKUP
+            else self._do_failback(services)
+        )
+        if outcome.startswith("ok:"):
+            self.store.record_switch(self.time_fn())
+            self.preferred_streak = 0
+        else:
+            self.store.record_attempt(self.time_fn())
+        self.last_event = outcome
+        return outcome
+
+    def snapshot(self) -> dict:
+        """What the menu bar shows: which side is live, and whether each side
+        can actually carry traffic right now.
+
+        Probes both interfaces, so this costs up to two timeouts and a
+        subprocess. Only ever called from an explicit user action or straight
+        after a switch -- never from the poll path.
+        """
+        services = self._list_services()
+        if not services:
+            return {
+                "error": "could not read the network service order",
+                "auto_enabled": self.auto_enabled,
+                "last_event": self.last_event,
+            }
+
+        def describe(name: str) -> dict:
+            service = find_service(services, name)
+            if service is None:
+                return {"name": name, "device": None, "found": False, "reachable": None}
+            return {
+                "name": name,
+                "device": service.device,
+                "found": True,
+                "reachable": self.interface_prober(service.device),
+            }
+
+        return {
+            "error": None,
+            "active_side": self._active_side(services),
+            "active_service": services[0].name,
+            "preferred": describe(self.preferred_service),
+            "backup": describe(self.backup_service),
+            "auto_enabled": self.auto_enabled,
+            "last_event": self.last_event,
+        }
 
     def attempt_failback(self) -> Optional[str]:
         """Tick path. Returns None when nothing was attempted, so an ordinary
@@ -257,7 +343,7 @@ class NetworkFailover:
         thread every 30 seconds forever, to answer a question whose answer is
         almost always "nothing to do".
         """
-        if self.store.original_order is None:
+        if self.store.original_order is None or not self.auto_enabled:
             return None
         outcome = self._attempt(classification="healthy", allow=FAILBACK)
         return outcome if outcome.startswith(("ok:", "failed:", "NEEDS_PRIVILEGE:")) else None

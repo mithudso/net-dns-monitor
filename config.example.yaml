@@ -104,6 +104,15 @@ notify_timeout_seconds: 5   # short on purpose: this runs while the net is down
 # "Require an administrator password to access system-wide preferences"
 # setting. If it is refused, the ladder step reports NEEDS_PRIVILEGE and
 # nothing changes -- it never reports a switch that did not happen.
+# Setting BOTH service names is what turns the feature on at all. `failover_
+# enabled` then controls only whether it acts *by itself*:
+#
+#   names set, failover_enabled: false  -> manual only. The menu bar's
+#       "Switch to backup now" button works; nothing ever moves on its own.
+#       This is the way to try it before trusting it unattended.
+#   names set, failover_enabled: true   -> automatic, per the settings below,
+#       with the manual button still available.
+#   either name unset                   -> feature off entirely.
 failover_enabled: false
 failover_preferred_service: null   # e.g. "AX88179B"  -- the wired link
 failover_backup_service: null      # e.g. "Wi-Fi"     -- the hotspot
