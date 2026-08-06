@@ -94,6 +94,49 @@ def default_run(args: list[str]) -> object:
         return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
 
 
+def apply_service_order(run_fn, services, new_order: list[str]) -> str:
+    """Write a new service order and confirm it landed.
+
+    Free function rather than a method because the CLI reorders services
+    without any of the failover machinery -- and this is the one operation that
+    must never be reimplemented, since it carries the permutation guard and the
+    read-back verification that stop a slip from deleting a network service.
+
+    Returns a string starting 'ok:', 'failed:' or 'NEEDS_PRIVILEGE:'.
+    """
+    if not is_order_intact(services, new_order):
+        return (
+            "failed: refused to apply a service order that is not a permutation "
+            "of the current one"
+        )
+    result = run_fn(["networksetup", "-ordernetworkservices", *new_order])
+    stderr = (getattr(result, "stderr", "") or "").strip()
+    stdout = (getattr(result, "stdout", "") or "").strip()
+    if getattr(result, "returncode", 1) != 0:
+        if _looks_like_privilege_error(stderr + " " + stdout):
+            return (
+                "NEEDS_PRIVILEGE: reordering network services was refused; "
+                "an administrator right is required"
+            )
+        return (
+            f"failed: networksetup exited {getattr(result, 'returncode', '?')}: "
+            f"{stderr or stdout}"
+        )
+    # networksetup can exit 0 without changing anything, so the claim is only
+    # made after reading the order back.
+    listing = run_fn(["networksetup", "-listnetworkserviceorder"])
+    after = (
+        parse_service_order(getattr(listing, "stdout", "") or "")
+        if getattr(listing, "returncode", 1) == 0
+        else []
+    )
+    if not after:
+        return "failed: could not read the service order back to confirm the change"
+    if [s.name for s in after] != new_order:
+        return "failed: networksetup reported success but the service order is unchanged"
+    return f"ok: service order now starts with '{new_order[0]}'"
+
+
 class FailoverStore:
     """Persists only what cannot be re-derived from the live system: the order
     that was in place before the first failover, and the switch timestamps the
@@ -302,37 +345,7 @@ class NetworkFailover:
         return ""
 
     def _apply_order(self, services, new_order: list[str]) -> str:
-        """Apply and then verify. Returns an outcome string starting with
-        'ok:', 'failed:' or 'NEEDS_PRIVILEGE:'.
-        """
-        if not is_order_intact(services, new_order):
-            # The guard that stops a parser slip from deleting a network
-            # service. Refusing is always safe; applying may not be.
-            return (
-                "failed: refused to apply a service order that is not a permutation "
-                "of the current one"
-            )
-        result = self.run_fn(["networksetup", "-ordernetworkservices", *new_order])
-        stderr = (getattr(result, "stderr", "") or "").strip()
-        stdout = (getattr(result, "stdout", "") or "").strip()
-        if getattr(result, "returncode", 1) != 0:
-            if _looks_like_privilege_error(stderr + " " + stdout):
-                return (
-                    "NEEDS_PRIVILEGE: reordering network services was refused; "
-                    "an administrator right is required"
-                )
-            return f"failed: networksetup exited {getattr(result, 'returncode', '?')}: {stderr or stdout}"
-        # networksetup can exit 0 without changing anything, so the claim is
-        # only made after reading the order back.
-        after = self._list_services()
-        if not after:
-            return "failed: could not read the service order back to confirm the change"
-        if [s.name for s in after] != new_order:
-            return (
-                "failed: networksetup reported success but the service order is "
-                "unchanged"
-            )
-        return f"ok: service order now starts with '{new_order[0]}'"
+        return apply_service_order(self.run_fn, services, new_order)
 
     # --- entry points -------------------------------------------------------
 
