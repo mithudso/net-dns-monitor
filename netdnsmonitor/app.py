@@ -12,6 +12,7 @@ import rumps
 
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.config import load_config
+from netdnsmonitor.console_window import ConsoleWindowController
 from netdnsmonitor.domain_learner import (
     LearnedDomainStore,
     make_domain_learner,
@@ -29,7 +30,7 @@ from netdnsmonitor.prober import make_prober
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.state_machine import StateMachine
-from netdnsmonitor.status import build_title
+from netdnsmonitor.status import build_status_report, build_title
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 
@@ -172,7 +173,10 @@ class NetDnsMonitorApp(rumps.App):
         self.last_report_path = None
         self.last_notification_results = None
         self.last_tick_error = None
-        self.menu = ["Open last report"]
+        # Built on first open, then kept: the controller owns the NSWindow, and
+        # a controller that went out of scope would take the window with it.
+        self.console = None
+        self.menu = ["Open last report", "Open console"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
 
@@ -208,6 +212,27 @@ class NetDnsMonitorApp(rumps.App):
             )
             self.last_notification_results = self.notifier(text)
         self.title = build_title(self.state_machine.flap_gate.state, self.last_classification)
+
+    def status_snapshot(self) -> str:
+        """What the console's `:status` shows. Read live off the state machine
+        for the same reason the title is (see status.py): the gate's current
+        state is the truth, and "last report" goes stale the moment the network
+        recovers, because recovery produces no report.
+        """
+        return build_status_report(
+            flap_state=self.state_machine.flap_gate.state,
+            last_classification=self.last_classification,
+            last_report_path=self.last_report_path,
+            last_tick_error=self.last_tick_error,
+            poll_interval_seconds=self.config.get("poll_interval_seconds"),
+            domains=anchor_domains(self.config),
+        )
+
+    @rumps.clicked("Open console")
+    def open_console(self, _sender):
+        if self.console is None:
+            self.console = ConsoleWindowController(status=self.status_snapshot)
+        self.console.show()
 
     @rumps.clicked("Open last report")
     def open_last_report(self, _sender):

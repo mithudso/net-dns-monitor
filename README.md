@@ -150,7 +150,63 @@ python -m netdnsmonitor.app
 
 This puts a status icon in the menu bar (🟢 healthy / 🔴 degraded) and
 polls on the configured interval. Click the menu bar item and choose
-"Open last report" to see the most recent incident report.
+"Open last report" to see the most recent incident report, or "Open console"
+for a shell.
+
+## Console
+
+"Open console" in the menu opens a window that runs **arbitrary shell
+commands**, because during a real incident the useful next command is whatever
+the person watching thinks of, not whatever a fixed menu anticipated. Type a
+line, press Return, read the output. Pipes, redirects and quoting all work --
+the line goes to `/bin/sh` exactly as typed.
+
+Be clear about what that means: this runs as your user, with your environment
+and your file access, exactly like Terminal.app. It is not a sandbox and does
+not pretend to be one. There is deliberately **no blocklist** of dangerous
+commands: a pattern match over arbitrary shell is theater, since it would miss
+the destructive command spelled slightly differently while refusing the harmless
+one that happens to contain `rm`. Anyone who can open this menu can already open
+Terminal, so a filter here would buy nothing and would only make the console
+lie about its own reach.
+
+The guards that *are* here are the ones that hold no matter what gets typed,
+and they exist to protect the monitoring, not to police the user:
+
+- **20-second timeout, then the whole process group is killed.** A bare `ping
+  google.com` never exits on its own. Killing only the shell -- which is what
+  `subprocess.run(timeout=...)` does under `shell=True` -- would leave the
+  `ping` itself running, detached and invisible, one orphan per attempt.
+- **stdin is `/dev/null`.** Anything that would prompt (`sudo`, `ssh`) fails
+  immediately with a readable error instead of hanging until the timeout.
+- **Output is capped at 64 KB.** One `log show` would otherwise wedge the text
+  view. Redirect to a file if you need all of it.
+- **Every command runs on a worker thread.** A blocking command on the main
+  thread would freeze the window, the menu bar, *and* the poll timer doing the
+  actual monitoring -- during the outage you opened the console to investigate.
+
+Built-ins. Most are prefixed with `:` so they cannot collide with a real
+command; `cd` and `q` are not, because `cd` has to look like `cd` and `q` has to
+be one keystroke. A `cd` line cannot chain -- `cd /tmp && ls` is rejected with
+an explanation rather than run, since the built-in cannot honour the `&& ls`:
+
+| | |
+|---|---|
+| `:help` | the built-in list and the limits above |
+| `:status` | live monitor state: flap gate, classification, last report, last swallowed tick error |
+| `:history` | lines run this session |
+| `:pwd` | current directory |
+| `:clear` | empty the transcript |
+| `cd <dir>` | change directory -- a built-in, since a subprocess cannot change ours |
+| `q` | close the window; **the monitor keeps running** |
+
+`:status` is worth knowing about: `app.py` guards every tick so that one bad
+probe cannot kill monitoring for the session, which means a persistently failing
+tick is otherwise invisible behind a title that only says "check failed".
+`:status` is where that error surfaces.
+
+`q` closes the window and leaves the timer running. Quitting the whole app on a
+keystroke would mean losing the monitoring you opened the console to look at.
 
 ## Permissions
 
@@ -202,7 +258,9 @@ not, since that needs a real macOS event loop.
 - `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
 - `anthropic_escalator.py` -- the Claude API call itself
 - `report.py` / `report_storage.py` -- incident report schema + persistence
-- `status.py` -- menu bar title/icon logic
+- `status.py` -- menu bar title/icon logic + the console's `:status` text
+- `console.py` -- the console's decisions: built-ins, `cd`, the guarded runner
+- `console_window.py` -- AppKit shell for the console; holds no decisions
 - `state_machine.py` -- orchestrates all of the above
 - `config.py` -- YAML config loading with defaults
 - `app.py` -- the rumps menu bar shell
