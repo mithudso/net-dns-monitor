@@ -160,6 +160,24 @@ def test_status_snapshot_follows_the_gate_back_to_healthy(tmp_path):
     assert report.splitlines()[0].split(":", 1)[1].strip() == "healthy"
 
 
+def test_status_snapshot_works_before_the_first_ping(tmp_path):
+    """The first seconds after launch, when no tick has run and `ping_stats` is
+    still NO_PING_YET -- every reading None.
+
+    This is not a corner case: a login-time launch plus an outage means the
+    first `:status` anyone types lands here. `console.handle` catches whatever
+    this raises and prints "failed to read monitor state", so a KeyError or a
+    None-format here would not crash anything -- it would just replace the
+    monitor state with an error string at the exact moment it is wanted.
+    """
+    app = make_app(tmp_path)
+
+    report = app.status_snapshot()
+
+    assert "state:" in report
+    assert "healthy" in report
+
+
 def test_status_snapshot_is_what_the_console_asks_for(tmp_path):
     """The controller has to be handed the bound method, or `:status` answers
     "monitor state is not available from here."

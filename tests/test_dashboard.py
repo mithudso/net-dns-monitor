@@ -280,6 +280,43 @@ def test_the_log_pane_does_not_overlap_its_controls():
     assert lowest_control >= pane_top
 
 
+def test_the_graphs_clear_the_stats_pane_above_them():
+    """The other direction of the same arithmetic
+    test_buttons_do_not_overlap_the_output_pane guards.
+
+    Both the stats pane's height and the graph column's top are derived from
+    STATS_HEIGHT, so shrinking it to make room for a button row -- which is what
+    adding the console button required -- moves the graphs up underneath a pane
+    whose bottom edge moved up too. Nothing tested that they moved by the same
+    amount, and the buttons test cannot see it: it only looks downward.
+    """
+    window = DashboardWindow(on_action=lambda action: None)
+    stats_bottom = window.stats_view.enclosingScrollView().frame().origin.y
+    highest_graph = max(
+        view.frame().origin.y + view.frame().size.height
+        for view in window.graph_views.values()
+    )
+    assert highest_graph <= stats_bottom
+
+
+def test_the_console_button_is_present_and_on_screen():
+    """The console's entry point in the window, as an actual clickable button.
+
+    Membership in ALL_ACTIONS is not the same claim: the grid lays itself out
+    with plain frame arithmetic, so an action can be in the list and still be
+    positioned off the bottom of the content view, where it renders as nothing.
+    """
+    window = DashboardWindow(on_action=lambda action: None)
+    button = next(
+        b for b in window.buttons if str(b.identifier()) == "open_console"
+    )
+    assert "console" in str(button.title()).lower()
+    frame = button.frame()
+    assert frame.origin.y >= 0
+    assert frame.origin.x >= 0
+    assert frame.origin.x + frame.size.width <= LEFT_WIDTH
+
+
 def test_the_log_column_stays_beside_the_left_column_not_on_top_of_it():
     window = DashboardWindow(on_action=lambda action: None)
     left_edge = window.log_view.enclosingScrollView().frame().origin.x
