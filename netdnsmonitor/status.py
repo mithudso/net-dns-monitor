@@ -101,6 +101,60 @@ def format_stats(
     return " ".join(parts) if parts else STATS_UNKNOWN
 
 
+def build_status_report(
+    flap_state: str,
+    last_classification: Optional[str] = None,
+    consecutive_failures: int = 0,
+    ping_down: bool = False,
+    stats: Optional[str] = None,
+    resolution_failed: Optional[int] = None,
+    resolution_total: Optional[int] = None,
+    last_report_path: Optional[str] = None,
+    poll_interval_seconds: Optional[float] = None,
+    domains: Optional[list] = None,
+) -> str:
+    """What the console's `:status` prints: the same question the menu bar
+    title answers, at a length a title has no room for.
+
+    Routed through `status_state` rather than re-reading `flap_state`, for the
+    reason recorded at the top of this module: that function is the single place
+    the healthy/flaky/incident decision is made, and a console that decided it
+    again would be a fourth indicator free to disagree with the title, the Dock
+    tile and the alert. A `:status` that says healthy under a red menu bar is
+    worse than no `:status` at all.
+
+    Lives here rather than in console.py because it is menu-bar logic, not
+    console logic, and because a console reaching into the running app to format
+    its state would put a decision in the one file the suite cannot reach.
+    """
+    state = status_state(flap_state, consecutive_failures, ping_down)
+
+    lines = [
+        f"state:          {state}",
+        f"flap gate:      {flap_state}",
+    ]
+    # Shown only off-healthy: on a good network these are all zero or stale, and
+    # a status pane that pads itself with "0 consecutive failures" trains the
+    # reader to skim past the lines that do matter.
+    if state != "healthy":
+        lines.append(f"classification: {last_classification or 'unknown'}")
+    if consecutive_failures:
+        lines.append(f"consecutive failures: {consecutive_failures}")
+    if ping_down:
+        lines.append("ping:           no reply")
+    if stats:
+        lines.append(f"stats:          {stats}")
+    if resolution_failed:
+        lines.append(f"resolution:     {resolution_failed}/{resolution_total} failing")
+    if poll_interval_seconds is not None:
+        lines.append(f"poll interval:  {poll_interval_seconds:g}s")
+    if domains is not None:
+        listed = ", ".join(domains) if domains else "(none)"
+        lines.append(f"domains ({len(domains)}):   {listed}")
+    lines.append(f"last report:    {last_report_path or '(none this session)'}")
+    return "\n".join(lines)
+
+
 def build_title(
     flap_state: str,
     last_classification: Optional[str],

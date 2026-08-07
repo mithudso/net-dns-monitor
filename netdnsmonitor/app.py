@@ -46,6 +46,7 @@ from netdnsmonitor import alert, forensic_log, peer_net, privileges, system_log
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.classifier import classify
 from netdnsmonitor.config import load_config
+from netdnsmonitor.console_window import ConsoleWindowController
 from netdnsmonitor.dashboard import (
     DashboardWindow,
     dashboard_sections,
@@ -73,7 +74,13 @@ from netdnsmonitor.resolution_prober import resolve_domains_parallel
 from netdnsmonitor.settings_window import SettingsWindow, collect, restart_note, save_config
 from netdnsmonitor.stall_log import select_stalled_domains
 from netdnsmonitor.state_machine import StateMachine
-from netdnsmonitor.status import STATS_UNKNOWN, build_title, format_stats, status_state
+from netdnsmonitor.status import (
+    STATS_UNKNOWN,
+    build_status_report,
+    build_title,
+    format_stats,
+    status_state,
+)
 
 OPEN_BIN = "/usr/bin/open"
 
@@ -310,8 +317,16 @@ class NetDnsMonitorApp(rumps.App):
         self._privilege_thread: Optional[threading.Thread] = None
         self._privilege_results: queue.Queue = queue.Queue()
 
+        # Built on first open, then kept. The controller owns the NSWindow, so a
+        # controller that went out of scope would take the window with it -- and
+        # keeping the one instance is also what makes the menu bar item and the
+        # dashboard button the *same* console, sharing one cwd and one history
+        # rather than opening two that silently disagree.
+        self.console: Optional[ConsoleWindowController] = None
+
         self.menu = [
             "Open dashboard",
+            "Open console",
             "Toggle mini window",
             "Open last report",
             "Test network alert",
@@ -1372,6 +1387,13 @@ class NetDnsMonitorApp(rumps.App):
         window and all four timers for up to half a minute -- the same reason the
         ping does not run here.
         """
+        if action_id == "open_console":
+            # Straight to the menu bar handler, not a fresh controller: two
+            # controllers would be two consoles with two working directories and
+            # two histories, so `cd /tmp` from the menu bar would be invisible to
+            # the button and vice versa.
+            self.open_console()
+            return
         if action_id == "open_settings":
             self.open_settings()
             return
@@ -1590,6 +1612,61 @@ class NetDnsMonitorApp(rumps.App):
     @rumps.clicked("Open dashboard")
     def open_dashboard_clicked(self, sender):
         self.open_dashboard(sender)
+
+    def status_snapshot(self) -> str:
+        """What the console's `:status` shows.
+
+        Read live off the state machine and the ping monitor for the reason
+        status.py records about the title: the gate's current state is the
+        truth, and anything driven off "last report" goes stale the moment the
+        network recovers, because recovery produces no report at all.
+
+        Each attribute is snapshotted exactly once, for the reason spelled out
+        in `_refresh_title`: the resolution worker rebinds
+        `last_resolution_findings` from another thread, and a reader that reads
+        it more than once can splice one batch's total onto another's failure
+        count.
+        """
+        findings = self.last_resolution_findings
+        resolution_failed = resolution_total = None
+        if findings:
+            resolution_total = len(findings)
+            resolution_failed = sum(1 for finding in findings if not finding["resolved"])
+
+        ping = self.ping_stats
+        ping_down = ping["down"]
+        flap_gate = self.state_machine.flap_gate
+        return build_status_report(
+            flap_state=flap_gate.state,
+            last_classification=self.last_classification,
+            consecutive_failures=flap_gate.consecutive_failures,
+            ping_down=ping_down,
+            stats=format_stats(
+                rtt_ms=ping["rtt_ms"],
+                loss_pct=ping["loss_pct"],
+                down_bps=ping["down_bps"],
+                up_bps=ping["up_bps"],
+                ping_down=ping_down,
+            ),
+            resolution_failed=resolution_failed,
+            resolution_total=resolution_total,
+            last_report_path=self.last_report_path,
+            poll_interval_seconds=self.config.get("poll_interval_seconds"),
+            domains=list(self.config.get("domains") or []),
+        )
+
+    @rumps.clicked("Open console")
+    def open_console(self, _sender=None):
+        """Open the console, building it on first use.
+
+        Takes `_sender=None` so the dashboard button can call this directly:
+        both surfaces land on the one controller held at `self.console`, which
+        is what keeps them the same console rather than two with separate
+        working directories and separate history.
+        """
+        if self.console is None:
+            self.console = ConsoleWindowController(status=self.status_snapshot)
+        self.console.show()
 
     @rumps.clicked("Toggle mini window")
     def toggle_mini_window_clicked(self, _sender):

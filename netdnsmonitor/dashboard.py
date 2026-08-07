@@ -53,6 +53,12 @@ TROUBLESHOOTING_ACTIONS = [
 ]
 
 SECONDARY_ACTIONS = [
+    # Left as "check" rather than "repair" even though what gets typed into it
+    # may well mutate: opening a prompt changes nothing, and tagging it as a
+    # repair would put the "changes system state" warning on every one of these
+    # buttons' worth of attention while saying nothing true about this one. The
+    # label carries what the reader actually needs -- that it is a real shell.
+    ("Open console (arbitrary shell)", "open_console", "check"),
     ("Open settings", "open_settings", "check"),
     ("Collapse to floating mini window", "toggle_mini", "check"),
     ("Open last incident report", "open_last_report", "check"),
@@ -317,7 +323,12 @@ WINDOW_WIDTH = LEFT_WIDTH + LOG_WIDTH + MARGIN
 # test_buttons_do_not_overlap_the_output_pane, which is the third time that test
 # has earned its place. The stats pane is what gives up the room because it is the
 # only one of the four that scrolls; the graphs and the buttons cannot.
-STATS_HEIGHT = 168
+#
+# 168 -> 150 when the console button made it seventeen actions and so nine rows,
+# which put the grid 12px over the results pane -- the fourth time. 18px rather
+# than the bare 12 the test demands, so the grid clears the pane by one BUTTON_GAP
+# instead of landing exactly on it.
+STATS_HEIGHT = 150
 OUTPUT_HEIGHT = 150
 BUTTON_HEIGHT = 28
 BUTTON_GAP = 6

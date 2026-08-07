@@ -132,6 +132,49 @@ The window is two columns wide rather than taller because it was already 950px
 high and the display it opens on is 1080 logical pixels: there was nowhere to
 stack a log pane underneath. Log lines need the width anyway.
 
+## Console
+
+Two ways in, because the point of it is to be there when you need it: **"Open
+console"** in the status-item dropdown, and **"Open console (arbitrary shell)"**
+in the dashboard's button grid. Both open the same console -- one working
+directory, one history -- rather than two that silently disagree about where you
+are. Closing it with `q` leaves the monitor running; that is the whole reason it
+closes rather than quits.
+
+It runs **arbitrary shell**, deliberately. During an outage the useful next
+command is whatever the person watching thinks of, not whatever a catalogue
+anticipated. It runs as your user in your environment -- the same reach as
+Terminal.app, no more and no less. There is no blocklist, because a pattern
+match over arbitrary shell is theater: it would miss the dangerous command
+spelled slightly differently and refuse the safe one that happens to contain
+`rm`.
+
+The guards are the ones that hold regardless of what gets typed:
+
+- **20s timeout, then the whole process group is killed.** A bare `ping
+  google.com` never exits on its own. Killing the group rather than the process
+  is what stops `shell=True` from leaving the `ping` orphaned under a dead
+  `/bin/sh`.
+- **stdin is `/dev/null`.** Anything that would prompt -- `sudo`, `ssh` -- fails
+  with a readable error instead of hanging until the timeout.
+- **Output is capped at 64 KB**, drained and discarded past the cap so that
+  `yes` costs flat memory instead of gigabytes in a menu bar app.
+
+Built-ins: `:help`, `:status` (the monitor's own view of itself -- gate state,
+classification, live stats, resolution failures, last report), `:history`,
+`:pwd`, `:clear`, `cd` (a real built-in, since a subprocess cannot change its
+parent's directory), and `q` to close.
+
+Every command runs on a worker thread, not just the slow ones. A console with a
+fixed command set can pick what to push off the main thread because it knows in
+advance which entries are slow; an arbitrary-command console cannot, and a
+blocking wait would freeze the window, the menu bar *and* the monitoring timers
+during the outage you opened it to investigate.
+
+`:status` routes through `status_state`, the same function behind the menu bar
+title, the Dock tile and the alert -- so it cannot drift into telling you the
+network is healthy under a red menu bar icon.
+
 ## System log viewer
 
 The right-hand column shows what macOS itself says about the network -- the
@@ -445,7 +488,9 @@ test suite, since it needs a real macOS run loop.
 - `escalation.py` -- redaction + the escalate-or-not gate
 - `anthropic_escalator.py` -- the Claude API call itself
 - `report.py` / `report_storage.py` -- incident report schema + persistence
-- `status.py` -- menu bar title/stats-segment logic
+- `status.py` -- menu bar title/stats-segment logic + the console's `:status` text
+- `console.py` -- the console's decisions: built-ins, `cd`, the guarded runner
+- `console_window.py` -- AppKit shell for the console; holds no decisions
 - `dock_icon.py` -- draws the Dock tile as the current reading
 - `state_machine.py` -- orchestrates all of the above
 - `config.py` -- YAML config loading with defaults
