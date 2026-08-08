@@ -13,6 +13,20 @@ from netdnsmonitor.app import (
 )
 
 
+def tick_and_deliver(app):
+    """Tick, then wait for the notification worker to finish.
+
+    The send moved off the run loop -- Slack and email are network I/O and this
+    is called from a timer callback. That makes "did it send" a question about
+    another thread, so these tests join it rather than asserting into a race
+    that passes on a fast machine and fails on a loaded one.
+    """
+    app.tick()
+    if app._notification_thread is not None:
+        app._notification_thread.join(timeout=5)
+        assert not app._notification_thread.is_alive(), "notification worker hung"
+
+
 class FakeFlapGate:
     def __init__(self, state):
         self.state = state
@@ -53,7 +67,7 @@ def test_tick_notifies_when_a_report_is_produced(tmp_path):
     app.notifier = lambda text: sent.append(text) or [{"delivered": True}]
     app.state_machine = FakeStateMachine(REPORT)
 
-    app.tick()
+    tick_and_deliver(app)
 
     assert len(sent) == 1
     assert "dns" in sent[0]
@@ -78,10 +92,64 @@ def test_notification_text_is_redacted_before_it_leaves_the_machine(tmp_path):
     app.notifier = lambda text: sent.append(text) or []
     app.state_machine = FakeStateMachine(REPORT)
 
-    app.tick()
+    tick_and_deliver(app)
 
     assert "corp.local" not in sent[0]
     assert "[REDACTED]" in sent[0]
+
+
+def test_tick_does_not_wait_for_a_slow_notifier(tmp_path):
+    """The property the worker exists for.
+
+    Slack and email are network I/O, and this runs from the poll timer's
+    callback -- the same run loop that draws the window and drives the 5s
+    heartbeat. Two channels at notify_timeout_seconds each is a 10-second freeze
+    at the exact moment the network is known to be broken.
+
+    Asserted by blocking the notifier outright rather than by checking that a
+    thread was started: a thread is the current implementation, "the tick
+    returned" is the requirement.
+    """
+    import threading
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def blocking_notifier(_text):
+        entered.set()
+        release.wait(timeout=5)
+        return [{"delivered": True}]
+
+    app = _app(tmp_path)
+    app.notifier = blocking_notifier
+    app.state_machine = FakeStateMachine(REPORT)
+
+    app.tick()
+
+    # The send is genuinely in flight, and the tick is already back.
+    assert entered.wait(timeout=5), "notifier was never called"
+    assert app._notification_thread.is_alive()
+    assert app.last_notification_results is None
+
+    release.set()
+    app._notification_thread.join(timeout=5)
+    assert app.last_notification_results == [{"delivered": True}]
+
+
+def test_a_raising_notifier_does_not_kill_the_worker_silently(tmp_path):
+    """`notifier` records and swallows its own delivery failures, so this covers
+    the case where it breaks its contract -- the result must still be published,
+    or `:status` would report the previous incident's delivery forever.
+    """
+    app = _app(tmp_path)
+    app.notifier = lambda _text: (_ for _ in ()).throw(OSError("boom"))
+    app.state_machine = FakeStateMachine(REPORT)
+
+    tick_and_deliver(app)
+
+    assert app.last_notification_results == [
+        {"channel": "unknown", "ok": False, "error": "OSError"}
+    ]
 
 
 def test_build_notifier_has_no_channels_without_credentials():

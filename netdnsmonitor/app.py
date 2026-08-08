@@ -424,6 +424,7 @@ class NetDnsMonitorApp(rumps.App):
         self.state_machine = build_state_machine(self.config, self.failover)
         self.notifier = build_notifier(self.config)
         self.last_notification_results = None
+        self._notification_thread: Optional[threading.Thread] = None
         # Set by the tick guard below. Initialised here because `tick` only
         # assigns it on a failure, and `:status` reads it on every call.
         self.last_tick_error = None
@@ -771,17 +772,15 @@ class NetDnsMonitorApp(rumps.App):
             # Redact on the way out for the same reason escalation does: Slack
             # and email are off-machine, and the on-disk report is not.
             #
-            # Sent inline on the run loop, which this line's architecture note
-            # otherwise forbids. It is bounded -- notify_timeout_seconds (5s)
-            # per channel -- and by default there are no channels at all: Slack
-            # needs SLACK_WEBHOOK_URL and email needs a non-empty
-            # email_recipients, so the notifier is a no-op until someone
-            # configures one. Worth moving to a worker if that stops being true.
+            # Redaction happens here, on the run loop, and only the finished
+            # string crosses to the worker. The alternative -- handing the
+            # report over and redacting there -- would put the one step that
+            # must not be skipped on the far side of a thread boundary.
             text = redact(
                 format_notification(report, paths["markdown_path"]),
                 self.config["sensitive_strings"],
             )
-            self.last_notification_results = self.notifier(text)
+            self._send_notification(text)
             self._record_incident_forensics(report)
             # An incident may have run the failover ladder step, so the
             # indicator is stale.
@@ -1864,6 +1863,46 @@ class NetDnsMonitorApp(rumps.App):
             lines.append(f"    result: {outcome}")
             events.append({"detail": step.name, "reason": step.reason, "result": outcome})
         return lines
+
+    # --- notifications -----------------------------------------------------
+
+    def _send_notification(self, text: str):
+        """Hand the notification to a worker and return immediately.
+
+        Slack and email are network I/O, and this is called from the poll
+        timer's callback -- the run loop that also draws the window and drives
+        the 5s heartbeat. Two channels at `notify_timeout_seconds` each is a
+        10-second freeze at the exact moment the network is known to be broken,
+        which is when the heartbeat and the Dock tile matter most.
+
+        Not a queue-and-drain like the troubleshooting steps: nothing on the
+        main thread needs the outcome in order to draw anything, so the result
+        is published straight onto the attribute the console's `:status` and the
+        tests read. `notifier` returns a list of per-channel results and does not
+        raise -- a delivery failure is recorded and swallowed inside it, because
+        a Slack outage must not stop the report being saved.
+        """
+        def deliver():
+            try:
+                self.last_notification_results = self.notifier(text)
+            except Exception as exc:  # noqa: BLE001 - belt and braces; notifier swallows
+                self.last_notification_results = [
+                    {"channel": "unknown", "ok": False, "error": type(exc).__name__}
+                ]
+
+        try:
+            # Kept on the instance like `_ping_thread` and `_resolution_thread`,
+            # so a caller that needs the send to have finished -- the suite --
+            # can join it instead of sleeping and hoping.
+            self._notification_thread = threading.Thread(
+                target=deliver, name="notification", daemon=True
+            )
+            self._notification_thread.start()
+        except RuntimeError:
+            # Thread creation can fail under resource pressure. Sending inline is
+            # worse than a lost notification only if it hangs, and the notifier
+            # is timeout-bounded, so this degrades rather than drops.
+            deliver()
 
     def _drain_action_results(self):
         """Main thread: append output and record the forensic events."""
