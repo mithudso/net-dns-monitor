@@ -65,22 +65,27 @@ proves nothing about the world.
 
 Measured, reproducible, and currently unfixed.
 
-- **Interface-bound probing returns "unreachable" for every physical interface
-  while a tunnel is up.** Measured 2026-08-08 on this machine: an ordinary
-  unbound connect to `1.1.1.1:443` and `8.8.8.8:443` succeeds, while the same
-  targets bound to `en9` or `en0` with `IP_BOUND_IF` fail. Ten `utun`
-  interfaces were up at the time. A socket pinned to a physical NIC bypasses
-  the tunnel and reaches nothing.
+- **An interface-bound probe cannot reach an internet target while a tunnel is
+  up.** Measured 2026-08-08 on this machine: an ordinary unbound connect to
+  `1.1.1.1:443` and `8.8.8.8:443` succeeds, while the same targets bound to
+  `en9` or `en0` with `IP_BOUND_IF` fail. Ten `utun` interfaces were up. A
+  socket pinned to a physical NIC bypasses the tunnel and reaches nothing.
 
-  The consequence is that **automatic failover is inert**, not dangerous:
-  `attempt_failover` refuses with *"backup interface did not answer either --
-  switching would trade one dead path for another"*, so nothing thrashes. The
-  manual "Switch to backup now" still works, because a manual switch skips the
-  policy and keeps only the execution guards.
+  This is a property of the setup, not a defect, and it is why
+  `failover_probe_targets` exists: aim the interface probe at something
+  reachable off-tunnel, normally each link's own gateway. Configured that way
+  on this machine, the probe reports Wi-Fi reachable, and automatic failover
+  works.
 
-  Two ways out, neither chosen by default because a probe target is a claim
-  about the network: point `external_targets` at addresses reachable off-tunnel
-  (the LAN gateways are the obvious candidates), or turn the tunnel off.
+  Do **not** solve it by repointing `external_targets`: that list also drives
+  incident detection, and a gateway answers straight through an ISP outage, so
+  the app would stop reporting the outages it exists to report.
+
+  Two things to know when choosing targets. An off-link gateway *blackholes*
+  rather than refusing — measured at a flat 2.00s — so the probe budget must
+  cover every listed target, which is what `failover_probe_timeout_seconds` is
+  for. And TCP/53 is open on one gateway here but not guaranteed anywhere; check
+  the port answers before trusting it.
 
 - **Auto-learned domains find nothing on a stock macOS install.** The unified
   log masks hostnames by default — mDNSResponder's resolver lines carry
