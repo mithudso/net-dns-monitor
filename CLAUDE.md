@@ -91,9 +91,13 @@ it as verified, and never invoke it from a script or an agent expecting completi
 
 ## House style
 
-**Python** — 3.13, stdlib-first. `requirements.txt` is four lines and stays that way:
-`rumps`, `anthropic`, `PyYAML`, `pytest`. Do not add `requests` for something
-`urllib.request` does, and do not add a Slack or SMTP SDK. Type hints throughout.
+**Python** — 3.13, stdlib-first. `requirements.txt` carries four runtime deps and
+stays that way: `rumps`, `anthropic`, `PyYAML`, `pyobjc-framework-Cocoa`, each
+pinned exactly rather than floored, because `scripts/start.sh` re-runs
+`pip install -r` on every start. Test and lint tooling (`pytest`, `ruff`) lives in
+`requirements-dev.txt` and must stay out of the runtime file — `pytest` was once
+in it, which installed it onto every end user's machine. Do not add `requests` for
+something `urllib.request` does, and do not add a Slack or SMTP SDK. Type hints throughout.
 Tests are `pytest` with plain functions, fakes injected as callables — no
 `unittest.mock` patching of module internals unless there is no seam.
 
