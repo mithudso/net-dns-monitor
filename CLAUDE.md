@@ -69,7 +69,7 @@ report, because someone will act on it.
 ## Before you claim a change works
 
 ```bash
-python3 -m pytest -q                      # 266 tests, offline, ~7s
+python3 -m pytest -q                      # 1079 tests, offline, ~25s
 ```
 
 There is **no `scripts/check_docs.py`** in this repo, despite what earlier revisions of
@@ -128,10 +128,18 @@ comment that is wrong about why is as expensive as code that is wrong.
   A real fix needs an `SMAppService` privileged helper that does not exist.
   `switch_to_backup_network` is the exception: it is genuinely attempted, and reports
   `NEEDS_PRIVILEGE` only when the write is actually refused.
-- **Three diverged worktrees exist** under `.claude/worktrees/`, and the reports
-  currently on this machine were produced by one of them, not by `master`. Their
-  `repair_executor` and `ladder` have evolved separately. Check which tree you are in
-  before concluding the code behaves the way a report suggests.
+- **The four diverged worktrees have been reconciled** into this line
+  (`.claude/worktrees/dns-resolution-monitor`), which is what the installed
+  `~/Applications/Net-DNS-Monitor.app` is now built from. `master` and
+  `docs/scripts-manual` are behind it and are not what runs. Reports on this machine
+  predating the reconcile were produced by an older tree, so check the report's date
+  before concluding the current code behaves the way it suggests.
+- **Two consoles were merged into one.** The GUI console is the arbitrary-shell one
+  (`console.py` + `console_window.py`), reachable from the menu bar and from the
+  dashboard button, both going through the single controller at `App.console`.
+  `cli_console.py` is a separate thing: the REPL behind `netdns console`, a terminal
+  surface over the `commands.py` catalogue. Do not merge them; they answer different
+  questions.
 
 ## Related
 

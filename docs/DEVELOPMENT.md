@@ -18,7 +18,7 @@ Config file:
 
 ```bash
 mkdir -p ~/.config/net-dns-monitor
-cp config.example.yaml ~/.config/net-dns-monitor/config.yaml
+cp config.yaml ~/.config/net-dns-monitor/config.yaml
 # edit config.yaml — see comments in that file for every key
 ```
 

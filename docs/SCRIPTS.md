@@ -27,7 +27,7 @@ that rewrites system network configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 347 tests; the whole decision surface
+python3 -m pytest -q          # 1079 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -39,7 +39,7 @@ python3 -m pytest -q          # 347 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 347 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 1079 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -123,7 +123,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt          # rumps 0.4.0, anthropic, PyYAML 6.0.3, pytest
 
 mkdir -p ~/.config/net-dns-monitor
-cp config.example.yaml ~/.config/net-dns-monitor/config.yaml
+cp config.yaml ~/.config/net-dns-monitor/config.yaml
 ```
 
 **Optional environment, all three independent.** Each unset feature degrades to a
@@ -610,7 +610,7 @@ the current one — by hand, you are the guard.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 347 passed
+python3 -m pytest -q            # 1079 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -621,22 +621,59 @@ the whole suite. Current distribution:
 | Tests | File |
 |---|---|
 | 63 | `test_failover.py` |
-| 45 | `test_cli_console.py` |
+| 54 | `test_status.py` |
+| 53 | `test_privileges.py` |
+| 45 | `test_system_log.py` |
+| 42 | `test_settings_window.py` |
+| 41 | `test_cli_console.py` |
+| 38 | `test_dashboard.py` |
+| 38 | `test_console.py` |
+| 35 | `test_app_log_wiring.py` |
+| 33 | `test_app_dashboard_wiring.py` |
+| 31 | `test_peer_net.py` |
 | 30 | `test_app_failover_wiring.py` |
-| 25 | `test_domain_learner.py` · `test_failover_policy.py` |
+| 29 | `test_peers.py` |
+| 25 | `test_repair_executor.py` |
+| 25 | `test_localize.py` |
+| 25 | `test_failover_policy.py` |
+| 25 | `test_domain_learner.py` |
+| 21 | `test_net_stats.py` |
 | 20 | `test_throughput.py` |
+| 20 | `test_forensic_log.py` |
+| 20 | `test_config.py` |
+| 19 | `test_ping_monitor.py` |
+| 19 | `test_history.py` |
 | 17 | `test_service_order.py` |
+| 17 | `test_app_privilege_wiring.py` |
+| 16 | `test_stall_log.py` |
 | 16 | `test_notifications.py` |
-| 12 | `test_status.py` |
-| 11 | `test_app_notification_wiring.py` · `test_repair_executor.py` |
+| 16 | `test_graphs.py` |
+| 16 | `test_app_ping_wiring.py` |
+| 15 | `test_dock_icon.py` |
+| 15 | `test_app_peer_wiring.py` |
+| 14 | `test_alert.py` |
+| 13 | `test_resolution_prober.py` |
+| 13 | `test_console_window.py` |
+| 13 | `test_app_notification_wiring.py` |
+| 12 | `test_ping.py` |
+| 12 | `test_app_console_wiring.py` |
+| 11 | `test_query_log.py` |
 | 10 | `test_interface_probe.py` |
-| 7 | `test_escalation.py` · `test_prober.py` |
-| 6 | `test_flap_gate.py` · `test_state_machine.py` |
-| 5 | `test_anthropic_escalator.py` · `test_classifier.py` · `test_config.py` · `test_ladder.py` · `test_report.py` |
-| 4 | `test_dns_query.py` · `test_log_watcher.py` |
-| 2 | `test_report_storage.py` |
-| 1 | `test_app_status_wiring.py` |
-| **347** | **total** |
+| 10 | `test_anthropic_escalator.py` |
+| 9 | `test_prober.py` |
+| 9 | `test_dns_query.py` |
+| 9 | `test_app_status_wiring.py` |
+| 8 | `test_log_watcher.py` |
+| 8 | `test_ladder.py` |
+| 8 | `test_flap_gate.py` |
+| 7 | `test_state_machine.py` |
+| 7 | `test_report_storage.py` |
+| 7 | `test_escalation.py` |
+| 6 | `test_resolution_log.py` |
+| 6 | `test_classifier.py` |
+| 5 | `test_report.py` |
+| 3 | `test_app_resolution_wiring.py` |
+| **1079** | **total** |
 
 **What the suite does not cover.** `default_resolve` and `default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,
