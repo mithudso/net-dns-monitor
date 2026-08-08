@@ -16,6 +16,8 @@ DEFAULT_CONFIG = {
     "internal_targets": [],
     "domains": [],
     "poll_interval_seconds": 30,
+    # Per-probe deadline, shared across all domain lookups in one tick.
+    "probe_timeout_seconds": 2.0,
     "failure_threshold": 2,
     "success_threshold": 2,
     "log_lookback": "5m",
@@ -163,6 +165,33 @@ DEFAULT_CONFIG = {
     # burying the one line that mattered. Commas separate entries in the settings
     # window, so a pattern containing a comma has to be edited in this file.
     "log_view_noise_patterns": list(DEFAULT_NOISE_PATTERNS),
+    # A name expected to always resolve, probed alongside `domains`. It is the
+    # control that lets a dead learned name be told apart from a broken
+    # resolver (see app.anchor_domains); set to null to drop it. Defaults to the
+    # Anthropic API host because this app already depends on resolving it -- if
+    # the control fails, LLM escalation was going to fail too, so the control
+    # result carries real operational meaning rather than being an arbitrary
+    # canary.
+    "control_domain": "api.anthropic.com",
+    # Auto-learn monitored domains from failed DNS resolutions in the log.
+    "learn_domains_from_logs": True,
+    "learned_domains_path": (
+        "~/Library/Application Support/net-dns-monitor/learned_domains.json"
+    ),
+    "max_learned_domains": 20,
+    "domain_learn_interval_seconds": 300,
+    # Notifications. Secrets are NOT here: the Slack webhook URL comes from
+    # SLACK_WEBHOOK_URL and the SMTP password from SMTP_PASSWORD, so a config
+    # file that gets shared or synced carries no credential.
+    "slack_enabled": True,
+    "email_enabled": True,
+    "email_recipients": [],
+    "email_from": "net-dns-monitor@localhost",
+    "smtp_host": "localhost",
+    "smtp_port": 587,
+    "smtp_username": None,
+    "smtp_starttls": True,
+    "notify_timeout_seconds": 5,
 }
 
 
@@ -212,6 +241,19 @@ def load_config(path: str) -> dict:
         "forensic_episodes_dir",
         "peer_record_path",
         "history_path",
+        # Folded into this loop during the reconcile rather than kept as the
+        # separate expanduser call the console-window line had: one list is the
+        # place a new path-valued key gets added, and two would guarantee the
+        # next one is added to only one of them.
+        "learned_domains_path",
     ):
         config[path_key] = os.path.expanduser(config[path_key])
+
+    # A learn interval at or below the poll interval re-adds a dead domain on
+    # every tick, so the flap gate's success counter can never reset and one
+    # dead name latches a permanent false incident. Pruning needs clean ticks
+    # in between, so the interval is clamped to give it some.
+    min_interval = float(config["poll_interval_seconds"]) * 2
+    if float(config["domain_learn_interval_seconds"]) < min_interval:
+        config["domain_learn_interval_seconds"] = min_interval
     return config

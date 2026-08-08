@@ -110,6 +110,7 @@ def build_status_report(
     resolution_failed: Optional[int] = None,
     resolution_total: Optional[int] = None,
     last_report_path: Optional[str] = None,
+    last_tick_error: Optional[str] = None,
     poll_interval_seconds: Optional[float] = None,
     domains: Optional[list] = None,
 ) -> str:
@@ -152,6 +153,12 @@ def build_status_report(
         listed = ", ".join(domains) if domains else "(none)"
         lines.append(f"domains ({len(domains)}):   {listed}")
     lines.append(f"last report:    {last_report_path or '(none this session)'}")
+    # Carried over from the console-window line during the reconcile. app.py's
+    # tick guard swallows exceptions so that one bad tick cannot kill monitoring
+    # for the session, which means a persistently failing probe is otherwise
+    # invisible behind a title that only says "check failed".
+    if last_tick_error:
+        lines.append(f"last tick error: {last_tick_error}")
     return "\n".join(lines)
 
 

@@ -21,6 +21,10 @@ PATH_KEYS = {
     "forensic_episodes_dir",
     "peer_record_path",
     "history_path",
+    # Added by the reconcile: load_config expands this one too, so leaving it
+    # out would make test_missing_file_returns_defaults compare an expanded
+    # path against the unexpanded default and fail.
+    "learned_domains_path",
 }
 
 
@@ -236,3 +240,24 @@ def test_the_shipped_config_declares_nothing_the_app_ignores():
         f"config.yaml declares {unread}, which load_config never reads. Either "
         "add them to DEFAULT_CONFIG or delete them from the file."
     )
+
+
+def test_learn_interval_is_clamped_above_the_poll_interval(tmp_path):
+    """At or below the poll interval, a dead domain is re-added every tick, the
+    flap gate's success counter never resets, and one dead name latches a
+    permanent false incident.
+    """
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "poll_interval_seconds: 30\ndomain_learn_interval_seconds: 30\n"
+    )
+    cfg = load_config(str(config_path))
+    assert cfg["domain_learn_interval_seconds"] >= 60
+
+
+def test_a_generous_learn_interval_is_left_alone(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "poll_interval_seconds: 30\ndomain_learn_interval_seconds: 900\n"
+    )
+    assert load_config(str(config_path))["domain_learn_interval_seconds"] == 900

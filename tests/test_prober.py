@@ -102,3 +102,55 @@ def test_external_reachable_none_when_no_external_targets_configured():
         resolve_fn=resolve_fn,
     )
     assert prober()["external_reachable"] is None
+
+
+def test_domain_lookups_share_one_deadline_instead_of_one_each():
+    """Regression guard: sequential lookups made the UI-thread block additive
+    (N x timeout). With the learned-domain list capped at 20 plus a control
+    domain, a resolver outage froze the menu bar for ~42s.
+    """
+    import time
+
+    def slow_resolve(domain, timeout):
+        time.sleep(timeout * 3)  # never answers before the deadline
+        return True
+
+    prober = make_prober(
+        external_targets=[],
+        internal_targets=[],
+        domains=["a.example.com", "b.example.com", "c.example.com", "d.example.com"],
+        timeout=0.2,
+        connect_fn=lambda *a: True,
+        resolve_fn=slow_resolve,
+    )
+    started = time.monotonic()
+    result = prober()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2 * 4  # nowhere near 4 x timeout
+    assert result["domain_results"] == {
+        "a.example.com": False,
+        "b.example.com": False,
+        "c.example.com": False,
+        "d.example.com": False,
+    }
+
+
+def test_a_slow_domain_does_not_hide_the_fast_ones():
+    import time
+
+    def resolve_fn(domain, timeout):
+        if domain == "slow.example.com":
+            time.sleep(timeout * 3)
+        return True
+
+    prober = make_prober(
+        external_targets=[],
+        internal_targets=[],
+        domains=["fast.example.com", "slow.example.com"],
+        timeout=0.2,
+        connect_fn=lambda *a: True,
+        resolve_fn=resolve_fn,
+    )
+    results = prober()["domain_results"]
+    assert results == {"fast.example.com": True, "slow.example.com": False}

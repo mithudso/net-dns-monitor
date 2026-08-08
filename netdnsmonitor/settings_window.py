@@ -106,9 +106,38 @@ GROUPS = [
         ],
     ),
     (
+        "Domain learning",
+        [
+            ("probe_timeout_seconds", "Probe timeout (seconds)", "int"),
+            ("control_domain", "Control domain (known-good name)", "str"),
+            ("learn_domains_from_logs", "Learn domains from the log", "bool"),
+            ("max_learned_domains", "Maximum learned domains", "int"),
+            ("domain_learn_interval_seconds", "Learn every (seconds)", "int"),
+        ],
+    ),
+    (
+        # The two secrets are deliberately absent: the Slack webhook URL comes
+        # from SLACK_WEBHOOK_URL and the SMTP password from SMTP_PASSWORD, so a
+        # config file that gets shared or synced carries no credential. Putting
+        # either in this window would write it straight into config.yaml.
+        "Notifications",
+        [
+            ("slack_enabled", "Send to Slack", "bool"),
+            ("email_enabled", "Send email", "bool"),
+            ("email_recipients", "Email recipients (comma separated)", "list"),
+            ("email_from", "From address", "str"),
+            ("smtp_host", "SMTP host", "str"),
+            ("smtp_port", "SMTP port", "int"),
+            ("smtp_username", "SMTP username", "str"),
+            ("smtp_starttls", "Use STARTTLS", "bool"),
+            ("notify_timeout_seconds", "Send timeout (seconds)", "int"),
+        ],
+    ),
+    (
         "Files and folders",
         [
             ("reports_dir", "Incident reports", "str"),
+            ("learned_domains_path", "Learned domains", "str"),
             ("resolution_log_path", "Resolution log", "str"),
             ("forensic_log_path", "Forensic journal", "str"),
             ("forensic_episodes_dir", "Forensic episodes", "str"),
@@ -154,6 +183,24 @@ NEEDS_RESTART = {
     "log_view_poll_seconds",
     "log_view_timeout_seconds",
     "log_view_max_entries",
+    # The prober, the learner and its store are built once in build_state_machine,
+    # and the notifier once in App.__init__ -- editing any of these changes
+    # nothing until a restart.
+    "probe_timeout_seconds",
+    "control_domain",
+    "learn_domains_from_logs",
+    "learned_domains_path",
+    "max_learned_domains",
+    "domain_learn_interval_seconds",
+    "slack_enabled",
+    "email_enabled",
+    "email_recipients",
+    "email_from",
+    "smtp_host",
+    "smtp_port",
+    "smtp_username",
+    "smtp_starttls",
+    "notify_timeout_seconds",
 }
 
 FIELDS = [(key, label, kind) for _group, fields in GROUPS for key, label, kind in fields]

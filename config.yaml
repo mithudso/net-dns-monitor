@@ -251,3 +251,48 @@ peer_probe_wait_seconds: 3
 # ~2 seconds per call on the main thread: at the 5-second heartbeat, repainting
 # every tick blocked the run loop for most of every cycle.
 dock_refresh_seconds: 30
+
+# --- Probe timeout ---------------------------------------------------------
+# One shared deadline for every domain lookup in a tick, resolved on worker
+# threads. Serial lookups would make the block additive: with 20 learned names
+# plus the control domain, a resolver outage would freeze the menu bar for ~42s.
+probe_timeout_seconds: 2.0
+
+# --- Auto-learned domains --------------------------------------------------
+# `domains` above is a floor, not the whole list. The app scans the unified log
+# for failed DNS resolutions and probes those names too. On a stock macOS
+# install this finds nothing -- hostnames are masked in the log by default. See
+# the README's "Auto-learned domains" section before turning it up.
+learn_domains_from_logs: true
+learned_domains_path: "~/Library/Application Support/net-dns-monitor/learned_domains.json"
+max_learned_domains: 20
+# Clamped to at least twice poll_interval_seconds by load_config. Scanning every
+# tick re-adds a dead name as fast as pruning drops it, so the flap gate's
+# success counter never resets and one dead name latches a permanent incident.
+domain_learn_interval_seconds: 300
+# A name expected to always resolve, probed alongside the rest. It is the
+# control that lets a dead learned name be told apart from a broken resolver:
+# control up + learned name down means the name is dead; control down means DNS
+# really is broken and nothing is pruned. Set to null to drop it -- with no
+# control and an empty `domains`, pruning loses its anchor.
+control_domain: "api.anthropic.com"
+
+# --- Notifications ---------------------------------------------------------
+# Secrets are NOT here and must not be added: the Slack webhook URL comes from
+# SLACK_WEBHOOK_URL and the SMTP password from SMTP_PASSWORD, so a config file
+# that gets shared or synced carries no credential. For a Slack incoming webhook
+# the URL *is* the credential.
+#
+# Both channels are opt-in by their credential being present: no webhook URL and
+# no recipients means no channels and a notifier that is a cheap no-op.
+slack_enabled: true
+email_enabled: true
+email_recipients: []
+email_from: "net-dns-monitor@localhost"
+smtp_host: "localhost"
+smtp_port: 587
+smtp_username: null
+smtp_starttls: true
+# Short on purpose: this runs on the run loop at the moment the network is known
+# to be broken.
+notify_timeout_seconds: 5

@@ -1,6 +1,7 @@
 from netdnsmonitor.status import (
     PING_DOWN_TEXT,
     STATS_UNKNOWN,
+    build_status_report,
     build_title,
     format_rate,
     format_stats,
@@ -260,3 +261,54 @@ def test_sub_kilobit_rate_renders_as_zero_rather_than_a_long_number():
 
 def test_unmeasured_rate_is_empty():
     assert format_rate(None) == ""
+
+
+# --- the console's `:status` ------------------------------------------------
+# Ported from the console-window line during the reconcile.
+
+
+def test_status_report_surfaces_a_swallowed_tick_error():
+    """app.py's tick guard swallows exceptions so one bad tick cannot kill
+    monitoring; without this line a persistently failing probe is invisible.
+    """
+    text = build_status_report("healthy", last_tick_error="OSError: boom")
+    assert "OSError: boom" in text
+
+
+def test_status_report_leads_with_the_live_gate_state():
+    assert build_status_report("healthy").startswith("state:")
+    assert "healthy" in build_status_report("healthy")
+
+
+def test_status_report_omits_classification_while_healthy():
+    """Same rule as the title: a stale classification from a resolved incident
+    must not read as a current one.
+    """
+    assert "classification" not in build_status_report("healthy", "dns")
+
+
+def test_status_report_includes_classification_during_an_incident():
+    assert "dns" in build_status_report("incident", "dns")
+
+
+def test_status_report_says_so_when_no_report_has_been_written():
+    assert "(none this session)" in build_status_report("healthy")
+
+
+def test_status_report_lists_monitored_domains_and_their_count():
+    text = build_status_report("healthy", domains=["a.example", "b.example"])
+    assert "(2)" in text
+    assert "a.example, b.example" in text
+
+
+def test_status_report_handles_an_empty_domain_list():
+    assert "(none)" in build_status_report("healthy", domains=[])
+
+
+def test_status_report_follows_status_state_not_the_bare_gate():
+    """The reconcile's own risk: this line has a `flaky` state and a ping that
+    can force `incident` while the gate still reads healthy. A report that
+    printed `flap_state` directly would disagree with the menu bar.
+    """
+    assert "state:          incident" in build_status_report("healthy", ping_down=True)
+    assert "state:          flaky" in build_status_report("healthy", consecutive_failures=1)

@@ -56,6 +56,96 @@ export ANTHROPIC_API_KEY=sk-ant-...
 Without that variable set, escalation is skipped and the report still gets
 written -- it just won't have an LLM analysis section.
 
+To enable notifications (both channels are optional and independent):
+
+```bash
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...   # Slack
+export SMTP_PASSWORD=...                                        # email, if the relay authenticates
+```
+
+Neither secret belongs in `config.yaml` -- for a Slack incoming webhook the
+URL *is* the credential, so it stays in the environment and is never echoed
+back in an error message. Email also needs `email_recipients` in
+`config.yaml`; with an empty recipient list that channel stays inactive.
+
+## Notifications
+
+When an incident is declared and its report is written, a redacted one-block
+summary goes to every configured channel: classification, start time,
+duration, whether local repair resolved it, the repair outcome, the Claude
+analysis if there was one, and the path to the local report. Raw probe results
+and log excerpts are deliberately *not* sent -- those are unredacted by design
+because the report stays on the machine. Anything in `sensitive_strings` is
+stripped on the way out, the same rule that governs LLM escalation.
+
+Honest limits, same shape as the escalation caveat above:
+
+- These channels need working connectivity, so they cannot fire during a
+  genuine full outage -- only during partial degradation. The on-disk report
+  is written either way.
+- Notifications fire on incident *onset* only. Recovery produces no report
+  (see `status.py`), so there is no "back to normal" message; the menu bar
+  icon is the recovery signal.
+- Send timeouts are short (`notify_timeout_seconds`, default 5s) because this
+  runs on the UI thread at the moment the network is known to be broken.
+- A delivery failure is recorded and swallowed, never raised: a Slack outage
+  must not stop the report from being saved.
+
+## Auto-learned domains
+
+`domains` in the config is a floor, not the whole list. Every
+`domain_learn_interval_seconds` (default 300) the app scans the unified log for
+*failed DNS resolutions* and adds those hostnames to the probe list --
+evidence already on the machine that someone tried to reach a name and could
+not. That avoids the browser-history route, which would mean reading another
+app's data.
+
+**On a stock macOS install this finds nothing, and that is not a bug in the parser.**
+macOS masks hostnames in the unified log by default: mDNSResponder's resolver lines
+carry `<mask.hash: '...'>` or an opaque token (`BBUpzafn IN A?`) where the queried name
+would be, so there is no name to extract. Measured on one machine: 758 error-like
+lines, 198 of them explicitly masked, 0 learnable domains. Unmasking
+(`sudo log config --mode "private_data:on"`) is a **system-wide privacy change** and is
+not recommended lightly. Treat `domains` as the real probe list and this feature as
+opportunistic. `docs/SCRIPTS.md` shows how to check what your own log yields.
+
+Two guards keep this from making the monitor worse:
+
+- `dns_ok` is an all()-across-domains signal, so one dead name scraped out of a
+  log line would otherwise pin the app in a permanent false incident. A learned
+  domain that fails *while the control domain still resolves* is a dead name
+  rather than a broken resolver, and is evicted. With the control domain also
+  failing, nothing is pruned -- that is the real outage this app exists to
+  report. Hand-configured domains and the control domain are never evicted.
+
+  The control domain (`control_domain`, default `api.anthropic.com` -- the host
+  LLM escalation already depends on, so a failing control means escalation was
+  going to fail too) is what makes that test possible. Learned names are by definition names that *failed*, so
+  on the default `domains: []` every probed name is a learned failure and
+  "something else resolved" is false by construction; a name known to resolve
+  is the anchor that breaks the tie. Setting `control_domain: null` with no
+  configured domains disables pruning's anchor.
+- Scraped hostnames are validated before use (no IP literals, no
+  `in-addr.arpa`/`ip6.arpa` reverse zones, no bare labels, length-capped), and
+  the store is capped at `max_learned_domains` so a log flood cannot grow the
+  probe list without bound.
+
+- All domain lookups in a tick share **one** deadline
+  (`probe_timeout_seconds`, default 2s), resolved on worker threads. Serial
+  lookups would make the block additive -- with 20 learned names plus the
+  control domain, a resolver outage would freeze the menu bar for ~42s.
+- `domain_learn_interval_seconds` is clamped to at least twice
+  `poll_interval_seconds`. Scanning every tick re-adds a dead name as fast as
+  pruning drops it, so the flap gate's success counter never resets and one
+  dead name latches a permanent incident.
+
+Learned domains live in `learned_domains_path` and stay local; only the
+redacted summary described above ever leaves the machine. Set
+`learn_domains_from_logs: false` to probe exactly the configured list. Setting
+`control_domain: null` *and* leaving `domains` empty removes the anchor: with
+nothing known-good to compare against, a dead learned name can no longer be
+identified as dead and will hold the app in an incident.
+
 ## Run
 
 ```bash
@@ -452,12 +542,17 @@ source .venv/bin/activate
 python -m pytest -v
 ```
 
+`docs/SCRIPTS.md` is the operator's manual for every entry point — including the
+one-shot module invocations that exercise the prober, the ladder, the log watcher, the
+domain learner and the notification text without starting a menu bar.
+
 All decision logic (classification, anti-flap gating, the troubleshooting
 ladder, escalation redaction/gating, the report builder, and the full
 state-machine orchestration) is unit tested with injected fakes for every
-external effect (network, subprocess, LLM). The `app.py` menu-bar shell
-itself is thin wiring over those tested modules and isn't exercised by the
-test suite, since it needs a real macOS run loop.
+external effect (network, subprocess, LLM, SMTP, webhook). The `app.py`
+menu-bar shell is thin wiring over those tested modules; its `tick()` and
+builder functions are covered with fakes, but the rumps run loop itself is
+not, since that needs a real macOS event loop.
 
 ## Project layout
 
@@ -486,6 +581,8 @@ test suite, since it needs a real macOS run loop.
 - `resolution_prober.py` -- parallel, deadline-bounded DNS resolution of a domain batch
 - `resolution_log.py` -- JSONL append for resolution-monitor findings
 - `escalation.py` -- redaction + the escalate-or-not gate
+- `domain_learner.py` -- learns/validates/prunes domains from failed log lookups
+- `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
 - `anthropic_escalator.py` -- the Claude API call itself
 - `report.py` / `report_storage.py` -- incident report schema + persistence
 - `status.py` -- menu bar title/stats-segment logic + the console's `:status` text
