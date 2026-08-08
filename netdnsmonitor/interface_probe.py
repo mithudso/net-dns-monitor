@@ -97,12 +97,26 @@ def make_interface_prober(
         # timer thread, and a blackholing-but-routable interface burns the full
         # timeout per target -- the additive stall that non-negotiable 7 exists
         # to prevent.
+        #
+        # The budget is also *sliced*, which the first version left out, and the
+        # omission mattered: handing each connect the whole remaining budget let
+        # one blackholing target consume all of it, so every later target was
+        # skipped and the probe reported unreachable about a working link.
+        # Raising the budget made it worse rather than better -- the blackhole
+        # simply stalled for longer. Found on a live machine where the targets
+        # are per-link gateways, so all but one are unreachable from any given
+        # interface by construction.
+        #
+        # A target that answers does so in milliseconds, so the slice only ever
+        # binds the ones that were going to fail anyway, and unspent time stays
+        # available to whatever comes next.
         deadline = time.monotonic() + timeout
+        share = timeout / len(targets)
         for host, port in targets:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            if connect_fn(device, host, port, remaining):
+            if connect_fn(device, host, port, min(remaining, share)):
                 return True
         return False
 

@@ -4,6 +4,8 @@ present-but-down interface fails instantly with ENETUNREACH; an absent
 interface raises from if_nametoindex) -- see docs/SCRIPTS.md.
 """
 
+import time
+
 from netdnsmonitor.interface_probe import make_interface_prober
 
 TARGETS = [("1.1.1.1", 443), ("8.8.8.8", 443)]
@@ -159,3 +161,56 @@ def test_device_index_is_checked_before_connecting():
     )
     assert probe("en6") is None
     assert calls == []
+
+
+def test_one_blackholing_target_does_not_starve_the_reachable_one():
+    """Found on a live machine 2026-08-08.
+
+    The shared deadline was handed to each connect *whole*, so a target that
+    blackholes -- which is what an off-link gateway does, rather than refusing --
+    consumed the entire budget and every later target was skipped. Raising the
+    budget made it worse: the blackhole simply stalled for longer before the
+    probe still reported unreachable.
+
+    The interesting case is exactly the one this feature needs: per-link gateways,
+    where every target but one is unreachable from any given interface.
+    """
+    attempted = []
+
+    def connect_fn(device, host, port, timeout):
+        attempted.append((host, timeout))
+        if host == "10.0.0.1":  # the off-link gateway: blackholes for its whole slice
+            time.sleep(timeout)
+            return False
+        return True
+
+    probe = make_interface_prober(
+        targets=[("10.0.0.1", 53), ("192.168.1.1", 53)],
+        timeout=1.0,
+        connect_fn=connect_fn,
+        index_fn=lambda device: 1,
+    )
+
+    assert probe("en0") is True
+    assert [host for host, _ in attempted] == ["10.0.0.1", "192.168.1.1"]
+
+
+def test_the_total_deadline_is_still_bounded_by_the_timeout():
+    """The property the shared deadline exists for, which the fix must not lose:
+    N targets must not cost N x timeout.
+    """
+
+    def connect_fn(device, host, port, timeout):
+        time.sleep(timeout)
+        return False
+
+    probe = make_interface_prober(
+        targets=[("10.0.0.1", 53), ("10.0.0.2", 53), ("10.0.0.3", 53)],
+        timeout=0.6,
+        connect_fn=connect_fn,
+        index_fn=lambda device: 1,
+    )
+
+    started = time.monotonic()
+    assert probe("en0") is False
+    assert time.monotonic() - started < 1.2  # not 3 x 0.6 plus slack
