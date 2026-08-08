@@ -35,8 +35,14 @@ class FakeRunner:
     """Reproduces the two networksetup calls this module makes."""
 
     def __init__(
-        self, order=None, apply_result=None, list_fails=False, obey=True,
-        list_fails_after_apply=False, enable_result=None, obey_enable=True,
+        self,
+        order=None,
+        apply_result=None,
+        list_fails=False,
+        obey=True,
+        list_fails_after_apply=False,
+        enable_result=None,
+        obey_enable=True,
     ):
         self.order = list(order or ORDER)
         self.disabled = set(DISABLED)
@@ -118,7 +124,9 @@ def build(store, runner, prober=None, **kwargs):
 
 def test_failover_promotes_the_backup_and_keeps_every_service():
     runner = FakeRunner()
-    outcome = build(store=FailoverStore("/dev/null/nope"), runner=runner).attempt_failover("network")
+    outcome = build(store=FailoverStore("/dev/null/nope"), runner=runner).attempt_failover(
+        "network"
+    )
     assert outcome.startswith("ok:")
     applied = runner.applied_orders[0]
     assert applied[0] == "Wi-Fi"
@@ -211,7 +219,10 @@ def test_a_persistently_failing_failback_does_not_retry_every_tick(store):
     runner = failed_over(store)
     runner.obey = False  # every subsequent reorder silently does nothing
     failover = build(
-        store, runner, prober=lambda dev: True, cooldown_seconds=900.0,
+        store,
+        runner,
+        prober=lambda dev: True,
+        cooldown_seconds=900.0,
         time_fn=lambda: now[0],
     )
     # Clear the successful failover's own cooldown, then earn the streak and
@@ -446,7 +457,10 @@ def test_budget_exhaustion_stops_switching(store):
     now = [1_000_000.0]
     runner = FakeRunner()
     failover = build(
-        store, runner, cooldown_seconds=0.0, max_switches_per_hour=2,
+        store,
+        runner,
+        cooldown_seconds=0.0,
+        max_switches_per_hour=2,
         time_fn=lambda: now[0],
     )
     for _ in range(2):
@@ -476,8 +490,11 @@ def test_switch_now_ignores_the_policy_that_blocks_automatic_switching(store):
     store.last_switch_at = 1_000_000.0
     store.switch_times = [1_000_000.0] * 10
     failover = build(
-        store, runner, prober=lambda dev: None,  # nothing verified at all
-        cooldown_seconds=99_999.0, max_switches_per_hour=1,
+        store,
+        runner,
+        prober=lambda dev: None,  # nothing verified at all
+        cooldown_seconds=99_999.0,
+        max_switches_per_hour=1,
     )
     assert failover.attempt_failover("network").startswith("no switch:")
     outcome = failover.switch_now("backup")
@@ -546,7 +563,8 @@ def multi(store, runner, speeds=None, reach=None, **kwargs):
     speeds = speeds or {}
     reach = reach if reach is not None else {"en12": True, "en11": True, "en0": True}
     return build(
-        store, runner,
+        store,
+        runner,
         preferred_service="USB 10/100/1G/2.5G LAN",
         backup_services=["M3100", "iPhone USB", "Wi-Fi"],
         backup_service=None,
@@ -559,7 +577,8 @@ def multi(store, runner, speeds=None, reach=None, **kwargs):
 def test_the_fastest_reachable_backup_is_chosen():
     runner = FakeRunner()
     failover = multi(
-        FailoverStore("/dev/null/nope"), runner,
+        FailoverStore("/dev/null/nope"),
+        runner,
         speeds={"en12": 12.0, "en11": 48.5, "en0": 3.8},
     )
     outcome = failover.attempt_failover("network")
@@ -572,7 +591,8 @@ def test_the_fastest_reachable_backup_is_chosen():
 def test_an_unreachable_backup_never_wins_however_fast(store):
     runner = FakeRunner()
     failover = multi(
-        store, runner,
+        store,
+        runner,
         reach={"en12": False, "en11": False, "en0": True},
         speeds={"en12": 999.0, "en11": 999.0, "en0": 3.8},
     )
@@ -594,7 +614,8 @@ def test_only_reachable_candidates_are_benchmarked(store):
     measured = []
     runner = FakeRunner()
     failover = build(
-        store, runner,
+        store,
+        runner,
         preferred_service="USB 10/100/1G/2.5G LAN",
         backup_services=["M3100", "iPhone USB", "Wi-Fi"],
         backup_service=None,
@@ -609,7 +630,8 @@ def test_a_missing_backup_is_skipped_not_fatal(store):
     """One dead name among several must not disable the whole feature."""
     runner = FakeRunner()
     failover = build(
-        store, runner,
+        store,
+        runner,
         preferred_service="AX88179B",
         backup_services=["NoSuchService", "Wi-Fi"],
         backup_service=None,
@@ -623,8 +645,11 @@ def test_a_missing_backup_is_skipped_not_fatal(store):
 def test_all_backups_missing_reports_them_with_the_available_list(store):
     runner = FakeRunner()
     failover = build(
-        store, runner, preferred_service="AX88179B",
-        backup_services=["Nope", "AlsoNope"], backup_service=None,
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["Nope", "AlsoNope"],
+        backup_service=None,
     )
     outcome = failover.attempt_failover("network")
     assert outcome.startswith("failed:")
@@ -657,8 +682,11 @@ def test_a_disabled_backup_is_enabled_before_being_promoted(store):
     """
     runner = FakeRunner()
     failover = build(
-        store, runner, preferred_service="AX88179B",
-        backup_services=["M3100"], backup_service=None,
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
         prober=lambda dev: dev == "en12",
     )
     outcome = failover.attempt_failover("network")
@@ -682,8 +710,11 @@ def test_a_refused_enable_is_reported_and_nothing_is_reordered(store):
         )
     )
     failover = build(
-        store, runner, preferred_service="AX88179B",
-        backup_services=["M3100"], backup_service=None,
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
         prober=lambda dev: dev == "en12",
     )
     outcome = failover.attempt_failover("network")
@@ -694,8 +725,11 @@ def test_a_refused_enable_is_reported_and_nothing_is_reordered(store):
 def test_an_enable_that_silently_does_nothing_is_not_claimed(store):
     runner = FakeRunner(obey_enable=False)
     failover = build(
-        store, runner, preferred_service="AX88179B",
-        backup_services=["M3100"], backup_service=None,
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
         prober=lambda dev: dev == "en12",
     )
     outcome = failover.attempt_failover("network")
@@ -714,12 +748,20 @@ def test_snapshot_reports_which_side_is_live(store):
     assert snap["active_side"] == "preferred"
     assert snap["active_service"] == "AX88179B"
     assert snap["preferred"] == {
-        "name": "AX88179B", "device": "en6", "found": True, "reachable": False,
-        "enabled": True, "throughput_mbps": None,
+        "name": "AX88179B",
+        "device": "en6",
+        "found": True,
+        "reachable": False,
+        "enabled": True,
+        "throughput_mbps": None,
     }
     assert snap["backup"] == {
-        "name": "Wi-Fi", "device": "en0", "found": True, "reachable": True,
-        "enabled": True, "throughput_mbps": None,
+        "name": "Wi-Fi",
+        "device": "en0",
+        "found": True,
+        "reachable": True,
+        "enabled": True,
+        "throughput_mbps": None,
     }
 
 
@@ -796,17 +838,25 @@ def test_failback_re_disables_a_service_this_app_enabled(store):
     """Leaving it on is a configuration change the user never asked for."""
     runner = FakeRunner()
     failover = build(
-        store, runner, preferred_service="AX88179B",
-        backup_services=["M3100"], backup_service=None,
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
         prober=lambda dev: dev == "en12",
     )
     assert failover.attempt_failover("network").startswith("ok:")
     assert store.enabled_by_us == "M3100"
     assert "M3100" not in runner.disabled
 
-    back = build(store, runner, preferred_service="AX88179B",
-                 backup_services=["M3100"], backup_service=None,
-                 prober=lambda dev: True)
+    back = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
+        prober=lambda dev: True,
+    )
     for _ in range(3):
         outcome = back.attempt_failback()
     assert outcome.startswith("ok:")
@@ -816,7 +866,7 @@ def test_failback_re_disables_a_service_this_app_enabled(store):
 
 
 def test_a_service_we_did_not_enable_is_left_alone(store):
-    runner = failed_over(store)          # Wi-Fi, already enabled
+    runner = failed_over(store)  # Wi-Fi, already enabled
     assert store.enabled_by_us is None
     failover = build(store, runner, prober=lambda dev: True)
     for _ in range(3):
@@ -830,9 +880,7 @@ def test_a_third_service_at_the_head_does_not_destroy_the_restore_point(store):
     record there would strand the machine on neither side with no way back.
     """
     runner = failed_over(store)
-    runner.order = ["Thunderbolt Bridge"] + [
-        n for n in ORDER if n != "Thunderbolt Bridge"
-    ]
+    runner.order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
     failover = build(store, runner, prober=lambda dev: True)
     outcome = failover.attempt_failback()
     assert store.original_order == ORDER, "the restore point must survive"
@@ -845,7 +893,10 @@ def test_a_named_backup_absent_from_the_order_is_reported_as_such(store):
     """
     runner = FakeRunner()
     failover = build(
-        store, runner, backup_services=["Wi-Fi", "Ghost"], backup_service=None,
+        store,
+        runner,
+        backup_services=["Wi-Fi", "Ghost"],
+        backup_service=None,
     )
     outcome = failover.switch_now("backup", service="Ghost")
     assert outcome.startswith("failed:")

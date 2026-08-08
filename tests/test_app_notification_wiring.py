@@ -159,7 +159,7 @@ def test_build_notifier_has_no_channels_without_credentials():
         "email_recipients": [],
         "notify_timeout_seconds": 5,
     }
-    assert build_notifier(config, env={}) ("text") == []
+    assert build_notifier(config, env={})("text") == []
 
 
 def test_build_notifier_enables_slack_when_the_webhook_env_var_is_set():
@@ -262,6 +262,7 @@ def test_the_wired_prober_evicts_a_dead_learned_domain_on_a_healthy_tick(tmp_pat
         "success_threshold": 2,
         "sensitive_strings": [],
     }
+
     # The control domain resolves, the learned name does not -> the name is
     # dead, not the resolver. make_prober is replaced rather than its default
     # resolve_fn patched, because that default is bound at definition time and

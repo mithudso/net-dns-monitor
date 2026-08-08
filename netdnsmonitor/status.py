@@ -241,7 +241,5 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
     ]
     if backup:
         label = "Backup" if len(backups) <= 1 else f"Backup (of {len(backups)})"
-        lines.append(
-            _describe_side(backup, label, backup.get("name") == active_service)
-        )
+        lines.append(_describe_side(backup, label, backup.get("name") == active_service))
     return lines

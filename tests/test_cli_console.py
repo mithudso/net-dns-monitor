@@ -13,8 +13,8 @@ from netdnsmonitor.cli import (
     render_interfaces,
     render_usage_guide,
 )
-from netdnsmonitor.commands import BY_KEY, CATALOG, missing_placeholder, resolve
 from netdnsmonitor.cli_console import ConsoleState, handle
+from netdnsmonitor.commands import BY_KEY, CATALOG, missing_placeholder, resolve
 from netdnsmonitor.service_order import NetworkService
 
 LISTING = """An asterisk (*) denotes that a network service is disabled.
@@ -85,10 +85,20 @@ def test_missing_placeholder_names_what_is_needed():
 
 def test_interface_table_marks_disabled_services():
     rows = [
-        {"name": "M3100", "device": "en12", "enabled": False,
-         "reachable": False, "throughput_mbps": None},
-        {"name": "Wi-Fi", "device": "en0", "enabled": True,
-         "reachable": True, "throughput_mbps": 3.8},
+        {
+            "name": "M3100",
+            "device": "en12",
+            "enabled": False,
+            "reachable": False,
+            "throughput_mbps": None,
+        },
+        {
+            "name": "Wi-Fi",
+            "device": "en0",
+            "enabled": True,
+            "reachable": True,
+            "throughput_mbps": 3.8,
+        },
     ]
     text = render_interfaces(rows)
     assert "OFF" in text and "M3100" in text
@@ -96,14 +106,28 @@ def test_interface_table_marks_disabled_services():
 
 
 def test_interface_table_says_not_probed_rather_than_unreachable():
-    rows = [{"name": "iPhone USB", "device": "en11", "enabled": True,
-             "reachable": None, "throughput_mbps": None}]
+    rows = [
+        {
+            "name": "iPhone USB",
+            "device": "en11",
+            "enabled": True,
+            "reachable": None,
+            "throughput_mbps": None,
+        }
+    ]
     assert "not probed" in render_interfaces(rows)
 
 
 def test_unmeasured_speed_shows_a_dash_not_a_zero():
-    rows = [{"name": "Wi-Fi", "device": "en0", "enabled": True,
-             "reachable": True, "throughput_mbps": None}]
+    rows = [
+        {
+            "name": "Wi-Fi",
+            "device": "en0",
+            "enabled": True,
+            "reachable": True,
+            "throughput_mbps": None,
+        }
+    ]
     assert " -" in render_interfaces(rows)
     assert "0.0" not in render_interfaces(rows)
 
@@ -134,15 +158,33 @@ def test_failover_status_reports_an_unreadable_order():
 
 def test_failover_status_lists_preferred_and_every_backup():
     snapshot = {
-        "error": None, "active_side": "backup", "active_service": "M3100",
-        "auto_enabled": True, "last_event": "ok: switched",
-        "preferred": {"name": "USB 2.5G", "device": "en9", "enabled": True,
-                      "reachable": False, "throughput_mbps": None},
+        "error": None,
+        "active_side": "backup",
+        "active_service": "M3100",
+        "auto_enabled": True,
+        "last_event": "ok: switched",
+        "preferred": {
+            "name": "USB 2.5G",
+            "device": "en9",
+            "enabled": True,
+            "reachable": False,
+            "throughput_mbps": None,
+        },
         "backups": [
-            {"name": "M3100", "device": "en12", "enabled": True,
-             "reachable": True, "throughput_mbps": 12.0},
-            {"name": "Wi-Fi", "device": "en0", "enabled": True,
-             "reachable": True, "throughput_mbps": 3.8},
+            {
+                "name": "M3100",
+                "device": "en12",
+                "enabled": True,
+                "reachable": True,
+                "throughput_mbps": 12.0,
+            },
+            {
+                "name": "Wi-Fi",
+                "device": "en0",
+                "enabled": True,
+                "reachable": True,
+                "throughput_mbps": 3.8,
+            },
         ],
     }
     text = render_failover_status(snapshot)
@@ -164,8 +206,10 @@ def test_interface_rows_read_the_live_service_list():
 def test_only_reachable_interfaces_are_benchmarked():
     measured = []
     rows = interface_rows(
-        runner, prober=lambda d: d == "en0",
-        meter=lambda d: measured.append(d) or 5.0, measure=True,
+        runner,
+        prober=lambda d: d == "en0",
+        meter=lambda d: measured.append(d) or 5.0,
+        measure=True,
     )
     assert measured == ["en0"]
     assert rows[2]["throughput_mbps"] == 5.0
@@ -280,7 +324,9 @@ def test_a_mutating_command_with_a_placeholder_asks_for_both():
 def test_read_only_shortcuts_are_named_actions_not_executed_inline():
     """`handle` stays pure; the loop performs the live ones."""
     for key, token in [
-        ("__INTERFACES__", "i"), ("__BENCH__", "b"), ("__STATUS__", "s"),
+        ("__INTERFACES__", "i"),
+        ("__BENCH__", "b"),
+        ("__STATUS__", "s"),
         ("__PRIORITY__", "priority"),
     ]:
         text, _ = handle(token, ConsoleState(), SERVICES, runner)
@@ -352,13 +398,22 @@ def test_blank_input_does_nothing():
 def test_every_subcommand_parses():
     parser = build_parser()
     for argv in (
-        ["status"], ["interfaces"], ["interfaces", "--bench"], ["bench"],
-        ["failover", "status"], ["failover", "backup"],
+        ["status"],
+        ["interfaces"],
+        ["interfaces", "--bench"],
+        ["bench"],
+        ["failover", "status"],
+        ["failover", "backup"],
         ["failover", "backup", "--service", "M3100"],
-        ["priority"], ["priority", "--promote", "Wi-Fi"],
-        ["ladder", "network"], ["ladder", "dns", "--repair"],
-        ["commands"], ["run", "nwi"], ["run", "iface", "--value", "device=en0"],
-        ["guide"], ["console"],
+        ["priority"],
+        ["priority", "--promote", "Wi-Fi"],
+        ["ladder", "network"],
+        ["ladder", "dns", "--repair"],
+        ["commands"],
+        ["run", "nwi"],
+        ["run", "iface", "--value", "device=en0"],
+        ["guide"],
+        ["console"],
     ):
         assert parser.parse_args(argv).func is not None
 

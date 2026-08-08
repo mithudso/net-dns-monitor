@@ -210,8 +210,7 @@ def _decide_failover(
         return FailoverDecision(NONE, brake)
     return FailoverDecision(
         FAILOVER,
-        "preferred interface unreachable and backup verified reachable through "
-        "its own interface",
+        "preferred interface unreachable and backup verified reachable through its own interface",
     )
 
 
@@ -227,9 +226,7 @@ def _decide_failback(
     max_switches_per_hour,
 ) -> FailoverDecision:
     if preferred_ok is None:
-        return FailoverDecision(
-            NONE, "preferred interface is absent -- staying on the backup"
-        )
+        return FailoverDecision(NONE, "preferred interface is absent -- staying on the backup")
     if preferred_ok is False:
         return FailoverDecision(
             NONE, "preferred interface still unreachable -- staying on the backup"
@@ -251,6 +248,5 @@ def _decide_failback(
         return FailoverDecision(NONE, brake)
     return FailoverDecision(
         FAILBACK,
-        f"preferred interface healthy for {consecutive_preferred_ok} consecutive "
-        "checks",
+        f"preferred interface healthy for {consecutive_preferred_ok} consecutive checks",
     )

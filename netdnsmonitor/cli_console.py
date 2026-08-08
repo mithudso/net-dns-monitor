@@ -14,7 +14,6 @@ Two rules the loop enforces that a bare shell prompt would not:
   in it -- it asks for the value instead.
 """
 
-import subprocess
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -41,6 +40,7 @@ class ConsoleState:
     """What the loop carries between lines. `pending` is a command waiting for
     a placeholder value or a confirmation.
     """
+
     pending_key: Optional[str] = None
     pending_needs: Optional[str] = None
     pending_confirm: bool = False
@@ -101,9 +101,8 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
                     "Type 'yes' to run it, anything else to cancel.",
                     state,
                 )
-        if state.pending_confirm:
-            if text.lower() not in ("y", "yes"):
-                return "cancelled.", ConsoleState()
+        if state.pending_confirm and text.lower() not in ("y", "yes"):
+            return "cancelled.", ConsoleState()
         argv = resolve(state.pending_key, **state.values)
         return _run_argv(argv, runner), ConsoleState()
 
@@ -137,7 +136,8 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
             f"Promote '{target}' to the top of the service order?\n"
             "This rewrites the system service order. Type 'yes' to confirm.",
             ConsoleState(
-                pending_action="__PROMOTE__", pending_confirm=True,
+                pending_action="__PROMOTE__",
+                pending_confirm=True,
                 values={"service": target},
             ),
         )
@@ -160,9 +160,7 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
 
     command = _lookup(text)
     if command is None:
-        return (
-            f"unknown: '{text}'. `c` lists commands, `?` for the guide.", state
-        )
+        return (f"unknown: '{text}'. `c` lists commands, `?` for the guide.", state)
 
     values = {}
     # Offer the obvious default for a placeholder from the live service list
@@ -229,20 +227,27 @@ def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input
         elif text == "__STATUS__":
             text = render_failover_status(failover.snapshot() if failover else None)
         elif text == "__PRIORITY__":
-            text = render_interfaces([
-                {"name": s.name, "device": s.device, "enabled": s.enabled,
-                 "reachable": None, "throughput_mbps": None}
-                for s in refresh_services()
-            ]) + "\n\nType `promote <service name>` to move one to the top."
+            text = (
+                render_interfaces(
+                    [
+                        {
+                            "name": s.name,
+                            "device": s.device,
+                            "enabled": s.enabled,
+                            "reachable": None,
+                            "throughput_mbps": None,
+                        }
+                        for s in refresh_services()
+                    ]
+                )
+                + "\n\nType `promote <service name>` to move one to the top."
+            )
         elif text == "__PROMOTE__":
             text = _promote(run_fn, refresh_services(), state.values.get("service"))
             refresh_services()
         elif text in ("__SWITCH_BACKUP__", "__SWITCH_PREFERRED__"):
             side = "backup" if text == "__SWITCH_BACKUP__" else "preferred"
-            text = (
-                failover.switch_now(side) if failover
-                else "failover is not configured."
-            )
+            text = failover.switch_now(side) if failover else "failover is not configured."
             refresh_services()
         if text:
             out(text)

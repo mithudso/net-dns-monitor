@@ -170,9 +170,7 @@ def run_catalog_command(key: str, values: dict) -> str:
         return f"failed: cannot build a command for '{key}'"
     header = f"$ {' '.join(argv)}"
     try:
-        result = subprocess.run(
-            argv, capture_output=True, text=True, timeout=command.timeout
-        )
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=command.timeout)
     except subprocess.TimeoutExpired:
         return f"{header}\nfailed: timed out after {command.timeout:.0f}s"
     except (OSError, subprocess.SubprocessError) as exc:
@@ -191,9 +189,7 @@ def promote_service(run_fn, services, name: str) -> str:
     """
     target = next((s for s in services if s.name == name), None)
     if target is None:
-        return f"failed: '{name}' not found; available: " + ", ".join(
-            s.name for s in services
-        )
+        return f"failed: '{name}' not found; available: " + ", ".join(s.name for s in services)
     if not target.enabled:
         return (
             f"failed: '{name}' is DISABLED, so promoting it would change the order "
@@ -210,17 +206,19 @@ def interface_rows(run_fn, prober, meter=None, measure: bool = False) -> list[di
     rows = []
     for service in list_services(run_fn):
         reachable = prober(service.device)
-        rows.append({
-            "name": service.name,
-            "device": service.device,
-            "enabled": service.enabled,
-            "reachable": reachable,
-            # Benchmarking a path that carries nothing is seconds spent for no
-            # information, so it is skipped unless the probe succeeded.
-            "throughput_mbps": (
-                meter(service.device) if measure and meter and reachable is True else None
-            ),
-        })
+        rows.append(
+            {
+                "name": service.name,
+                "device": service.device,
+                "enabled": service.enabled,
+                "reachable": reachable,
+                # Benchmarking a path that carries nothing is seconds spent for no
+                # information, so it is skipped unless the probe succeeded.
+                "throughput_mbps": (
+                    meter(service.device) if measure and meter and reachable is True else None
+                ),
+            }
+        )
     return rows
 
 
@@ -246,18 +244,22 @@ def cmd_status(args, config, out) -> int:
     probe = make_prober(
         external_targets=[tuple(t) for t in config["external_targets"]],
         internal_targets=[tuple(t) for t in config["internal_targets"]],
-        domains=list(config.get("domains") or []) + (
-            [config["control_domain"]] if config.get("control_domain") else []
-        ),
+        domains=list(config.get("domains") or [])
+        + ([config["control_domain"]] if config.get("control_domain") else []),
         timeout=float(config.get("probe_timeout_seconds", 2.0)),
     )()
     classification = classify(probe.get("external_reachable"), probe.get("dns_ok"))
     if args.json:
-        out(json.dumps({
-            "classification": classification.value,
-            "probe": probe,
-            "failover": failover.snapshot() if failover else None,
-        }, indent=2))
+        out(
+            json.dumps(
+                {
+                    "classification": classification.value,
+                    "probe": probe,
+                    "failover": failover.snapshot() if failover else None,
+                },
+                indent=2,
+            )
+        )
         return 0
     out(f"Classification : {classification.value}")
     out(f"External       : {probe.get('external_reachable')}")
@@ -290,11 +292,20 @@ def cmd_priority(args, config, out) -> int:
         out("failed: could not read the network service order")
         return 1
     if not args.promote:
-        out(render_interfaces([
-            {"name": s.name, "device": s.device, "enabled": s.enabled,
-             "reachable": None, "throughput_mbps": None}
-            for s in services
-        ]))
+        out(
+            render_interfaces(
+                [
+                    {
+                        "name": s.name,
+                        "device": s.device,
+                        "enabled": s.enabled,
+                        "reachable": None,
+                        "throughput_mbps": None,
+                    }
+                    for s in services
+                ]
+            )
+        )
         return 0
     outcome = promote_service(run_fn, services, args.promote)
     out(outcome)
@@ -325,8 +336,10 @@ def cmd_run(args, config, out) -> int:
         out(f"'{args.key}' needs a {missing}: pass --value {missing}=<x>")
         return 2
     if command.mutates and not args.yes:
-        out(f"'{args.key}' changes system state ({' '.join(command.argv)}). "
-            "Re-run with --yes to confirm.")
+        out(
+            f"'{args.key}' changes system state ({' '.join(command.argv)}). "
+            "Re-run with --yes to confirm."
+        )
         return 2
     text = run_catalog_command(args.key, dict(args.value or []))
     out(text)

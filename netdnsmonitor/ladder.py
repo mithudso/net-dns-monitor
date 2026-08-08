@@ -90,6 +90,7 @@ DNS_LADDER = [
 # attempted, and its outcome string says whether the write landed.
 FAILOVER_STEP = LadderStep("switch_to_backup_network", "repair", needs_privilege=True)
 
+
 def step_by_name(name: str):
     """Look a step up by its dispatch name.
 

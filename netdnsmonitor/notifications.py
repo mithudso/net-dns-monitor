@@ -18,6 +18,7 @@ HTTPError/URLError text can embed the full request URL, which for a webhook
 *is* the credential.
 """
 
+import contextlib
 import http.client
 import json
 import smtplib
@@ -139,10 +140,10 @@ def make_email_notifier(
                 # quit() sends "QUIT" *before* closing, so on an already-dropped
                 # connection it raises and never closes the socket -- a real fd
                 # leak in a process that lives for weeks.
-                try:
+                # Suppressed deliberately: this is the fallback close, and a
+                # failure here has nowhere useful to go.
+                with contextlib.suppress(Exception):
                     client.close()
-                except Exception:  # noqa: BLE001
-                    pass
         return {"channel": "email", "delivered": True, "recipients": list(recipients)}
 
     return notify

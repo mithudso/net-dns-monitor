@@ -1,5 +1,6 @@
 import json
 import os
+import pathlib
 
 from netdnsmonitor.domain_learner import (
     LearnedDomainStore,
@@ -66,7 +67,7 @@ def test_store_add_persists_and_round_trips(tmp_path):
     path = str(tmp_path / "learned.json")
     store = LearnedDomainStore(path)
     assert store.add(["a.example.com", "a.example.com", "bad"]) == ["a.example.com"]
-    assert json.loads(open(path).read()) == ["a.example.com"]
+    assert json.loads(pathlib.Path(path).read_text()) == ["a.example.com"]
     assert LearnedDomainStore(path).domains == ["a.example.com"]
 
 

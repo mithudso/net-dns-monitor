@@ -18,10 +18,11 @@ rumps timer doing the actual monitoring -- during the outage the console was
 opened to investigate.
 """
 
+import contextlib
 import threading
 from typing import Callable, Optional
 
-from netdnsmonitor.console import CLEAR, PROMPT, BANNER, ConsoleState, handle, run_command
+from netdnsmonitor.console import BANNER, CLEAR, PROMPT, ConsoleState, handle, run_command
 
 # titled | closable | miniaturizable | resizable. Spelled numerically because
 # the PyObjC constant names for these moved between versions (NSTitledWindowMask
@@ -99,9 +100,7 @@ class ConsoleWindowController:
         from Foundation import NSMakeRange
 
         storage = self.text_view.textStorage()
-        storage.appendAttributedString_(
-            NSAttributedString.alloc().initWithString_(text + "\n")
-        )
+        storage.appendAttributedString_(NSAttributedString.alloc().initWithString_(text + "\n"))
         self.text_view.scrollRangeToVisible_(NSMakeRange(storage.length(), 0))
 
     def clear(self) -> None:
@@ -199,10 +198,10 @@ class ConsoleWindowController:
         # make the app active, and an inactive app's window takes no keystrokes.
         # Without this the console opens looking usable and silently ignores
         # typing until it is clicked.
-        try:
+        # Suppressed deliberately, and broadly: activation is cosmetic next to
+        # showing the window at all, so nothing here may stop the window opening.
+        with contextlib.suppress(Exception):
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        except Exception:  # noqa: BLE001 - never block opening the window
-            pass
 
         if self.window is not None:
             self.window.makeKeyAndOrderFront_(None)
@@ -241,9 +240,7 @@ class ConsoleWindowController:
         self._target = _make_target(self)
 
         self.input_field = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 10, 800, 26))
-        self.input_field.setPlaceholderString_(
-            "shell command -- :help for built-ins, q to close"
-        )
+        self.input_field.setPlaceholderString_("shell command -- :help for built-ins, q to close")
         self.input_field.setFont_(NSFont.userFixedPitchFontOfSize_(12))
         self.input_field.setAutoresizingMask_(RESIZE_PINNED_BOTTOM)
         self.input_field.setTarget_(self._target)

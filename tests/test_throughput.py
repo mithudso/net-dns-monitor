@@ -13,7 +13,6 @@ from netdnsmonitor.throughput import (
     measure_all,
 )
 
-
 # --- meter ------------------------------------------------------------------
 
 
@@ -31,9 +30,7 @@ def test_no_device_is_not_measured():
 def test_an_empty_host_disables_measurement_entirely():
     """Ranking then falls back to reachability rather than inventing numbers."""
     calls = []
-    meter = make_throughput_meter(
-        host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0
-    )
+    meter = make_throughput_meter(host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0)
     assert meter("en0") is None
     assert calls == []
 
@@ -59,8 +56,12 @@ def test_measurement_parameters_reach_the_measure_function():
     meter("en3")
     seen.pop("address", None)  # resolved once by the meter, not a caller concern
     assert seen == {
-        "device": "en3", "host": "h", "path": "/p",
-        "port": 8443, "timeout": 9.0, "max_bytes": 5,
+        "device": "en3",
+        "host": "h",
+        "path": "/p",
+        "port": 8443,
+        "timeout": 9.0,
+        "max_bytes": 5,
     }
 
 
@@ -68,11 +69,13 @@ def test_measurement_parameters_reach_the_measure_function():
 
 
 def test_fastest_reachable_candidate_wins():
-    ranked = rank_candidates([
-        Candidate("M3100", "en12", reachable=True, throughput_mbps=12.0),
-        Candidate("iPhone USB", "en11", reachable=True, throughput_mbps=48.5),
-        Candidate("Wi-Fi", "en0", reachable=True, throughput_mbps=3.8),
-    ])
+    ranked = rank_candidates(
+        [
+            Candidate("M3100", "en12", reachable=True, throughput_mbps=12.0),
+            Candidate("iPhone USB", "en11", reachable=True, throughput_mbps=48.5),
+            Candidate("Wi-Fi", "en0", reachable=True, throughput_mbps=3.8),
+        ]
+    )
     assert [c.name for c in ranked] == ["iPhone USB", "M3100", "Wi-Fi"]
 
 
@@ -80,42 +83,52 @@ def test_unreachable_candidates_are_never_eligible_however_fast():
     """Reachability is a gate, not a factor. A fast-looking but unverified path
     must never beat a slow proven one.
     """
-    ranked = rank_candidates([
-        Candidate("M3100", "en12", reachable=False, throughput_mbps=999.0),
-        Candidate("Wi-Fi", "en0", reachable=True, throughput_mbps=3.8),
-    ])
+    ranked = rank_candidates(
+        [
+            Candidate("M3100", "en12", reachable=False, throughput_mbps=999.0),
+            Candidate("Wi-Fi", "en0", reachable=True, throughput_mbps=3.8),
+        ]
+    )
     assert [c.name for c in ranked] == ["Wi-Fi"]
 
 
 def test_unprobed_candidates_are_never_eligible():
-    ranked = rank_candidates([
-        Candidate("M3100", "en12", reachable=None, throughput_mbps=999.0),
-    ])
+    ranked = rank_candidates(
+        [
+            Candidate("M3100", "en12", reachable=None, throughput_mbps=999.0),
+        ]
+    )
     assert ranked == []
 
 
 def test_unmeasured_but_reachable_ranks_after_measured_and_still_counts():
-    """"Unknown speed" is a better bet than no link at all."""
-    ranked = rank_candidates([
-        Candidate("M3100", "en12", reachable=True, throughput_mbps=None),
-        Candidate("Wi-Fi", "en0", reachable=True, throughput_mbps=3.8),
-    ])
+    """ "Unknown speed" is a better bet than no link at all."""
+    ranked = rank_candidates(
+        [
+            Candidate("M3100", "en12", reachable=True, throughput_mbps=None),
+            Candidate("Wi-Fi", "en0", reachable=True, throughput_mbps=3.8),
+        ]
+    )
     assert [c.name for c in ranked] == ["Wi-Fi", "M3100"]
 
 
 def test_ties_keep_configured_order():
-    ranked = rank_candidates([
-        Candidate("first", "en1", reachable=True, throughput_mbps=10.0),
-        Candidate("second", "en2", reachable=True, throughput_mbps=10.0),
-    ])
+    ranked = rank_candidates(
+        [
+            Candidate("first", "en1", reachable=True, throughput_mbps=10.0),
+            Candidate("second", "en2", reachable=True, throughput_mbps=10.0),
+        ]
+    )
     assert [c.name for c in ranked] == ["first", "second"]
 
 
 def test_all_unmeasured_keeps_configured_order():
-    ranked = rank_candidates([
-        Candidate("M3100", "en12", reachable=True),
-        Candidate("iPhone USB", "en11", reachable=True),
-    ])
+    ranked = rank_candidates(
+        [
+            Candidate("M3100", "en12", reachable=True),
+            Candidate("iPhone USB", "en11", reachable=True),
+        ]
+    )
     assert [c.name for c in ranked] == ["M3100", "iPhone USB"]
 
 
@@ -123,11 +136,13 @@ def test_zero_throughput_is_a_real_reading_not_a_missing_one():
     """0.0 means "carries nothing" and must rank below a measured link, but
     still above an unmeasured one -- it is evidence, not absence of it.
     """
-    ranked = rank_candidates([
-        Candidate("dead", "en1", reachable=True, throughput_mbps=0.0),
-        Candidate("unknown", "en2", reachable=True, throughput_mbps=None),
-        Candidate("good", "en3", reachable=True, throughput_mbps=5.0),
-    ])
+    ranked = rank_candidates(
+        [
+            Candidate("dead", "en1", reachable=True, throughput_mbps=0.0),
+            Candidate("unknown", "en2", reachable=True, throughput_mbps=None),
+            Candidate("good", "en3", reachable=True, throughput_mbps=5.0),
+        ]
+    )
     assert [c.name for c in ranked] == ["good", "dead", "unknown"]
 
 
@@ -161,8 +176,8 @@ def test_mbps_arithmetic():
 
 
 def test_mbps_is_none_rather_than_zero_when_it_would_be_meaningless():
-    assert mbps(0, 1.0) is None      # nothing transferred
-    assert mbps(1000, 0.0) is None   # no elapsed time
+    assert mbps(0, 1.0) is None  # nothing transferred
+    assert mbps(1000, 0.0) is None  # no elapsed time
     assert mbps(1000, -1.0) is None  # clock went backwards
 
 
@@ -170,6 +185,7 @@ def test_measure_all_shares_one_deadline_across_interfaces():
     """Serially this is one timeout each on the UI thread; the whole point is
     that the round costs roughly one.
     """
+
     def slow(device):
         time.sleep(0.3)
         return 1.0

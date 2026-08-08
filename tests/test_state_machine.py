@@ -151,7 +151,9 @@ def test_redaction_covers_the_log_and_ladder_fields_that_carry_real_hostnames():
     failing = {"external_reachable": True, "internal_reachable": None, "dns_ok": False}
     sm = StateMachine(
         prober=FakeProber([failing, failing, failing]),
-        repair_executor=lambda step, classification=None: "/etc/resolver overrides present for: mail.corp.local",
+        repair_executor=lambda step, classification=None: (
+            "/etc/resolver overrides present for: mail.corp.local"
+        ),
         escalator=escalator,
         log_watcher=lambda: ["mDNSResponder: no answer for mail.corp.local"],
         failure_threshold=2,

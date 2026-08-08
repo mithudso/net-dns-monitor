@@ -175,9 +175,7 @@ DEFAULT_CONFIG = {
     "control_domain": "api.anthropic.com",
     # Auto-learn monitored domains from failed DNS resolutions in the log.
     "learn_domains_from_logs": True,
-    "learned_domains_path": (
-        "~/Library/Application Support/net-dns-monitor/learned_domains.json"
-    ),
+    "learned_domains_path": ("~/Library/Application Support/net-dns-monitor/learned_domains.json"),
     "max_learned_domains": 20,
     "domain_learn_interval_seconds": 300,
     # Notifications. Secrets are NOT here: the Slack webhook URL comes from
@@ -233,9 +231,7 @@ DEFAULT_CONFIG = {
     # `netdns failover backup` still work, because a person clicking a button
     # has supplied the judgement the brakes stand in for.
     "failover_max_switches_per_hour": 4,
-    "failover_state_path": (
-        "~/Library/Application Support/net-dns-monitor/failover.json"
-    ),
+    "failover_state_path": ("~/Library/Application Support/net-dns-monitor/failover.json"),
 }
 
 

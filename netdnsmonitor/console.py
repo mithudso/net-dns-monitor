@@ -17,6 +17,7 @@ of what gets typed: a timeout, a process-group kill so the timeout means
 something, no stdin so nothing can hang on a prompt, and an output cap.
 """
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -101,10 +102,8 @@ def _kill_process_group(process) -> None:
     try:
         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
-        try:
+        with contextlib.suppress(OSError):
             process.kill()
-        except OSError:
-            pass
 
 
 def _drain(stream, sink: dict, cap: int) -> None:
@@ -137,15 +136,11 @@ def _drain(stream, sink: dict, cap: int) -> None:
         # before that is still worth showing.
         pass
     finally:
-        try:
+        with contextlib.suppress(ValueError, OSError):
             stream.close()
-        except (ValueError, OSError):
-            pass
 
 
-def run_command(
-    command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
-) -> CommandResult:
+def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> CommandResult:
     """The real runner. The only function here that touches a process."""
     try:
         process = subprocess.Popen(  # noqa: S602 - a shell is the stated feature
@@ -170,11 +165,13 @@ def run_command(
     }
     readers = [
         threading.Thread(
-            target=_drain, args=(process.stdout, sinks["stdout"], MAX_OUTPUT_BYTES),
+            target=_drain,
+            args=(process.stdout, sinks["stdout"], MAX_OUTPUT_BYTES),
             daemon=True,
         ),
         threading.Thread(
-            target=_drain, args=(process.stderr, sinks["stderr"], MAX_OUTPUT_BYTES),
+            target=_drain,
+            args=(process.stderr, sinks["stderr"], MAX_OUTPUT_BYTES),
             daemon=True,
         ),
     ]
@@ -214,10 +211,7 @@ def truncate(text: str, limit: int = MAX_OUTPUT_BYTES) -> str:
         return text
     kept = encoded[:limit].decode("utf-8", "ignore")
     dropped = len(encoded) - limit
-    return (
-        f"{kept}\n... [truncated {dropped} more bytes -- redirect to a file "
-        "to see all of it]"
-    )
+    return f"{kept}\n... [truncated {dropped} more bytes -- redirect to a file to see all of it]"
 
 
 def format_result(result, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> str:

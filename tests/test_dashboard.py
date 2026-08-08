@@ -293,8 +293,7 @@ def test_the_graphs_clear_the_stats_pane_above_them():
     window = DashboardWindow(on_action=lambda action: None)
     stats_bottom = window.stats_view.enclosingScrollView().frame().origin.y
     highest_graph = max(
-        view.frame().origin.y + view.frame().size.height
-        for view in window.graph_views.values()
+        view.frame().origin.y + view.frame().size.height for view in window.graph_views.values()
     )
     assert highest_graph <= stats_bottom
 
@@ -307,9 +306,7 @@ def test_the_console_button_is_present_and_on_screen():
     positioned off the bottom of the content view, where it renders as nothing.
     """
     window = DashboardWindow(on_action=lambda action: None)
-    button = next(
-        b for b in window.buttons if str(b.identifier()) == "open_console"
-    )
+    button = next(b for b in window.buttons if str(b.identifier()) == "open_console")
     assert "console" in str(button.title()).lower()
     frame = button.frame()
     assert frame.origin.y >= 0

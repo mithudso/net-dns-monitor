@@ -319,9 +319,7 @@ def test_the_whole_process_group_dies_not_just_the_shell(tmp_path):
     fired, so its absence is the proof that the group was killed.
     """
     marker = tmp_path / "survivor"
-    result = run_command(
-        f"sh -c 'sleep 3; touch {marker}' & wait", cwd=str(tmp_path), timeout=1.0
-    )
+    result = run_command(f"sh -c 'sleep 3; touch {marker}' & wait", cwd=str(tmp_path), timeout=1.0)
     assert result.timed_out is True
     time.sleep(4)
     assert not marker.exists(), "a child outlived the timeout: process group not killed"

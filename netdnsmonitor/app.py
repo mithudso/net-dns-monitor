@@ -322,7 +322,6 @@ def build_state_machine(config: dict, failover=None) -> StateMachine:
     if store is None:
         prober = base_prober
     else:
-
         anchors = anchor_domains(config)
 
         def prober() -> dict:
@@ -1882,6 +1881,7 @@ class NetDnsMonitorApp(rumps.App):
         raise -- a delivery failure is recorded and swallowed inside it, because
         a Slack outage must not stop the report being saved.
         """
+
         def deliver():
             try:
                 self.last_notification_results = self.notifier(text)

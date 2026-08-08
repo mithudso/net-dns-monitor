@@ -124,7 +124,7 @@ def test_the_menu_offers_the_dashboard_first(tmp_path):
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
     entries = [
         key
-        for key in app.menu.keys()
+        for key in app.menu
         if not key.startswith("SeparatorMenuItem") and not key.startswith("failover-row-")
     ]
     assert entries[0] == "Open dashboard"

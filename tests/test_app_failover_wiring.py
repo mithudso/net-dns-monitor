@@ -14,8 +14,8 @@ from netdnsmonitor.app import (
 from netdnsmonitor.classifier import Classification
 from netdnsmonitor.config import DEFAULT_CONFIG
 from netdnsmonitor.ladder import ladder_for
-from netdnsmonitor.report import build_report
 from netdnsmonitor.repair_executor import make_repair_executor
+from netdnsmonitor.report import build_report
 
 
 def config(**overrides):
@@ -43,12 +43,9 @@ def test_failover_is_off_by_default():
 def test_failover_needs_both_service_names():
     assert build_failover(config(failover_enabled=True)) is None
     assert (
-        build_failover(config(failover_enabled=True, failover_preferred_service="AX88179B"))
-        is None
+        build_failover(config(failover_enabled=True, failover_preferred_service="AX88179B")) is None
     )
-    assert (
-        build_failover(config(failover_enabled=True, failover_backup_service="Wi-Fi")) is None
-    )
+    assert build_failover(config(failover_enabled=True, failover_backup_service="Wi-Fi")) is None
 
 
 def test_identical_preferred_and_backup_is_refused():
@@ -83,9 +80,7 @@ def test_configured_failover_is_built_with_its_settings():
 
 
 def test_dns_can_be_opted_into_via_config():
-    failover = build_failover(
-        enabled_config(failover_trigger_classifications=["network", "dns"])
-    )
+    failover = build_failover(enabled_config(failover_trigger_classifications=["network", "dns"]))
     assert failover.trigger_classifications == frozenset({"network", "dns"})
 
 
@@ -127,10 +122,7 @@ def test_dns_ladder_excludes_the_switch_step_by_default():
 
 
 def test_dns_ladder_includes_the_switch_step_when_opted_in():
-    names = [
-        s.name
-        for s in ladder_for(Classification.DNS, frozenset({"network", "dns"}))
-    ]
+    names = [s.name for s in ladder_for(Classification.DNS, frozenset({"network", "dns"}))]
     assert names[-1] == "switch_to_backup_network"
     assert names.index("flush_dns_cache") < names.index("switch_to_backup_network")
 
@@ -149,7 +141,9 @@ def switch_step():
 
 
 def test_unconfigured_failover_reports_disabled_not_success():
-    executor = make_repair_executor(run_fn=lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    executor = make_repair_executor(
+        run_fn=lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
     outcome = executor(switch_step(), "network")
     assert outcome.startswith("disabled:")
 
@@ -169,9 +163,7 @@ def test_existing_steps_still_work_without_a_classification():
     executor = make_repair_executor(
         run_fn=lambda *a, **k: SimpleNamespace(returncode=0, stdout="out", stderr="")
     )
-    step = next(
-        s for s in ladder_for(Classification.NETWORK) if s.name == "check_interface_state"
-    )
+    step = next(s for s in ladder_for(Classification.NETWORK) if s.name == "check_interface_state")
     assert executor(step) == "out"
 
 
@@ -298,11 +290,13 @@ def test_service_names_alone_give_a_manual_only_failover():
     """auto off + both names set is a real mode: the button works, nothing
     moves on its own. It is how you try this before trusting it unattended.
     """
-    failover = build_failover(config(
-        failover_enabled=False,
-        failover_preferred_service="AX88179B",
-        failover_backup_service="Wi-Fi",
-    ))
+    failover = build_failover(
+        config(
+            failover_enabled=False,
+            failover_preferred_service="AX88179B",
+            failover_backup_service="Wi-Fi",
+        )
+    )
     assert failover is not None
     assert failover.auto_enabled is False
 
@@ -321,11 +315,13 @@ def test_manual_only_mode_keeps_the_switch_step_off_the_ladder():
 
 
 def test_manual_only_mode_refuses_automatic_switching():
-    failover = build_failover(config(
-        failover_enabled=False,
-        failover_preferred_service="AX88179B",
-        failover_backup_service="Wi-Fi",
-    ))
+    failover = build_failover(
+        config(
+            failover_enabled=False,
+            failover_preferred_service="AX88179B",
+            failover_backup_service="Wi-Fi",
+        )
+    )
     assert failover.attempt_failover("network").startswith("disabled:")
     assert failover.attempt_failback() is None
 

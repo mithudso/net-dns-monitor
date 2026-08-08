@@ -46,9 +46,7 @@ def parse_service_order(text: str) -> list[NetworkService]:
             port_match = _PORT_RE.match(lines[index + 1].strip())
             if port_match:
                 device = port_match.group(2) or None
-        services.append(
-            NetworkService(name=name, device=device, enabled=marker != "*")
-        )
+        services.append(NetworkService(name=name, device=device, enabled=marker != "*"))
     return services
 
 

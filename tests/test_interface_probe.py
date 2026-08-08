@@ -68,9 +68,7 @@ def test_stops_at_the_first_reachable_target():
         seen.append(host)
         return host == "1.1.1.1"
 
-    probe = make_interface_prober(
-        TARGETS, timeout=2.0, connect_fn=connect, index_fn=lambda d: 15
-    )
+    probe = make_interface_prober(TARGETS, timeout=2.0, connect_fn=connect, index_fn=lambda d: 15)
     assert probe("en0") is True
     assert seen == ["1.1.1.1"]
 

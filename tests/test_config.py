@@ -249,16 +249,12 @@ def test_learn_interval_is_clamped_above_the_poll_interval(tmp_path):
     permanent false incident.
     """
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "poll_interval_seconds: 30\ndomain_learn_interval_seconds: 30\n"
-    )
+    config_path.write_text("poll_interval_seconds: 30\ndomain_learn_interval_seconds: 30\n")
     cfg = load_config(str(config_path))
     assert cfg["domain_learn_interval_seconds"] >= 60
 
 
 def test_a_generous_learn_interval_is_left_alone(tmp_path):
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "poll_interval_seconds: 30\ndomain_learn_interval_seconds: 900\n"
-    )
+    config_path.write_text("poll_interval_seconds: 30\ndomain_learn_interval_seconds: 900\n")
     assert load_config(str(config_path))["domain_learn_interval_seconds"] == 900

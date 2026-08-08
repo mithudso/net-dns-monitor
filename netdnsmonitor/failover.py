@@ -40,13 +40,13 @@ from netdnsmonitor.failover_policy import (
     decide,
     next_preferred_streak,
 )
-from netdnsmonitor.throughput import measure_all
 from netdnsmonitor.service_order import (
     find_service,
     is_order_intact,
     parse_service_order,
     promote,
 )
+from netdnsmonitor.throughput import measure_all
 
 # networksetup's wording when the SystemConfiguration write is refused. Matched
 # to tell "you may not do this" apart from "this did not work", because the two
@@ -72,11 +72,7 @@ def _is_finite_number(value) -> bool:
     hourly window looks empty. Booleans are rejected for the same reason they
     are not timestamps, despite being ints.
     """
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-    )
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def default_run(args: list[str]) -> object:
@@ -107,8 +103,7 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
     """
     if not is_order_intact(services, new_order):
         return (
-            "failed: refused to apply a service order that is not a permutation "
-            "of the current one"
+            "failed: refused to apply a service order that is not a permutation of the current one"
         )
     result = run_fn(["networksetup", "-ordernetworkservices", *new_order])
     stderr = (getattr(result, "stderr", "") or "").strip()
@@ -120,8 +115,7 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
                 "an administrator right is required"
             )
         return (
-            f"failed: networksetup exited {getattr(result, 'returncode', '?')}: "
-            f"{stderr or stdout}"
+            f"failed: networksetup exited {getattr(result, 'returncode', '?')}: {stderr or stdout}"
         )
     # networksetup can exit 0 without changing anything, so the claim is only
     # made after reading the order back.
@@ -166,18 +160,14 @@ class FailoverStore:
         if not isinstance(data, dict):
             return
         order = data.get("original_order")
-        self.original_order = (
-            [str(n) for n in order] if isinstance(order, list) and order else None
-        )
+        self.original_order = [str(n) for n in order] if isinstance(order, list) and order else None
         enabled_by_us = data.get("enabled_by_us")
         self.enabled_by_us = enabled_by_us if isinstance(enabled_by_us, str) else None
         last = data.get("last_switch_at")
         self.last_switch_at = last if _is_finite_number(last) else None
         times = data.get("switch_times")
         self.switch_times = (
-            [float(t) for t in times if _is_finite_number(t)]
-            if isinstance(times, list)
-            else []
+            [float(t) for t in times if _is_finite_number(t)] if isinstance(times, list) else []
         )
 
     def save(self) -> None:
@@ -309,8 +299,7 @@ class NetworkFailover:
                 found.append((name, None, None, True))
                 continue
             found.append(
-                (name, service.device, self.interface_prober(service.device),
-                 service.enabled)
+                (name, service.device, self.interface_prober(service.device), service.enabled)
             )
 
         # Benchmark every reachable candidate at once against a single
@@ -356,10 +345,7 @@ class NetworkFailover:
         after = self._list_services()
         service = find_service(after, name) if after else None
         if service is not None and not service.enabled:
-            return (
-                f"failed: '{name}' reports success but is still disabled in the "
-                "service order"
-            )
+            return f"failed: '{name}' reports success but is still disabled in the service order"
         return ""
 
     def _apply_order(self, services, new_order: list[str]) -> str:
@@ -389,9 +375,8 @@ class NetworkFailover:
         if not services:
             return "failed: could not read the current network service order"
         if find_service(services, self.preferred_service) is None:
-            return (
-                f"failed: service '{self.preferred_service}' not found; available: "
-                + ", ".join(s.name for s in services)
+            return f"failed: service '{self.preferred_service}' not found; available: " + ", ".join(
+                s.name for s in services
             )
 
         missing = [n for n in self.backup_services if find_service(services, n) is None]
@@ -445,8 +430,12 @@ class NetworkFailover:
             service = find_service(services, name)
             if service is None:
                 return {
-                    "name": name, "device": None, "found": False,
-                    "reachable": None, "enabled": None, "throughput_mbps": None,
+                    "name": name,
+                    "device": None,
+                    "found": False,
+                    "reachable": None,
+                    "enabled": None,
+                    "throughput_mbps": None,
                 }
             return {
                 "name": name,
@@ -465,9 +454,16 @@ class NetworkFailover:
             "preferred": describe(self.preferred_service),
             # The single `backup` key stays for callers that only show one; the
             # list is what the console and the ranking actually use.
-            "backup": backups[0] if backups else
-            {"name": None, "device": None, "found": False, "reachable": None,
-             "enabled": None, "throughput_mbps": None},
+            "backup": backups[0]
+            if backups
+            else {
+                "name": None,
+                "device": None,
+                "found": False,
+                "reachable": None,
+                "enabled": None,
+                "throughput_mbps": None,
+            },
             "backups": backups,
             "chosen_backup": self.chosen_backup,
             "auto_enabled": self.auto_enabled,
@@ -530,10 +526,7 @@ class NetworkFailover:
             # third service on top (the user promoted something by hand) also
             # reads as "not on a backup", and clearing there would destroy the
             # restore point while the machine is on neither side.
-            if (
-                self.store.original_order is not None
-                and services[0].name == self.preferred_service
-            ):
+            if self.store.original_order is not None and services[0].name == self.preferred_service:
                 self.store.original_order = None
                 self.store.save()
             if services[0].name != self.preferred_service:
@@ -565,9 +558,7 @@ class NetworkFailover:
         else:
             backup_ok = None
         if active_side == BACKUP:
-            self.preferred_streak = next_preferred_streak(
-                self.preferred_streak, preferred_ok
-            )
+            self.preferred_streak = next_preferred_streak(self.preferred_streak, preferred_ok)
         else:
             self.preferred_streak = 0
 
@@ -628,8 +619,7 @@ class NetworkFailover:
                     # which is a different thing from vanishing mid-operation.
                     return (
                         f"failed: '{prefer_name}' is configured but not in the service "
-                        "order; available: "
-                        + ", ".join(s.name for s in services)
+                        "order; available: " + ", ".join(s.name for s in services)
                     )
             else:
                 winner = best_candidate(candidates)
@@ -637,9 +627,7 @@ class NetworkFailover:
                 # A person asked for this. Refusing because nothing answered
                 # would make the button useless in exactly the situation it
                 # exists for -- but the outcome has to say the path is unproven.
-                winner = next(
-                    (c for c in candidates if c.device is not None), None
-                )
+                winner = next((c for c in candidates if c.device is not None), None)
                 note_unverified = " -- WARNING: this path was not verified reachable"
         if winner is None:
             return "failed: no backup service is reachable"
@@ -711,9 +699,7 @@ class NetworkFailover:
         undone = ""
         if self.store.enabled_by_us:
             name = self.store.enabled_by_us
-            result = self.run_fn(
-                ["networksetup", "-setnetworkserviceenabled", name, "off"]
-            )
+            result = self.run_fn(["networksetup", "-setnetworkserviceenabled", name, "off"])
             undone = (
                 f" and disabled '{name}' again, which this app had enabled"
                 if getattr(result, "returncode", 1) == 0
@@ -723,7 +709,4 @@ class NetworkFailover:
 
         self.store.original_order = None
         self.store.save()
-        return (
-            f"{outcome} (failed back to preferred '{self.preferred_service}'"
-            f"{undone}){note}"
-        )
+        return f"{outcome} (failed back to preferred '{self.preferred_service}'{undone}){note}"

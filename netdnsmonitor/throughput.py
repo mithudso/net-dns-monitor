@@ -16,6 +16,7 @@ unknown, and ranking it as the slowest option would hand traffic to a worse
 path on no evidence.
 """
 
+import contextlib
 import socket
 import ssl
 import threading
@@ -165,14 +166,10 @@ def default_measure(
     except (OSError, ssl.SSLError, ValueError):
         return None
     finally:
-        try:
+        with contextlib.suppress(OSError):
             stream.close()
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             sock.close()
-        except OSError:
-            pass
 
 
 def make_throughput_meter(
@@ -212,8 +209,12 @@ def make_throughput_meter(
         except TypeError:
             # An injected fake that predates the `address` argument.
             return measure_fn(
-                device, host=host, path=path, port=port,
-                timeout=timeout, max_bytes=max_bytes,
+                device,
+                host=host,
+                path=path,
+                port=port,
+                timeout=timeout,
+                max_bytes=max_bytes,
             )
         except Exception:  # noqa: BLE001 - a benchmark must never take down a caller
             return None
@@ -222,7 +223,8 @@ def make_throughput_meter(
 
 
 def measure_all(
-    devices: list[str], meter: Callable[[Optional[str]], Optional[float]],
+    devices: list[str],
+    meter: Callable[[Optional[str]], Optional[float]],
     timeout: float = DEFAULT_TIMEOUT,
 ) -> dict:
     """Benchmark several interfaces against ONE shared deadline.

@@ -313,6 +313,8 @@ def test_status_report_follows_status_state_not_the_bare_gate():
     """
     assert "state:          incident" in build_status_report("healthy", ping_down=True)
     assert "state:          flaky" in build_status_report("healthy", consecutive_failures=1)
+
+
 # --- failover indicator rows ------------------------------------------------
 
 
@@ -338,8 +340,7 @@ def snapshot(**overrides):
     snap.update(overrides)
     if "active_service" not in overrides:
         snap["active_service"] = (
-            snap["backup"]["name"] if snap["active_side"] == "backup"
-            else snap["preferred"]["name"]
+            snap["backup"]["name"] if snap["active_side"] == "backup" else snap["preferred"]["name"]
         )
     return snap
 

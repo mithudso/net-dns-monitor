@@ -1,6 +1,5 @@
 import http.client
 import smtplib
-
 import urllib.error
 
 from netdnsmonitor.notifications import (
@@ -56,7 +55,9 @@ def test_slack_notifier_reports_delivered_only_on_200_and_body_ok():
 
 
 def test_slack_notifier_treats_200_with_non_ok_body_as_failure():
-    notify = make_slack_notifier("https://hooks.slack.test/secret", post_fn=lambda *_: (200, "invalid_payload"))
+    notify = make_slack_notifier(
+        "https://hooks.slack.test/secret", post_fn=lambda *_: (200, "invalid_payload")
+    )
     result = notify("hello")
     assert "error" in result
     assert result.get("delivered") is None
