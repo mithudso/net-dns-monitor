@@ -209,6 +209,13 @@ DEFAULT_CONFIG = {
     # inventing numbers. The default endpoint serves an exact byte count over
     # plain HTTPS with no account or redirect, which is what makes it usable
     # from an interface-bound socket.
+    # What the interface prober aims at, when that must differ from
+    # `external_targets`. Empty means "use external_targets". See
+    # app.failover_probe_targets for why the two are separable.
+    "failover_probe_targets": [],
+    # One deadline is spent across ALL failover probe targets, so the budget is
+    # a function of how many are listed. 0 means "use probe_timeout_seconds".
+    "failover_probe_timeout_seconds": 0,
     "failover_speedtest_host": "speed.cloudflare.com",
     "failover_speedtest_path": "/__down?bytes=2000000",
     "failover_speedtest_port": 443,

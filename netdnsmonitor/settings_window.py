@@ -119,6 +119,16 @@ GROUPS = [
             ("failover_failback_threshold", "Healthy ticks before failback", "int"),
             ("failover_cooldown_seconds", "Cooldown between switches (seconds)", "int"),
             ("failover_max_switches_per_hour", "Maximum switches per hour", "int"),
+            (
+                # "targets", not "list": these are host/port pairs and need the
+                # same parser `external_targets` uses. As a plain list the window
+                # would save ["192.168.68.1:53"] -- strings, not pairs -- and the
+                # prober would silently probe nothing.
+                "failover_probe_targets",
+                "Reachability probe targets (host:port, comma separated)",
+                "targets",
+            ),
+            ("failover_probe_timeout_seconds", "Reachability probe budget (0 = default)", "float"),
             ("failover_speedtest_host", "Throughput probe host", "str"),
             ("failover_speedtest_path", "Throughput probe path", "str"),
             ("failover_speedtest_port", "Throughput probe port", "int"),
@@ -233,6 +243,8 @@ NEEDS_RESTART = {
     "failover_cooldown_seconds",
     "failover_max_switches_per_hour",
     "failover_state_path",
+    "failover_probe_targets",
+    "failover_probe_timeout_seconds",
     "failover_speedtest_host",
     "failover_speedtest_path",
     "failover_speedtest_port",

@@ -233,11 +233,9 @@ def build_failover(config: dict):
             max_bytes=int(config["failover_speedtest_max_bytes"]),
         ),
         store=FailoverStore(config["failover_state_path"]),
-        # Reachability is judged against the same external targets the ordinary
-        # probe uses, but forced out of a specific interface.
         interface_prober=make_interface_prober(
-            targets=[tuple(t) for t in config["external_targets"]],
-            timeout=float(config.get("probe_timeout_seconds", 2.0)),
+            targets=failover_probe_targets(config),
+            timeout=failover_probe_timeout(config),
         ),
         failback_threshold=int(config["failover_failback_threshold"]),
         cooldown_seconds=float(config["failover_cooldown_seconds"]),
@@ -245,6 +243,55 @@ def build_failover(config: dict):
         trigger_classifications=failover_trigger_classifications(config),
         auto_enabled=bool(config.get("failover_enabled")),
     )
+
+
+def failover_probe_targets(config: dict) -> list[tuple]:
+    """What the interface prober aims at, which is not always what the ordinary
+    probe aims at.
+
+    Both defaulted to `external_targets` until a machine turned up where that
+    could not work. The ordinary probe asks "is the internet reachable" and
+    wants a target out on it. The interface probe asks "would this specific
+    adapter carry traffic" and pins the socket to it with IP_BOUND_IF -- which
+    bypasses any VPN tunnel, so on a machine routing through one, every
+    physical interface reads unreachable against an internet target while the
+    machine is plainly online. See docs/known-issues.md.
+
+    Splitting them is the fix, and it has to be a split rather than a
+    repointing: aiming `external_targets` at a LAN gateway would make the
+    ordinary probe call the network healthy through an ISP outage, because the
+    gateway answers either way.
+
+    Empty means "use external_targets", which keeps the previous behaviour for
+    every machine that does not need the split.
+    """
+    configured = config.get("failover_probe_targets") or config["external_targets"]
+    return [tuple(t) for t in configured]
+
+
+def failover_probe_timeout(config: dict) -> float:
+    """The interface prober's deadline, which is not the ordinary probe's.
+
+    `make_interface_prober` spends ONE deadline across all targets, deliberately
+    -- see its comment about the additive stall. That makes the budget a
+    function of how many targets are listed, and the per-link gateways this
+    feature wants are unreachable from every link but their own: measured here,
+    the wired gateway blackholes for the full 2s from Wi-Fi rather than
+    refusing, so a 2s budget is consumed entirely by the first target and the
+    reachable one is never tried. The probe then reports "unreachable" about a
+    link that works.
+
+    Sized for the target list rather than shared with `probe_timeout_seconds`,
+    which bounds a different thing on every tick. This budget is only ever spent
+    once the machine has actually failed over or is in an incident -- a healthy
+    tick that has never failed over runs no probes at all.
+
+    0 means "use probe_timeout_seconds".
+    """
+    configured = float(config.get("failover_probe_timeout_seconds") or 0)
+    if configured > 0:
+        return configured
+    return float(config.get("probe_timeout_seconds", 2.0))
 
 
 def failover_backup_names(config: dict) -> list[str]:

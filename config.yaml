@@ -336,3 +336,37 @@ failover_speedtest_path: "/__down?bytes=2000000"
 failover_speedtest_port: 443
 failover_speedtest_timeout_seconds: 5.0
 failover_speedtest_max_bytes: 2000000
+
+# What the interface prober aims at, when that has to differ from
+# `external_targets` above. Empty means "use external_targets", which is right
+# for most machines.
+#
+# The two questions are not the same. The ordinary probe asks "is the internet
+# reachable" and wants a target out on it. The interface probe asks "would this
+# specific adapter carry traffic" and pins the socket with IP_BOUND_IF -- which
+# bypasses any VPN tunnel. On a machine routing through one, every physical
+# interface reads unreachable against an internet target while the machine is
+# plainly online, and automatic failover goes inert.
+#
+# Aim this at something reachable off-tunnel, usually the LAN gateway of each
+# link, e.g.:
+#   failover_probe_targets:
+#     - ["192.168.68.1", 53]
+#     - ["192.168.1.1", 53]
+#
+# Do NOT solve this by repointing `external_targets` at a gateway: the ordinary
+# probe would then call the network healthy straight through an ISP outage,
+# because the gateway answers either way.
+failover_probe_targets: []
+
+# The interface prober spends ONE deadline across all `failover_probe_targets`,
+# so the budget is a function of how many are listed. Per-link gateways are
+# unreachable from every link but their own, and an unreachable gateway
+# blackholes for the full deadline rather than refusing -- measured here at a
+# flat 2.00s. With a 2s budget the first target eats all of it and the reachable
+# one is never tried, so the probe reports "unreachable" about a working link.
+#
+# Allow roughly (number of targets x 2s) + headroom. 0 means "use
+# probe_timeout_seconds". Only ever spent once the machine has failed over or is
+# in an incident: a healthy tick that never failed over runs no probes at all.
+failover_probe_timeout_seconds: 0

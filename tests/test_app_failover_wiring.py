@@ -9,6 +9,7 @@ from netdnsmonitor.app import (
     NetDnsMonitorApp,
     build_failover,
     build_state_machine,
+    failover_probe_targets,
     failover_status_text,
 )
 from netdnsmonitor.classifier import Classification
@@ -426,3 +427,63 @@ def test_status_text_distinguishes_idle_from_acted():
     acted = failover_status_text(failover)
     assert "Last attempt" in acted and "Wi-Fi" in acted
     assert idle != acted
+
+
+# --- which targets the interface prober aims at -----------------------------
+
+
+def test_probe_targets_default_to_the_ordinary_external_targets():
+    """Empty means "use external_targets", so every machine that does not need
+    the split keeps the behaviour it had before the key existed.
+    """
+    cfg = {"external_targets": [["1.1.1.1", 443]], "failover_probe_targets": []}
+    assert failover_probe_targets(cfg) == [("1.1.1.1", 443)]
+
+
+def test_probe_targets_override_the_ordinary_ones_when_set():
+    cfg = {
+        "external_targets": [["1.1.1.1", 443]],
+        "failover_probe_targets": [["192.168.68.1", 53]],
+    }
+    assert failover_probe_targets(cfg) == [("192.168.68.1", 53)]
+
+
+def test_setting_probe_targets_leaves_the_incident_probe_alone():
+    """The regression this split exists to prevent.
+
+    Repointing `external_targets` at a LAN gateway would make the ordinary probe
+    call the network healthy straight through an ISP outage, because the gateway
+    answers either way. Setting the failover targets must not touch it.
+    """
+    cfg = {
+        "external_targets": [["1.1.1.1", 443], ["8.8.8.8", 443]],
+        "failover_probe_targets": [["192.168.68.1", 53]],
+    }
+    failover_probe_targets(cfg)
+    assert cfg["external_targets"] == [["1.1.1.1", 443], ["8.8.8.8", 443]]
+
+
+def test_probe_targets_tolerate_a_missing_key():
+    """Config files written before this key existed still load: load_config
+    supplies the default, but a hand-built dict may not.
+    """
+    assert failover_probe_targets({"external_targets": [["1.1.1.1", 443]]}) == [("1.1.1.1", 443)]
+
+
+def test_the_built_failover_probes_the_configured_targets(monkeypatch):
+    """The wiring, not just the helper.
+
+    `failover_probe_targets` returning the right list proves nothing if
+    `build_failover` still passes `external_targets` to the prober, so this
+    captures what actually reaches `make_interface_prober`.
+    """
+    captured = {}
+
+    def fake_make_interface_prober(targets, timeout):
+        captured["targets"] = targets
+        return lambda device: True
+
+    monkeypatch.setattr("netdnsmonitor.app.make_interface_prober", fake_make_interface_prober)
+    build_failover(enabled_config(failover_probe_targets=[["192.168.68.1", 53]]))
+
+    assert captured["targets"] == [("192.168.68.1", 53)]
