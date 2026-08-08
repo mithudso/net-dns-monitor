@@ -189,3 +189,59 @@ def build_title(
         title += f" | {resolution_failed}/{resolution_total} resolution fails"
 
     return title
+
+
+# Reachability is tri-state for the same reason it is everywhere else in this
+# app: an absent adapter has not been probed, and saying "unreachable" about a
+# cable that is simply unplugged sends someone looking for the wrong fault.
+REACHABILITY = {True: "reachable", False: "unreachable", None: "not probed"}
+
+
+def _describe_side(side: dict, label: str, is_active: bool) -> str:
+    marker = "●" if is_active else "○"  # filled = carrying traffic
+    if not side.get("found"):
+        return f"{marker} {label}: {side['name']} — NOT FOUND in the service order"
+    device = side.get("device") or "?"
+    return (
+        f"{marker} {label}: {side['name']} ({device}) — "
+        f"{REACHABILITY.get(side.get('reachable'), 'unknown')}"
+    )
+
+
+def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
+    """The menu bar's failover indicator: three lines, always in the same
+    order, so the answer to "which one am I on" is in a fixed place.
+
+    Returns a single explanatory line instead when the feature is unconfigured
+    or the service order could not be read -- an indicator that silently shows
+    stale or invented state is worse than one that says it doesn't know.
+    """
+    if snapshot is None:
+        return ["Failover: not configured (set both service names in config.yaml)"]
+    if snapshot.get("error"):
+        return [f"Failover: {snapshot['error']}"]
+
+    mode = "automatic" if snapshot.get("auto_enabled") else "manual only"
+    active_side = snapshot.get("active_side")
+    active_service = snapshot.get("active_service")
+
+    # Show the backup that is actually carrying traffic, not simply the first
+    # configured one. With several backups the filled marker would otherwise
+    # land on a service carrying nothing, which is the one thing this row is
+    # supposed to tell you.
+    backups = list(snapshot.get("backups") or [])
+    backup = next(
+        (b for b in backups if b.get("name") == active_service),
+        None,
+    ) or snapshot.get("backup")
+
+    lines = [
+        f"Active: {active_service} — failover is {mode}",
+        _describe_side(snapshot["preferred"], "Preferred", active_side == "preferred"),
+    ]
+    if backup:
+        label = "Backup" if len(backups) <= 1 else f"Backup (of {len(backups)})"
+        lines.append(
+            _describe_side(backup, label, backup.get("name") == active_service)
+        )
+    return lines

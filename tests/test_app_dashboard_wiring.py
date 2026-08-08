@@ -107,8 +107,27 @@ def test_constructing_the_app_creates_no_window(tmp_path):
 
 
 def test_the_menu_offers_the_dashboard_first(tmp_path):
+    """First *actionable* entry, not first entry outright.
+
+    The reconcile put the failover indicator rows at the top of the menu. They
+    carry no callback -- that is what greys them out -- so they read as a status
+    header rather than as choices, and the dashboard is still the first thing
+    anyone can click. Asserting position 0 would now pin the indicator's
+    placement instead of the property this test exists for: that the dashboard
+    leads, because the status item itself is easy to miss.
+
+    Filtered by name rather than by `callback`: rumps binds the `@rumps.clicked`
+    handlers when the app runs, so every string-declared item still reports
+    `callback is None` at construction time and a callback-based filter would
+    silently match only the explicitly-constructed failover items.
+    """
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
-    assert list(app.menu.keys())[0] == "Open dashboard"
+    entries = [
+        key
+        for key in app.menu.keys()
+        if not key.startswith("SeparatorMenuItem") and not key.startswith("failover-row-")
+    ]
+    assert entries[0] == "Open dashboard"
 
 
 def test_opening_the_dashboard_creates_and_populates_it(tmp_path):

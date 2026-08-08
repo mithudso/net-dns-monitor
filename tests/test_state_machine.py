@@ -16,9 +16,11 @@ class FakeProber:
 class FakeRepairExecutor:
     def __init__(self):
         self.executed_steps = []
+        self.classifications = []
 
-    def __call__(self, step):
+    def __call__(self, step, classification=None):
         self.executed_steps.append(step.name)
+        self.classifications.append(classification)
         return f"executed {step.name}"
 
 
@@ -149,7 +151,7 @@ def test_redaction_covers_the_log_and_ladder_fields_that_carry_real_hostnames():
     failing = {"external_reachable": True, "internal_reachable": None, "dns_ok": False}
     sm = StateMachine(
         prober=FakeProber([failing, failing, failing]),
-        repair_executor=lambda step: "/etc/resolver overrides present for: mail.corp.local",
+        repair_executor=lambda step, classification=None: "/etc/resolver overrides present for: mail.corp.local",
         escalator=escalator,
         log_watcher=lambda: ["mDNSResponder: no answer for mail.corp.local"],
         failure_threshold=2,

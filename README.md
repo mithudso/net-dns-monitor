@@ -29,6 +29,162 @@ Toggling a network interface stays unautomated on purpose, not for want of
 permission: down-then-up cannot be one command, and two risks leaving the machine
 offline with no network to fix it over.
 
+The one exception is the optional network-failover step, which is genuinely
+attempted rather than stubbed — reordering network services can succeed for an
+administrator account without a helper. It is still tagged as needing
+privilege, and when the write is refused it reports `NEEDS_PRIVILEGE` and
+changes nothing. See "Automatic network failover" below.
+
+## Command line
+
+One entry point for everything the app does without a menu bar:
+
+```bash
+python3 -m netdnsmonitor.cli interfaces      # every service, live
+python3 -m netdnsmonitor.cli bench           # + measured throughput
+python3 -m netdnsmonitor.cli status          # classification + failover state
+python3 -m netdnsmonitor.cli failover backup # switch to the fastest backup
+python3 -m netdnsmonitor.cli console         # interactive
+python3 -m netdnsmonitor.cli guide           # what to do when it breaks
+```
+
+`interfaces` is the one to start with — it shows every service with its device,
+whether the service is enabled, whether it can actually reach anything, and
+(with `bench`) how fast:
+
+```
+ #  SERVICE                    DEVICE   SVC  REACHABLE     Mbps
+ 1  AX88179B                   en6      on   not probed       -
+ 3  USB 10/100/1G/2.5G LAN     en9      OFF  unreachable      -
+ 4  M3100                      en12     OFF  unreachable      -
+ 6  Wi-Fi                      en0      on   reachable      3.5
+```
+
+`SVC = OFF` is the trap worth knowing: **a disabled service is skipped by macOS
+no matter where it sits in the priority order.** Failing over to one requires
+enabling it as well as promoting it, which the app does.
+
+`not probed` is not `unreachable` — an unplugged adapter disappears from the
+interface list entirely, and calling that "unreachable" sends you looking for
+the wrong fault.
+
+### Console
+
+`netdns console` (or "Open console…" in the menu bar) is a REPL over the same
+catalogue: a usage guide, a numbered list of diagnostic commands, the live
+interface table, and service-order editing (`priority`, `promote <name>`).
+
+Anything that changes system state — a catalogue command marked `!`, switching
+networks, or promoting a service — shows you the exact command and waits for
+`yes`. Nothing that rewrites configuration happens on a single keypress. A
+command with a placeholder (`ifconfig {device}`) asks for the value rather than
+shelling out with a literal `{device}` in it.
+
+In the terminal console a number **runs** the command (after confirming, if it
+mutates); in the menu bar window the dropdown **inserts** it into the input box
+so you can read it first.
+
+## Automatic network failover
+
+Optional, **off by default**. When the preferred network dies, the app can move
+the machine onto a backup network by rewriting the macOS network service order,
+and move it back when the preferred one recovers.
+
+```yaml
+failover_enabled: true
+failover_preferred_service: "AX88179B"   # the wired link
+failover_backup_service: "Wi-Fi"         # the hotspot
+```
+
+Names must match `networksetup -listnetworkserviceorder` exactly; a name that
+doesn't match is reported as a failure listing the names that do exist, and
+nothing is reordered.
+
+**Menu bar controls.** Three indicator rows show which service is carrying
+traffic (`●`) and which is not (`○`), each with its device and whether it can
+actually reach anything right now:
+
+```
+Active: Wi-Fi — failover is automatic
+○ Preferred: AX88179B (en6) — unreachable
+● Backup: Wi-Fi (en0) — reachable
+Switch to backup now
+Switch back to preferred now
+Refresh network status
+```
+
+The switch buttons skip the policy — a person clicking a button has already
+supplied the judgement the rate brakes exist to substitute for — but not the
+execution safety: the permutation guard and the read-back verification still
+apply, and the result is reported in a notification.
+
+**Three modes**, set by which keys you fill in:
+
+| `failover_enabled` | Both names set | Behaviour |
+|---|---|---|
+| `false` | no | Off entirely |
+| `false` | yes | **Manual only** — buttons work, nothing moves on its own |
+| `true` | yes | Automatic, buttons still available |
+
+Manual-only is the way to try this before trusting it unattended.
+
+**The one failure this addresses.** A link that is *up but not carrying
+traffic* — it has a cable and an address, so macOS keeps it primary and keeps
+routing into a hole. When a cable is simply unplugged the interface disappears
+and macOS fails over on its own; this feature correctly does nothing there.
+
+**It verifies the backup before moving.** Reachability is tested *through* the
+backup interface specifically, using the `IP_BOUND_IF` socket option, so a
+switch only happens when the other side is known to carry traffic. Binding the
+source address instead would not work: on Darwin the route lookup follows the
+destination, so a socket bound to the Wi-Fi address still leaves via whichever
+interface owns the route.
+
+**Several backups, fastest wins.** Give `failover_backup_services` a list and
+every candidate that is independently confirmed reachable gets benchmarked —
+a real bounded download forced out of that interface — with the fastest chosen
+outright. Reachability stays a gate rather than a factor: a fast-looking but
+unverified path never beats a slow proven one. A link whose speed could not be
+measured reports `None`, not `0.0`, so it ranks after measured links rather
+than below dead ones. Only reachable candidates are benchmarked, since there is
+nothing to measure on a path that carries no traffic and it costs seconds each.
+
+**It enables a disabled service.** macOS skips a disabled service wherever it
+sits in the order, so promoting one on its own is a change that looks like a
+success and routes nothing. The enable is verified by reading the listing back,
+exactly like the reorder.
+
+**It is built to be reluctant.** Four brakes must all release before anything
+moves: the incident must be a configured trigger (network-layer only by
+default), the backup must be independently verified, the cooldown must have
+expired, and the hourly switch budget must not be spent. Failback is
+asymmetric — it waits for the preferred link to pass several consecutive checks
+— so a flapping link cannot drag the machine back and forth. Every refusal
+records *why*, and that reason appears in the incident report.
+
+**It restores your exact order.** The service order in place before the first
+failover is recorded and restored verbatim, rather than leaving the backup
+permanently in second place. The record survives a restart, so an app
+relaunched mid-outage can still put you back.
+
+**Privilege, honestly.** Reordering network services needs an administrator
+right. Whether that succeeds without a password prompt depends on your account
+and on the "Require an administrator password to access system-wide
+preferences" setting. If it is refused, the step reports `NEEDS_PRIVILEGE` and
+nothing changes. And because `networksetup` can exit 0 without doing anything,
+the order is read back and compared after every attempt — a switch is only
+reported as `ok` once the new order has been confirmed on disk.
+
+**Not yet verified live.** The decision logic, the parser, the rate brakes and
+the persistence are covered by offline tests, and the `IP_BOUND_IF` probing was
+confirmed by hand against real interfaces. The privileged
+`networksetup -ordernetworkservices` write itself has **not** been executed on a
+real machine. Clicking "Switch to backup now" is the way to find out: it runs
+the same guarded path the automatic switch does and reports exactly what
+happened. Evidence suggests it will work without a password prompt — `scselect
+-n` wrote to root-owned `preferences.plist` from a non-root admin account
+silently, using the same authorization right — but that is a prior, not proof.
+
 ## Setup
 
 Requires Python 3.9+ (the code uses bare `list[...]`/`tuple[...]` generic
@@ -581,6 +737,10 @@ not, since that needs a real macOS event loop.
 - `resolution_prober.py` -- parallel, deadline-bounded DNS resolution of a domain batch
 - `resolution_log.py` -- JSONL append for resolution-monitor findings
 - `escalation.py` -- redaction + the escalate-or-not gate
+- `service_order.py` -- parses/reorders the macOS network service list
+- `interface_probe.py` -- reachability forced out of a named interface
+- `failover_policy.py` -- the pure switch/don't-switch decision + rate brakes
+- `failover.py` -- executes the reorder, verifies it, persists the old order
 - `domain_learner.py` -- learns/validates/prunes domains from failed log lookups
 - `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
 - `anthropic_escalator.py` -- the Claude API call itself

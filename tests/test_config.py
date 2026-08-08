@@ -25,6 +25,7 @@ PATH_KEYS = {
     # out would make test_missing_file_returns_defaults compare an expanded
     # path against the unexpanded default and fail.
     "learned_domains_path",
+    "failover_state_path",
 }
 
 

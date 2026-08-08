@@ -83,6 +83,12 @@ DNS_LADDER = [
     ),
 ]
 
+# Moving to the backup network rewrites the system's network service order, so
+# it goes last: every cheaper and more easily reversed repair on the ladder is
+# tried first. It is tagged needs_privilege because the write genuinely needs
+# an administrator right -- unlike the two stubs, though, it is really
+# attempted, and its outcome string says whether the write landed.
+FAILOVER_STEP = LadderStep("switch_to_backup_network", "repair", needs_privilege=True)
 
 def step_by_name(name: str):
     """Look a step up by its dispatch name.
@@ -98,9 +104,22 @@ def step_by_name(name: str):
     return None
 
 
-def ladder_for(classification: Classification) -> list[LadderStep]:
+# Which classifications may trigger a network switch. Network-only by default:
+# a DNS fault is usually local (resolver cache, /etc/resolver override) and
+# moving the physical path does not address it.
+DEFAULT_FAILOVER_CLASSIFICATIONS = frozenset({"network"})
+
+
+def ladder_for(
+    classification: Classification,
+    failover_classifications: frozenset = DEFAULT_FAILOVER_CLASSIFICATIONS,
+) -> list[LadderStep]:
     if classification == Classification.NETWORK:
-        return list(NETWORK_LADDER)
-    if classification == Classification.DNS:
-        return list(DNS_LADDER)
-    return []
+        steps = list(NETWORK_LADDER)
+    elif classification == Classification.DNS:
+        steps = list(DNS_LADDER)
+    else:
+        return []
+    if classification.value in failover_classifications:
+        steps.append(FAILOVER_STEP)
+    return steps

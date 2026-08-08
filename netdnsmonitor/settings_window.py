@@ -106,6 +106,27 @@ GROUPS = [
         ],
     ),
     (
+        # Service names are free text on purpose: they must match
+        # `networksetup -listallnetworkservices` exactly, and a dropdown built
+        # from a cached list would go stale the moment an adapter is unplugged.
+        "Network failover",
+        [
+            ("failover_enabled", "Fail over automatically", "bool"),
+            ("failover_preferred_service", "Preferred service", "str"),
+            ("failover_backup_service", "Backup service", "str"),
+            ("failover_backup_services", "Additional backups (comma separated)", "list"),
+            ("failover_trigger_classifications", "Trigger on (comma separated)", "list"),
+            ("failover_failback_threshold", "Healthy ticks before failback", "int"),
+            ("failover_cooldown_seconds", "Cooldown between switches (seconds)", "int"),
+            ("failover_max_switches_per_hour", "Maximum switches per hour", "int"),
+            ("failover_speedtest_host", "Throughput probe host", "str"),
+            ("failover_speedtest_path", "Throughput probe path", "str"),
+            ("failover_speedtest_port", "Throughput probe port", "int"),
+            ("failover_speedtest_timeout_seconds", "Throughput probe timeout (seconds)", "int"),
+            ("failover_speedtest_max_bytes", "Throughput probe max bytes", "int"),
+        ],
+    ),
+    (
         "Domain learning",
         [
             ("probe_timeout_seconds", "Probe timeout (seconds)", "int"),
@@ -138,6 +159,7 @@ GROUPS = [
         [
             ("reports_dir", "Incident reports", "str"),
             ("learned_domains_path", "Learned domains", "str"),
+            ("failover_state_path", "Failover state", "str"),
             ("resolution_log_path", "Resolution log", "str"),
             ("forensic_log_path", "Forensic journal", "str"),
             ("forensic_episodes_dir", "Forensic episodes", "str"),
@@ -201,6 +223,21 @@ NEEDS_RESTART = {
     "smtp_username",
     "smtp_starttls",
     "notify_timeout_seconds",
+    # NetworkFailover and its store are built once in App.__init__ too.
+    "failover_enabled",
+    "failover_preferred_service",
+    "failover_backup_service",
+    "failover_backup_services",
+    "failover_trigger_classifications",
+    "failover_failback_threshold",
+    "failover_cooldown_seconds",
+    "failover_max_switches_per_hour",
+    "failover_state_path",
+    "failover_speedtest_host",
+    "failover_speedtest_path",
+    "failover_speedtest_port",
+    "failover_speedtest_timeout_seconds",
+    "failover_speedtest_max_bytes",
 }
 
 FIELDS = [(key, label, kind) for _group, fields in GROUPS for key, label, kind in fields]

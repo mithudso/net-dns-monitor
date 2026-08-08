@@ -18,12 +18,14 @@ from typing import Callable, Optional
 from netdnsmonitor.classifier import Classification, classify
 from netdnsmonitor.escalation import redact, should_escalate
 from netdnsmonitor.flap_gate import FlapGate
-from netdnsmonitor.ladder import ladder_for
+from netdnsmonitor.ladder import DEFAULT_FAILOVER_CLASSIFICATIONS, ladder_for
 from netdnsmonitor.report import build_report
 
 ProbeResult = dict
 Prober = Callable[[], ProbeResult]
-RepairExecutor = Callable[[object], str]
+# Takes (step) or (step, classification): the failover step needs to know what
+# it is responding to, every other step ignores the second argument.
+RepairExecutor = Callable[..., str]
 Escalator = Callable[[dict], Optional[dict]]
 LogWatcher = Callable[[], list]
 
@@ -38,6 +40,7 @@ class StateMachine:
         failure_threshold: int = 2,
         success_threshold: int = 2,
         sensitive_strings: Optional[list[str]] = None,
+        failover_classifications: frozenset = DEFAULT_FAILOVER_CLASSIFICATIONS,
     ):
         self.prober = prober
         self.repair_executor = repair_executor
@@ -50,6 +53,7 @@ class StateMachine:
         # because a second probe seconds later can disagree with the one the gate
         # actually acted on, and then the verdict would explain a different event.
         self.last_probe: ProbeResult = {}
+        self.failover_classifications = failover_classifications
 
     def tick(self) -> Optional[dict]:
         probe = self.prober()
@@ -69,8 +73,8 @@ class StateMachine:
 
         ladder_results = []
         repair_outcomes = []
-        for step in ladder_for(classification):
-            outcome = self.repair_executor(step)
+        for step in ladder_for(classification, self.failover_classifications):
+            outcome = self.repair_executor(step, classification.value)
             ladder_results.append(
                 {
                     "name": step.name,

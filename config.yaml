@@ -296,3 +296,43 @@ smtp_starttls: true
 # Short on purpose: this runs on the run loop at the moment the network is known
 # to be broken.
 notify_timeout_seconds: 5
+
+# --- Automatic failover to a backup network --------------------------------
+# Off, and with no services named, until you fill in both. Switching the
+# network service order is a privileged write, and doing it automatically on a
+# machine whose network layout this app has never seen is not a safe default.
+#
+# `networksetup -listallnetworkservices` prints the names to use. They must
+# match exactly, including case and spacing.
+failover_enabled: false
+failover_preferred_service: null
+failover_backup_service: null
+# Additional backups, ranked by measured throughput when more than one is up.
+failover_backup_services: []
+
+# Which classifications may trigger a switch. Network-only by default: a DNS
+# fault is usually local (resolver cache, /etc/resolver override) and moving the
+# physical path does not address it.
+failover_trigger_classifications:
+  - network
+
+# Consecutive healthy ticks on the preferred link before failing back to it.
+# Failing back on the first good tick would flap across a link that is coming up
+# and going down again.
+failover_failback_threshold: 3
+# Minimum seconds between switches, and a hard ceiling per hour. Both exist so
+# that a link flapping at the physical layer cannot turn into a rewrite loop of
+# the system's network service order.
+failover_cooldown_seconds: 300
+failover_max_switches_per_hour: 4
+# Where the pre-failover service order and the switch history are kept, so a
+# restart mid-failover can still put the original order back.
+failover_state_path: "~/Library/Application Support/net-dns-monitor/failover.json"
+
+# Throughput probe used to rank several backups. A plain HTTPS download of a
+# bounded number of bytes -- no speedtest SDK, no third-party account.
+failover_speedtest_host: "speed.cloudflare.com"
+failover_speedtest_path: "/__down?bytes=2000000"
+failover_speedtest_port: 443
+failover_speedtest_timeout_seconds: 5.0
+failover_speedtest_max_bytes: 2000000

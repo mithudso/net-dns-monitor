@@ -13,25 +13,33 @@ Where output is shown it is real, trimmed for length, never illustrative.
 ## The one rule
 
 **This app diagnoses far more than it fixes, and the report is the deliverable.** Of
-the eight ladder steps, exactly one mutates anything (`flush_dns_cache`), and even
-that one only half-works unprivileged — `dscacheutil -flushcache` succeeds,
-`killall -HUP mDNSResponder` does not, because signalling a process owned by another
-user is rejected regardless of the command's own permissions. It reports `partial`.
-Two more repairs are `NEEDS_PRIVILEGE` stubs. Read "Reading the output correctly" at
-the bottom before concluding this app fixed anything.
+the eight ladder steps present by default, exactly one mutates anything
+(`flush_dns_cache`), and even that one only half-works unprivileged —
+`dscacheutil -flushcache` succeeds, `killall -HUP mDNSResponder` does not, because
+signalling a process owned by another user is rejected regardless of the command's own
+permissions. It reports `partial`. Two more repairs are `NEEDS_PRIVILEGE` stubs.
+
+Enabling failover adds a ninth step, `switch_to_backup_network`, which is the only one
+that rewrites system network configuration. It is off by default and reports
+`NEEDS_PRIVILEGE` rather than acting when the administrator right is refused. Read
+"Reading the output correctly" at the bottom before concluding this app fixed anything.
 
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 129 tests; the whole decision surface
+python3 -m pytest -q          # 347 tests; the whole decision surface
 ```
 
 ## Quick reference
 
 | Command | For | Network |
 |---|---|---|
+| `python3 -m netdnsmonitor.cli <cmd>` | **start here** — the CLI | varies |
+| `python3 -m netdnsmonitor.cli interfaces` | every service, live, with reachability | **yes** |
+| `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
+| `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 129 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 347 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -39,10 +47,72 @@ python3 -m pytest -q          # 129 tests; the whole decision surface
 | one-shot `query_public_dns` | bypass the system resolver entirely | **yes** |
 | one-shot `format_notification` | see the alert text without sending it | no |
 | one-shot `StateMachine` | the whole pipeline, offline, with fakes | no |
+| one-shot `service_order` + `interface_probe` | read-only failover dry run | **yes** |
+| menu bar **Switch to backup now** | **mutates system network config** — the intended live check | **yes** |
+| **failover live check** by hand (below) | **mutates system network config** | **yes** |
 
-There is no `scripts/` directory and no CLI. That is deliberate — `app.py` is a thin
-rumps shell over tested modules, so the modules are the interface. Everything below
-runs from the repo root.
+There is no `scripts/` directory: the CLI is the interface, and `app.py` stays a thin
+rumps shell over the same tested modules. The one-shot `python3 -c` invocations further
+down predate the CLI and are kept because they show which module owns which decision —
+but for day-to-day use, reach for `netdnsmonitor.cli`. Everything runs from the repo
+root.
+
+### `python3 -m netdnsmonitor.cli` — the CLI
+
+| Subcommand | Does |
+|---|---|
+| `status` | classification, probe results, failover state. Exit 1 if unhealthy. |
+| `interfaces [--bench]` | every network service: device, enabled, reachable, speed |
+| `bench` | measure throughput per reachable interface |
+| `failover status\|backup\|preferred [--service NAME]` | show or change the live network |
+| `priority [--promote NAME]` | show or rewrite the service order |
+| `ladder network\|dns [--repair]` | run the troubleshooting ladder |
+| `commands` | the diagnostic command catalogue |
+| `run KEY [--value NAME=VAL] [--yes]` | run one catalogue command |
+| `guide` | what to do when the network breaks |
+| `console` | interactive |
+
+`--json` on `status`, `interfaces` and `bench` gives machine-readable output.
+
+Real output from this machine:
+
+```
+$ python3 -m netdnsmonitor.cli bench
+ #  SERVICE                    DEVICE   SVC  REACHABLE     Mbps
+---------------------------------------------------------------
+ 1  AX88179B                   en6      on   not probed       -
+ 2  USB 10/100/1000 LAN        en7      on   not probed       -
+ 3  USB 10/100/1G/2.5G LAN     en9      OFF  unreachable      -
+ 4  M3100                      en12     OFF  unreachable      -
+ 5  Thunderbolt Bridge         bridge0  on   unreachable      -
+ 6  Wi-Fi                      en0      on   reachable      3.5
+ 7  iPhone USB                 en11     on   not probed       -
+```
+
+Three columns worth reading carefully:
+
+- **`SVC = OFF`** means the network *service* is disabled. macOS skips it no matter
+  where it sits in the priority order, so promoting it alone does nothing — the app
+  enables it as well, and `netdns run enable --value service='M3100' --yes` does it by
+  hand.
+- **`not probed` is not `unreachable`.** An unplugged adapter disappears from the
+  interface list entirely; calling that "unreachable" would send you after the wrong
+  fault.
+- **`Mbps = -`** means not measured, never "zero". Only reachable interfaces are
+  benchmarked, because there is nothing to measure on a path carrying no traffic.
+
+### `python3 -m netdnsmonitor.cli console` — interactive
+
+A REPL over the same catalogue. `?` guide · `i` interfaces · `b` benchmark ·
+`c` commands · `s` failover status · `f` switch to fastest backup · `p` back to
+preferred · `q` quit. Pick a diagnostic by number or key.
+
+Anything that changes system state — a catalogue command marked `!`, switching
+networks (`f`/`p`), or `promote` — prints the exact argv and waits for `yes`. Nothing
+that rewrites configuration happens on a single keypress. A command with a placeholder
+asks for the value rather than shelling out with a literal `{device}` in it.
+
+The same console is available as a window from the menu bar ("Open console…").
 
 ---
 
@@ -104,6 +174,28 @@ incident  None  -> 🔴 Net/DNS: unknown issue
 **The title is driven by the live flap-gate state, not by the last report.** That is a
 fixed bug, not a detail: recovery produces no report, so a title read off "last
 report" stayed red forever after the network came back.
+
+**The menu.** Three greyed indicator rows (readouts, not actions), then the controls:
+
+```
+Active: Wi-Fi — failover is automatic
+○ Preferred: AX88179B (en6) — unreachable
+● Backup: Wi-Fi (en0) — reachable
+─────────────────────────
+Switch to backup now
+Switch back to preferred now
+Refresh network status
+─────────────────────────
+Open last report
+```
+
+`●` is the side currently carrying traffic. Reachability is tri-state and says
+`not probed` for an absent adapter rather than `unreachable`, because an unplugged
+cable is not a dead link.
+
+The rows are repainted on startup, after any switch, and on "Refresh network status" —
+**not** every tick. A refresh costs a `networksetup` subprocess plus two interface
+probes, which is not an every-30-seconds price to pay on the UI thread.
 
 ---
 
@@ -179,7 +271,7 @@ check_resolver_overrides: no /etc/resolver overrides configured
 resolve_against_public_resolver: example.com resolved via public resolver
 ```
 
-The eight steps and what they actually do:
+The nine steps (eight with failover disabled) and what they actually do:
 
 | Step | Kind | Runs | Privilege |
 |---|---|---|---|
@@ -191,6 +283,7 @@ The eight steps and what they actually do:
 | `flush_dns_cache` | **repair** | `dscacheutil` + `killall -HUP` | **partial** |
 | `renew_dhcp_lease` | repair | **nothing — stub** | needs helper |
 | `toggle_network_service` | repair | **nothing — stub** | needs helper |
+| `switch_to_backup_network` | **repair** | `networksetup -ordernetworkservices` | **needs admin — really attempted** |
 
 ### `log_watcher` — what evidence would a report carry?
 
@@ -426,10 +519,98 @@ rate limiter anywhere: the gate already provides it.
 
 ---
 
+### `service_order` + `interface_probe` — failover dry run (read-only)
+
+**Purpose.** Answer the two questions the failover decision rests on, without
+changing anything: does the configured service name exist, and does the backup
+interface actually carry traffic right now?
+
+**When to use it.** Before turning `failover_enabled` on, and any time a switch did
+not happen and you want to know which brake held.
+
+```bash
+python3 -c "
+from netdnsmonitor.failover import default_run
+from netdnsmonitor.service_order import parse_service_order, promote
+from netdnsmonitor.interface_probe import make_interface_prober
+
+services = parse_service_order(default_run(['networksetup','-listnetworkserviceorder']).stdout)
+for s in services:
+    print(f'{s.name!r:32} device={s.device} enabled={s.enabled}')
+
+probe = make_interface_prober([('1.1.1.1',443),('8.8.8.8',443)], timeout=2.0)
+for s in services:
+    print(f'{s.name!r:32} reachable={probe(s.device)}')
+
+print('order after a failover to Wi-Fi:', promote(services, 'Wi-Fi'))
+"
+```
+
+`reachable=None` means **not probed** — the interface is absent (an unplugged USB
+adapter disappears entirely). That is not the same as `False`, and the policy will not
+switch onto, or back to, an interface it could not ask.
+
+### Failover live check — **this one mutates system network config**
+
+Everything above is read-only. This is not. The offline suite covers the parser, the
+policy, the brakes and the persistence, and `IP_BOUND_IF` probing was confirmed by
+hand — but the privileged `networksetup -ordernetworkservices` write has **not** been
+executed against a real machine. Until someone runs this, treat "the switch works" as
+unverified.
+
+**The intended way is the button**, not the shell. Set both service names, leave
+`failover_enabled: false` (manual-only mode), start the app, and click
+**Switch to backup now**. That runs the same guarded path the automatic switch does —
+permutation guard, then read-back verification — and the notification tells you exactly
+which of the outcomes below you got. Click **Switch back to preferred now** to undo.
+
+Do it when the wired adapters have **no link** (unplugged) for a first try: with only
+Wi-Fi active, reordering changes the stored order but not the active route, so the
+blast radius is close to zero.
+
+The by-hand equivalent, if you want to watch it without the app:
+
+```bash
+# 1. Record the current order. Keep this output -- it is your undo.
+networksetup -listnetworkserviceorder
+
+# 2. Apply the failover order by hand. Every service name must be present,
+#    including the disabled (*) ones, quoted exactly.
+networksetup -ordernetworkservices "Wi-Fi" "AX88179B" "USB 10/100/1000 LAN" \
+  "USB 10/100/1G/2.5G LAN" "M3100" "Thunderbolt Bridge" "iPhone USB"
+
+# 3. Confirm it landed. networksetup can exit 0 and do nothing, which is why
+#    the app reads the order back rather than trusting the exit code.
+networksetup -listnetworkserviceorder
+
+# 4. Restore your original order from step 1.
+```
+
+What each outcome means. On the machine this was written for the first row is the
+likely one: `scselect -n <current-set>` — a deferred no-op selecting the location that
+was already active — wrote to root-owned
+`/Library/Preferences/SystemConfiguration/preferences.plist` (mtime moved, exit 0) from
+a non-root admin account with no password prompt. That is the same
+`system.services.systemconfiguration.network` authorization `networksetup` needs, so
+the right is satisfiable here without prompting. It is a strong prior, not proof:
+`scselect` and `networksetup` are different binaries, and `-n` defers the apply.
+
+| Result | Meaning |
+|---|---|
+| order changed, no prompt | the app's switch will work silently — the intended case |
+| a password prompt appeared | it works, but not unattended; the tick will block |
+| `You must be running as root` | the app reports `NEEDS_PRIVILEGE` and changes nothing |
+| exit 0, order unchanged | the app reports `failed: ... order is unchanged` |
+
+**Do not** run step 2 with a service name omitted. `-ordernetworkservices` rewrites the
+order to exactly the list it is given; a missing name removes that service. The app
+guards this with `is_order_intact`, which refuses any list that is not a permutation of
+the current one — by hand, you are the guard.
+
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 129 passed
+python3 -m pytest -q            # 347 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -439,16 +620,23 @@ the whole suite. Current distribution:
 
 | Tests | File |
 |---|---|
-| 25 | `test_domain_learner.py` |
+| 63 | `test_failover.py` |
+| 45 | `test_cli_console.py` |
+| 30 | `test_app_failover_wiring.py` |
+| 25 | `test_domain_learner.py` · `test_failover_policy.py` |
+| 20 | `test_throughput.py` |
+| 17 | `test_service_order.py` |
 | 16 | `test_notifications.py` |
+| 12 | `test_status.py` |
 | 11 | `test_app_notification_wiring.py` · `test_repair_executor.py` |
+| 10 | `test_interface_probe.py` |
 | 7 | `test_escalation.py` · `test_prober.py` |
 | 6 | `test_flap_gate.py` · `test_state_machine.py` |
 | 5 | `test_anthropic_escalator.py` · `test_classifier.py` · `test_config.py` · `test_ladder.py` · `test_report.py` |
-| 4 | `test_dns_query.py` · `test_log_watcher.py` · `test_status.py` |
+| 4 | `test_dns_query.py` · `test_log_watcher.py` |
 | 2 | `test_report_storage.py` |
 | 1 | `test_app_status_wiring.py` |
-| **129** | **total** |
+| **347** | **total** |
 
 **What the suite does not cover.** `default_resolve` and `default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

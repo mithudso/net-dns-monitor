@@ -192,6 +192,50 @@ DEFAULT_CONFIG = {
     "smtp_username": None,
     "smtp_starttls": True,
     "notify_timeout_seconds": 5,
+    # --- automatic network failover -------------------------------------
+    # Off by default, and deliberately so: this is the only feature that
+    # rewrites system network configuration, and it cannot guess which of the
+    # machine's services is the wired link the user actually prefers. Both
+    # service names must be given verbatim as they appear in
+    # `networksetup -listnetworkserviceorder`; a name that does not match is
+    # reported as a failure with the available list, never fuzzy-matched.
+    "failover_enabled": False,
+    "failover_preferred_service": None,
+    # One backup, or an ordered list of them. With several, every one that is
+    # independently confirmed reachable gets benchmarked and the fastest wins
+    # outright -- the list order only breaks ties.
+    "failover_backup_service": None,
+    "failover_backup_services": [],
+    # Throughput measurement. Set the host to "" to turn it off, in which case
+    # ranking falls back to reachability and configured order rather than
+    # inventing numbers. The default endpoint serves an exact byte count over
+    # plain HTTPS with no account or redirect, which is what makes it usable
+    # from an interface-bound socket.
+    "failover_speedtest_host": "speed.cloudflare.com",
+    "failover_speedtest_path": "/__down?bytes=2000000",
+    "failover_speedtest_port": 443,
+    "failover_speedtest_timeout_seconds": 5.0,
+    "failover_speedtest_max_bytes": 2000000,
+    # Which incident classifications may move the link. Network-only: a DNS
+    # fault is usually local, and changing the physical path will not fix it.
+    "failover_trigger_classifications": ["network"],
+    # Asymmetric on purpose. Failover happens on the first qualifying incident
+    # (already debounced by failure_threshold); failback waits for the
+    # preferred link to prove itself over several consecutive checks, so a
+    # flapping link cannot drag the machine back and forth.
+    "failover_failback_threshold": 3,
+    "failover_cooldown_seconds": 300,
+    # A hard ceiling on churn. Once spent, the machine stays wherever it is
+    # until the rolling hour frees a slot -- including, if the budget ran out
+    # mid-outage, on a preferred link that is still down. That is the cost of
+    # bounding oscillation; raise the ceiling if you would rather have the
+    # switching. 0 disables AUTOMATIC switching; the menu bar buttons and
+    # `netdns failover backup` still work, because a person clicking a button
+    # has supplied the judgement the brakes stand in for.
+    "failover_max_switches_per_hour": 4,
+    "failover_state_path": (
+        "~/Library/Application Support/net-dns-monitor/failover.json"
+    ),
 }
 
 
@@ -246,6 +290,7 @@ def load_config(path: str) -> dict:
         # place a new path-valued key gets added, and two would guarantee the
         # next one is added to only one of them.
         "learned_domains_path",
+        "failover_state_path",
     ):
         config[path_key] = os.path.expanduser(config[path_key])
 
