@@ -36,6 +36,8 @@ DEFAULT_CONFIG = {
     ),
     "max_learned_domains": 20,
     "domain_learn_interval_seconds": 300,
+    # Automatically open console window below log viewer on right-hand side on startup.
+    "auto_open_console": True,
     # Notifications. Secrets are NOT here: the Slack webhook URL comes from
     # SLACK_WEBHOOK_URL and the SMTP password from SMTP_PASSWORD, so a config
     # file that gets shared or synced carries no credential.

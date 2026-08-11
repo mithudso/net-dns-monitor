@@ -179,6 +179,11 @@ class NetDnsMonitorApp(rumps.App):
         self.menu = ["Open last report", "Open console"]
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
+        if self.config.get("auto_open_console", True):
+            try:
+                self.open_console(None)
+            except Exception:  # noqa: BLE001 - never crash startup if GUI is headless or unavailable
+                pass
 
     def tick(self, _sender=None):
         # A raise here lands in the rumps timer callback and kills monitoring
