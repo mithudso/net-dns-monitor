@@ -185,7 +185,10 @@ class RouterWindowController:
         scroll.setAutoresizingMask_(RESIZE_BOTH)
         self.text_view = AppKit.NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 780, y))
         self.text_view.setEditable_(False)
+        self.text_view.setRichText_(False)
         self.text_view.setFont_(NSFont.userFixedPitchFontOfSize_(12))
+        self.text_view.setBackgroundColor_(AppKit.NSColor.blackColor())
+        self.text_view.setTextColor_(AppKit.NSColor.whiteColor())
         scroll.setDocumentView_(self.text_view)
         content.addSubview_(scroll)
 
@@ -201,9 +204,9 @@ class RouterWindowController:
         return title.split("(")[-1].strip(")")
 
     def append_log(self, text):
-        storage = self.text_view.textStorage()
-        storage.appendAttributedString_(NSAttributedString.alloc().initWithString_(text + "\n"))
-        self.text_view.scrollRangeToVisible_(NSMakeRange(storage.length(), 0))
+        current = self.text_view.string() or ""
+        self.text_view.setString_(current + text + "\n")
+        self.text_view.scrollRangeToVisible_(NSMakeRange(len(self.text_view.string()), 0))
 
     def on_save_config(self):
         self.config["wan_interface"] = self._get_device(self.wan_popup)
