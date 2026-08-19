@@ -89,6 +89,8 @@ from netdnsmonitor.resolution_prober import resolve_domains_parallel
 from netdnsmonitor.settings_window import SettingsWindow, collect, restart_note, save_config
 from netdnsmonitor.stall_log import select_stalled_domains
 from netdnsmonitor.state_machine import StateMachine
+from netdnsmonitor.router import Router
+from netdnsmonitor.router_window import RouterWindowController
 from netdnsmonitor.status import (
     STATS_UNKNOWN,
     build_failover_lines,
@@ -592,6 +594,7 @@ class NetDnsMonitorApp(rumps.App):
         # dashboard button the *same* console, sharing one cwd and one history
         # rather than opening two that silently disagree.
         self.console: Optional[ConsoleWindowController] = None
+        self.router_window = None
 
         # Indicator rows carry no callback, which is what greys them out: they
         # are readouts, not actions. Titles are set by _refresh_failover_menu.
@@ -609,6 +612,10 @@ class NetDnsMonitorApp(rumps.App):
             "Open console",
             "Toggle mini window",
             "Open last report",
+            None,
+            rumps.MenuItem("Router"),
+            "Start at Login",
+
             "Test network alert",
             None,
             # Below the everyday items, and behind a separator, because two of
@@ -645,6 +652,24 @@ class NetDnsMonitorApp(rumps.App):
         self.launch_timer = rumps.Timer(self.launch_tick, 1)
         self.launch_timer.start()
         set_dock_icon("healthy")
+
+        agent_path = os.path.expanduser("~/Library/LaunchAgents/com.netdnsmonitor.plist")
+        if os.path.exists(agent_path):
+            self.menu["Start at Login"].state = True
+
+        if self.config.get("router_enabled"):
+            self.router = Router(
+                wan_if=self.config.get("wan_interface", "en3"),
+                lan_if=self.config.get("lan_interface", "en0"),
+                lan_ip=self.config.get("lan_ip", "192.168.10.1"),
+                lan_netmask=self.config.get("lan_netmask", "255.255.255.0"),
+                dhcp_start=self.config.get("dhcp_start", "192.168.10.100"),
+                dhcp_end=self.config.get("dhcp_end", "192.168.10.200")
+            )
+            self.router.start()
+        else:
+            self.router = None
+
 
     # --- launch-time UI setup ----------------------------------------------
 
@@ -2129,6 +2154,70 @@ class NetDnsMonitorApp(rumps.App):
         """
         alert.network_failed(self.config["ping_host"], error="test alert, not a real outage")
 
+
+
+
+    @rumps.clicked("Router", "Management Console")
+    def open_router_window(self, _sender):
+        if self.router_window is None:
+            self.router_window = RouterWindowController(config=self.config, app=self)
+        self.router_window.show()
+
+    @rumps.clicked("Router", "Configure...")
+    def configure_router(self, _sender):
+        import subprocess
+        config_path = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
+        subprocess.run(["open", "-t", config_path], check=False)
+
+    @rumps.clicked("Router", "Start")
+    def start_router(self, _sender):
+        if self.router: self.router.start()
+
+    @rumps.clicked("Router", "Stop")
+    def stop_router(self, _sender):
+        if self.router: self.router.stop()
+
+    @rumps.clicked("Router", "List Interfaces")
+    def list_interfaces(self, _sender):
+        import subprocess
+        output = subprocess.check_output(["networksetup", "-listallhardwareports"], text=True)
+        rumps.alert(title="Network Interfaces", message=output)
+
+    @rumps.clicked("Router", "Troubleshoot")
+    def troubleshoot_router(self, _sender):
+        import subprocess
+        try:
+            pf_out = subprocess.check_output(["sudo", "pfctl", "-s", "nat"], text=True)
+            ip_fwd = subprocess.check_output(["sysctl", "net.inet.ip.forwarding"], text=True)
+            is_bootpd = "bootpd" in subprocess.check_output(["ps", "aux"], text=True)
+            status = f"IP Forwarding: {ip_fwd}\nNAT Rules:\n{pf_out}\nDHCP Server Running: {is_bootpd}"
+            rumps.alert(title="Router Diagnostics", message=status)
+        except Exception as e:
+            rumps.alert(title="Router Diagnostics Error", message=f"Need sudo for full diagnostics.\n{e}")
+
+    @rumps.clicked("Start at Login")
+    def toggle_login(self, sender):
+        import os, plistlib
+        agent_dir = os.path.expanduser("~/Library/LaunchAgents")
+        os.makedirs(agent_dir, exist_ok=True)
+        plist_path = os.path.join(agent_dir, "com.netdnsmonitor.plist")
+        sender.state = not sender.state
+        
+        if sender.state:
+            plist_data = {
+                "Label": "com.netdnsmonitor",
+                "ProgramArguments": [
+                    "/bin/bash", "-c",
+                    "cd /Users/mitch.hudson/dev/net-dns-monitor && /Users/mitch.hudson/dev/net-dns-monitor/.venv/bin/python -m netdnsmonitor.app"
+                ],
+                "RunAtLoad": True,
+                "KeepAlive": False
+            }
+            with open(plist_path, "wb") as f:
+                plistlib.dump(plist_data, f)
+        else:
+            if os.path.exists(plist_path):
+                os.remove(plist_path)
 
 def main():
     NetDnsMonitorApp().run()
