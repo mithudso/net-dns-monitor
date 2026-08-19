@@ -7,7 +7,8 @@ from typing import Optional
 try:
     import objc
     import AppKit
-    from Foundation import NSObject, NSMakeRect, NSBackingStoreBuffered, NSAttributedString, NSMakeRange, NSFont
+    from Foundation import NSObject, NSMakeRect, NSAttributedString, NSMakeRange
+    from AppKit import NSBackingStoreBuffered, NSFont
 except ImportError:
     pass  # Not on macOS or no PyObjC
 
