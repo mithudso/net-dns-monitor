@@ -1745,6 +1745,9 @@ class NetDnsMonitorApp(rumps.App):
         window and all four timers for up to half a minute -- the same reason the
         ping does not run here.
         """
+        if action_id == "open_router_window":
+            self.open_router_window(None)
+            return
         if action_id == "open_console":
             # Straight to the menu bar handler, not a fresh controller: two
             # controllers would be two consoles with two working directories and

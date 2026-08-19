@@ -59,6 +59,7 @@ SECONDARY_ACTIONS = [
     # buttons' worth of attention while saying nothing true about this one. The
     # label carries what the reader actually needs -- that it is a real shell.
     ("Open console (arbitrary shell)", "open_console", "check"),
+    ("Open router console", "open_router_window", "check"),
     ("Open settings", "open_settings", "check"),
     ("Collapse to floating mini window", "toggle_mini", "check"),
     ("Open last incident report", "open_last_report", "check"),
