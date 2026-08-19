@@ -31,6 +31,7 @@ from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.state_machine import StateMachine
 from netdnsmonitor.status import build_status_report, build_title
+from netdnsmonitor.router import Router
 
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
 
@@ -176,14 +177,37 @@ class NetDnsMonitorApp(rumps.App):
         # Built on first open, then kept: the controller owns the NSWindow, and
         # a controller that went out of scope would take the window with it.
         self.console = None
-        self.menu = ["Open last report", "Open console"]
+        self.menu = [
+            "Open last report", 
+            "Open console", 
+            rumps.MenuItem("Router"),
+            "Start at Login"
+        ]
+
+        agent_path = os.path.expanduser("~/Library/LaunchAgents/com.netdnsmonitor.plist")
+        if os.path.exists(agent_path):
+            self.menu["Start at Login"].state = True
+
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
         if self.config.get("auto_open_console", True):
             try:
                 self.open_console(None)
-            except Exception:  # noqa: BLE001 - never crash startup if GUI is headless or unavailable
+            except Exception:
                 pass
+
+        if self.config.get("router_enabled"):
+            self.router = Router(
+                wan_if=self.config.get("wan_interface", "en3"),
+                lan_if=self.config.get("lan_interface", "en0"),
+                lan_ip=self.config.get("lan_ip", "192.168.10.1"),
+                lan_netmask=self.config.get("lan_netmask", "255.255.255.0"),
+                dhcp_start=self.config.get("dhcp_start", "192.168.10.100"),
+                dhcp_end=self.config.get("dhcp_end", "192.168.10.200")
+            )
+            self.router.start()
+        else:
+            self.router = None
 
     def tick(self, _sender=None):
         # A raise here lands in the rumps timer callback and kills monitoring
@@ -248,6 +272,64 @@ class NetDnsMonitorApp(rumps.App):
         else:
             rumps.notification("Net/DNS Monitor", "", "No report has been generated yet.")
 
+
+
+
+    @rumps.clicked("Router", "Configure...")
+    def configure_router(self, _sender):
+        import subprocess
+        config_path = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
+        subprocess.run(["open", "-t", config_path], check=False)
+
+    @rumps.clicked("Router", "Start")
+    def start_router(self, _sender):
+        if self.router: self.router.start()
+
+    @rumps.clicked("Router", "Stop")
+    def stop_router(self, _sender):
+        if self.router: self.router.stop()
+
+    @rumps.clicked("Router", "List Interfaces")
+    def list_interfaces(self, _sender):
+        import subprocess
+        output = subprocess.check_output(["networksetup", "-listallhardwareports"], text=True)
+        rumps.alert(title="Network Interfaces", message=output)
+
+    @rumps.clicked("Router", "Troubleshoot")
+    def troubleshoot_router(self, _sender):
+        import subprocess
+        try:
+            pf_out = subprocess.check_output(["sudo", "pfctl", "-s", "nat"], text=True)
+            ip_fwd = subprocess.check_output(["sysctl", "net.inet.ip.forwarding"], text=True)
+            is_bootpd = "bootpd" in subprocess.check_output(["ps", "aux"], text=True)
+            status = f"IP Forwarding: {ip_fwd}\nNAT Rules:\n{pf_out}\nDHCP Server Running: {is_bootpd}"
+            rumps.alert(title="Router Diagnostics", message=status)
+        except Exception as e:
+            rumps.alert(title="Router Diagnostics Error", message=f"Need sudo for full diagnostics.\n{e}")
+
+    @rumps.clicked("Start at Login")
+    def toggle_login(self, sender):
+        import os, plistlib
+        agent_dir = os.path.expanduser("~/Library/LaunchAgents")
+        os.makedirs(agent_dir, exist_ok=True)
+        plist_path = os.path.join(agent_dir, "com.netdnsmonitor.plist")
+        sender.state = not sender.state
+        
+        if sender.state:
+            plist_data = {
+                "Label": "com.netdnsmonitor",
+                "ProgramArguments": [
+                    "/bin/bash", "-c",
+                    "cd /Users/mitch.hudson/dev/net-dns-monitor && /Users/mitch.hudson/dev/net-dns-monitor/.venv/bin/python -m netdnsmonitor.app"
+                ],
+                "RunAtLoad": True,
+                "KeepAlive": False
+            }
+            with open(plist_path, "wb") as f:
+                plistlib.dump(plist_data, f)
+        else:
+            if os.path.exists(plist_path):
+                os.remove(plist_path)
 
 def main():
     NetDnsMonitorApp().run()
