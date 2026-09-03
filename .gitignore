@@ -16,3 +16,5 @@ config.yaml.bak-*
 build/
 dist/
 net-dns-monitor.log
+.chroma_db/
+*.old
