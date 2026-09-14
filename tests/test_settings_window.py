@@ -193,6 +193,29 @@ def test_no_domain_and_no_control_domain_is_refused():
     assert collect({"domains": "", "control_domain": "b.example"})["domains"] == []
 
 
+def test_a_blank_ping_host_is_refused():
+    """`ping ""` exits 68, so a cleared field would make every heartbeat a lost
+    ping and fire the network-failed alert on a healthy network.
+    """
+    with pytest.raises(ValueError, match="Host to ping"):
+        collect({"ping_host": ""})
+    with pytest.raises(ValueError, match="Host to ping"):
+        collect({"ping_host": "   "})
+
+
+@pytest.mark.parametrize("text", ["0", "-1"])
+def test_zero_parallel_lookups_is_refused(text):
+    """ThreadPoolExecutor(max_workers=0) raises, so every resolution batch fails."""
+    with pytest.raises(ValueError, match="Parallel lookups"):
+        collect({"resolution_max_workers": text})
+
+
+def test_a_cleared_path_field_is_refused():
+    """A blank path expands to "", and every write to it fails."""
+    with pytest.raises(ValueError, match="Incident reports"):
+        collect({"reports_dir": ""})
+
+
 def test_a_router_address_is_refused_when_it_is_not_an_address():
     """router.py writes these into a shell script run with administrator rights."""
     with pytest.raises(ValueError, match="LAN address"):

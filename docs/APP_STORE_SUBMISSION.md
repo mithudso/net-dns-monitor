@@ -64,6 +64,7 @@ notarization (§10). Both can coexist.
 **Not verified here:**
 - **Release mode was never run.** This Mac has no Apple Distribution or Mac Installer Distribution certificate, so release signing, provisioning-profile embedding and `productbuild` signing have not been run. Ad-hoc mode was run end to end.
 - **The GUI app itself was not launched sandboxed.** Launching it cannot be automated (see CLAUDE.md). Only the probe executable was run.
+- **Pasting into the credentials dialog needs a manual check.** The app now installs a standard Edit menu, so ⌘V should paste into Credentials → Set Anthropic API key…. No automated test can send a real keystroke. Try it once in the ad-hoc build before submitting.
 
 ## 3. One-time Apple setup
 
@@ -214,6 +215,19 @@ The build then appears under the app's TestFlight tab. Mac TestFlight
 installs it through the TestFlight app, which is the closest you can get to
 the real store environment before review.
 
+### 5.1 Menus in each build
+
+Measured from the menu model after rumps registers its handlers. rumps adds "Quit" last in both builds, and three failover status rows sit at the top.
+
+| Build | Top-level menu |
+|---|---|
+| Store | Open dashboard · Toggle mini window · Open last report · — · Test network alert · Credentials ▸ · Allow Claude diagnosis… · Withdraw Claude permission · Privacy Policy · — · Refresh network status |
+| Direct | Open dashboard · Open console · Toggle mini window · Open last report · — · Router ▸ · Start at Login · Test network alert · Credentials ▸ · — · Switch to backup now · Switch back to preferred now · Refresh network status |
+
+Credentials ▸ (both builds): Set Anthropic API key… · Set Slack webhook URL… · Set SMTP password… · — · Remove saved credentials.
+
+Use these titles for screenshots and in the review notes below.
+
 ## 6. App Store Connect metadata
 
 ### 6.1 App Information
@@ -327,7 +341,7 @@ each upload.
 | Sign-in required | No |
 | Contact | your name, phone, email |
 
-**Notes** (1,572 of 4,000 bytes):
+**Notes** (1,796 of 4,000 bytes):
 
 ```
 Net-DNS-Monitor is a menu bar and Dock utility that monitors network and DNS connectivity. No account is needed.
@@ -335,8 +349,9 @@ Net-DNS-Monitor is a menu bar and Dock utility that monitors network and DNS con
 How to review:
 1. Launch the app. A status item appears in the menu bar and the Dock tile shows the current round-trip time.
 2. Choose "Open dashboard" to see live checks, graphs and the network service order (read-only).
-3. "Run full diagnosis" runs the read-only troubleshooting checks and shows their results.
+3. In the dashboard, "Run full diagnosis" runs the troubleshooting checks. Steps that would need root or network-configuration rights say they are not available in this edition.
 4. "Test network alert" shows the alert that normally appears when connectivity is lost.
+5. "Allow Claude diagnosis…" shows exactly what would be sent to Anthropic and asks for permission. "Privacy Policy" opens the policy.
 
 Sandbox and entitlements:
 - com.apple.security.network.client: reachability checks, DNS lookups, HTTPS to the Anthropic API and Slack, SMTP.

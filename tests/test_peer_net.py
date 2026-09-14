@@ -7,8 +7,7 @@ ports so they can coexist on one host.
 
 Each instance binds port 0 and the kernel assigns the port, which is then read
 back from the socket. Probing for a free port, closing it, and binding it again
-later raced with a parallel test run; with SO_REUSEPORT set, two tests handed the
-same port would both bind it and hear each other's traffic.
+later raced with a parallel test run, which handed two tests the same port.
 """
 
 import errno
@@ -430,6 +429,36 @@ def test_binding_port_zero_reads_the_assigned_port_back(pair):
     a, b = pair
     assert a.bind_port > 0 and b.bind_port > 0
     assert a.bind_port != b.bind_port
+
+
+def test_a_second_copy_on_the_same_port_runs_with_discovery_off():
+    """With SO_REUSEPORT the second copy bound the port too, but macOS hands
+    each unicast datagram to one socket only, so the second copy never heard its
+    pongs. Every peer then looked silent, and fault localization blamed this
+    machine's own link. The second bind must fail instead.
+    """
+    first = PeerNetwork(
+        registry=PeerRegistry(self_id="installed-app"),
+        host="mac",
+        bind_port=0,
+        broadcast_fn=lambda: ["127.0.0.1"],
+    )
+    assert first.start(), first.start_error
+    try:
+        second = PeerNetwork(
+            registry=PeerRegistry(self_id="dev-run"),
+            host="mac",
+            bind_port=first.bind_port,
+            broadcast_fn=lambda: ["127.0.0.1"],
+        )
+        assert second.start() is False
+        assert second.start_error
+        assert second.started is False
+        assert second.alive() is False
+        assert second.socket is None
+        assert first.alive()
+    finally:
+        first.stop()
 
 
 # --- oversized datagrams ---------------------------------------------------

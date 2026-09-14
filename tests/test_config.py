@@ -431,6 +431,65 @@ def test_a_refused_value_is_a_value_error_that_names_its_key(tmp_path):
     assert caught.value.key == "smtp_port"
 
 
+@pytest.mark.parametrize("key", config_module.PATH_KEYS)
+@pytest.mark.parametrize("value", ["null", "''", "5"])
+def test_a_path_key_that_is_not_a_path_is_refused_naming_the_key(tmp_path, key, value):
+    """`reports_dir:` with nothing after it loads as None, and expanduser(None)
+    raised TypeError. main() did not catch that, so the app never appeared and
+    nothing said which key was at fault.
+    """
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write(tmp_path, f"{key}: {value}\n"))
+    assert caught.value.key == key
+    assert key in str(caught.value)
+
+
+@pytest.mark.parametrize("key", config_module.NUMBER_KEYS)
+@pytest.mark.parametrize("value", ["null", '"300"', "true", ".nan"])
+def test_a_numeric_key_that_is_not_a_number_is_refused_naming_the_key(tmp_path, key, value):
+    """`domain_learn_interval_seconds: null` raised TypeError from float(None)
+    inside load_config; a quoted threshold compares an int with a str on every
+    tick instead.
+    """
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write(tmp_path, f"{key}: {value}\n"))
+    assert caught.value.key == key
+
+
+def test_every_numeric_default_is_type_checked_at_load():
+    numeric = {
+        key
+        for key, value in DEFAULT_CONFIG.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    checked = (
+        set(config_module.POSITIVE_KEYS)
+        | set(config_module.PORT_KEYS)
+        | set(config_module.NUMBER_KEYS)
+    )
+    assert numeric == checked
+
+
+@pytest.mark.parametrize("value", ["''", "'   '", "null", "8"])
+def test_a_blank_ping_host_is_refused(tmp_path, value):
+    """`ping ""` cannot resolve the host and exits 68, so every heartbeat reads
+    as a lost ping and the network-failed alert fires on a healthy network.
+    """
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write(tmp_path, f"ping_host: {value}\n"))
+    assert caught.value.key == "ping_host"
+
+
+@pytest.mark.parametrize("value", ["0", "-2"])
+def test_zero_parallel_lookups_is_refused(tmp_path, value):
+    """ThreadPoolExecutor(max_workers=0) raises ValueError, so every resolution
+    batch would fail.
+    """
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write(tmp_path, f"resolution_max_workers: {value}\n"))
+    assert caught.value.key == "resolution_max_workers"
+
+
 # --- the in-app router --------------------------------------------------------
 
 

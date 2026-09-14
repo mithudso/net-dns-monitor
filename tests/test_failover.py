@@ -5,6 +5,8 @@ actually rewrites, so the read-back verification is exercised for real.
 
 import json
 import os
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -752,6 +754,98 @@ def test_an_enable_that_silently_does_nothing_is_not_claimed(store):
     assert outcome.startswith("failed:")
     assert "still disabled" in outcome
     assert runner.applied_orders == []
+
+
+# --- probe deadline ----------------------------------------------------------
+#
+# Every probe here runs on the rumps timer thread during the outage being
+# diagnosed. One after another, each backup adds a full probe timeout -- the
+# additive stall non-negotiable 7 forbids.
+
+THREE_BACKUPS = dict(backup_service=None, backup_services=["Wi-Fi", "iPhone USB", "M3100"])
+PROBE_DELAY = 0.25
+
+
+def sleeping_prober(dev):
+    time.sleep(PROBE_DELAY)
+    return True
+
+
+def test_candidate_probes_share_one_deadline(store):
+    failover = build(
+        store, FakeRunner(), prober=sleeping_prober, probe_timeout=2.0, **THREE_BACKUPS
+    )
+    services = failover._list_services()
+
+    started = time.monotonic()
+    candidates = failover.evaluate_candidates(services, measure=False)
+    elapsed = time.monotonic() - started
+
+    assert [c.reachable for c in candidates] == [True, True, True]
+    # Serially this is 3 probes; together it is about one.
+    assert elapsed < 2 * PROBE_DELAY
+
+
+def test_the_failover_step_does_not_add_a_probe_per_backup(store):
+    """The preferred link is probed first, then every backup at once: two probe
+    rounds whatever the number of backups, where serially it was four.
+    """
+    failover = build(
+        store, FakeRunner(), prober=sleeping_prober, probe_timeout=2.0, **THREE_BACKUPS
+    )
+
+    started = time.monotonic()
+    failover.attempt_failover("network")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 3 * PROBE_DELAY
+
+
+def test_snapshot_probes_every_side_under_one_deadline(store):
+    failover = build(
+        store, FakeRunner(), prober=sleeping_prober, probe_timeout=2.0, **THREE_BACKUPS
+    )
+
+    started = time.monotonic()
+    snap = failover.snapshot()
+    elapsed = time.monotonic() - started
+
+    assert snap["preferred"]["reachable"] is True
+    assert [b["reachable"] for b in snap["backups"]] == [True, True, True]
+    assert elapsed < 2 * PROBE_DELAY
+
+
+def test_a_probe_that_misses_the_deadline_reads_as_not_probed(store):
+    """No answer by the deadline is no reading. False would tell the policy and
+    the menu bar the link is dead when nothing was learned about it.
+    """
+    release = threading.Event()
+
+    def prober(dev):
+        if dev == "en0":  # Wi-Fi hangs past the deadline
+            release.wait(5)
+            return True
+        return False
+
+    failover = build(store, FakeRunner(), prober=prober, probe_timeout=0.05, **THREE_BACKUPS)
+    try:
+        started = time.monotonic()
+        candidates = failover.evaluate_candidates(failover._list_services(), measure=False)
+        snap = failover.snapshot()
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    reach = {c.name: c.reachable for c in candidates}
+    assert reach == {"Wi-Fi": None, "iPhone USB": False, "M3100": False}
+    assert {b["name"]: b["reachable"] for b in snap["backups"]} == reach
+    assert snap["preferred"]["reachable"] is False
+    # Two rounds, each cut off at the deadline rather than waiting out the hang.
+    assert elapsed < 3.0
+
+
+def test_the_probe_deadline_defaults_to_five_seconds(store):
+    assert build(store, FakeRunner()).probe_timeout == 5.0
 
 
 # --- snapshot (what the menu bar shows) -------------------------------------

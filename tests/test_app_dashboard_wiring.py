@@ -321,6 +321,39 @@ def test_full_diagnosis_tells_the_executor_what_it_is_responding_to(tmp_path):
     assert "for None" not in text
 
 
+def _diagnose(tmp_path, probe):
+    app = make_app(tmp_path)
+    app.state_machine.prober = lambda: probe
+    output = []
+    app._append_output = output.append
+    app.handle_dashboard_action("full_diagnosis")
+    app._action_thread.join(timeout=5)
+    app.ui_tick()
+    return "".join(output)
+
+
+def test_an_unclassified_diagnosis_names_what_was_not_probed(tmp_path):
+    """None means not probed. Saying "nothing is broken" for it tells someone
+    with an empty external_targets that the network was checked and is fine.
+    """
+    text = _diagnose(tmp_path, {"external_reachable": None, "dns_ok": True})
+    assert "classified as: unclassified" in text
+    assert "external_reachable was not probed (external_targets is empty)" in text
+    assert "nothing is broken" not in text
+    assert "dns_ok was not probed" not in text
+
+    text = _diagnose(tmp_path / "dns", {"external_reachable": True, "dns_ok": None})
+    assert "dns_ok was not probed (no domain to resolve)" in text
+    assert "external_reachable was not probed" not in text
+
+
+def test_a_healthy_diagnosis_says_nothing_is_broken(tmp_path):
+    text = _diagnose(tmp_path, {"external_reachable": True, "dns_ok": True})
+    assert "classified as: healthy" in text
+    assert "nothing is broken" in text
+    assert "not probed" not in text
+
+
 def test_the_dashboards_open_last_report_goes_through_the_url_opener(tmp_path, monkeypatch):
     """`webbrowser` pipes an AppleScript into osascript, which the store build
     may not send, and it ran on the run loop with its result ignored.

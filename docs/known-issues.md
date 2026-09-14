@@ -224,3 +224,40 @@ Earlier revisions of this file listed these. They no longer apply.
   The first runs under the grant; the second returns `NOT_AUTOMATED`.
 - `mini_window.py` was listed as having no test coverage. Commit `02c40dd` added
   `tests/test_mini_window.py`, which covers `mini_text`.
+
+## Found by the repo dossier
+
+The repo dossier (`crawl-repo-to-llms`, generated at `22b52bf`) flagged these.
+Each was re-checked against the code on 2026-09-14.
+
+- **`unbound/pf_unbound.conf` is applied by nothing, and it contradicts
+  `unbound/unbound.conf`.** The file holds two `rdr pass` rules that send UDP
+  and TCP port 53 on `192.168.4.1` to port 53535. No script, doc or test
+  references it: `git grep pf_unbound` finds only the file itself.
+  `unbound/unbound.conf` listens on `interface: 192.168.4.1`, `port: 53`, and
+  nothing listens on 53535. If someone loaded these rules, every DNS query from
+  a `router/` stack client would go to a closed port. `unbound/install.sh`
+  flushes the anchor `com.apple/unbound_dns` and loads nothing into it. Whether
+  to delete or fix the file belongs to the router-stack owner decision above.
+- **Two LaunchAgents can start the app at login.** The menu's Start at Login
+  item writes `~/Library/LaunchAgents/com.netdnsmonitor.plist`
+  (`app.LOGIN_AGENT_LABEL`, `RunAtLoad` true). `net-dns-monitor-service install`
+  writes `com.mitchhudson.net-dns-monitor.plist` (`app.SERVICE_AGENT_LABEL`).
+  The app recognises both: `login_item_installed` shows the item as on when
+  either file exists, and `toggle_login` does not add its own agent while the
+  service agent exists. The service script does not know the other label. If
+  Start at Login was turned on first and the service is installed afterwards,
+  both agents exist and launchd starts two copies at login. The app has no
+  single-instance guard. `net-dns-monitor-service status` warns about copies it
+  finds with `pgrep -x Net-DNS-Monitor`. UNVERIFIED: whether that matches a
+  source-run copy started by the `com.netdnsmonitor` agent.
+- **`netdns failover backup|preferred` and `netdns priority --promote` rewrite
+  the service order without `--yes`.** `cli.cmd_run` refuses a catalogue
+  command marked `mutates` unless `--yes` is given. `cli.cmd_failover` calls
+  `NetworkFailover.switch_now`, and `cli.cmd_priority` calls `promote_service`,
+  with no confirmation; `build_parser` gives neither subcommand a `--yes`
+  option. The `netdns console` REPL asks for `yes` before `promote`, `switch`
+  and `preferred`. The write is still guarded by `service_order.is_order_intact`
+  and the read-back. Whether one-shot switches should require `--yes` waits for
+  the owner; `docs/runbooks/manual-failover.md` documents the commands as they
+  are.

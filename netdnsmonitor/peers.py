@@ -268,13 +268,31 @@ class PeerRegistry:
         A peer with no readable `last_seen`, or one dated in the future (a
         hand-edited record, or a clock stepped back), is left out too. Its age is
         unknown, and an unknown must become neither "answered" nor "silent".
+
+        One entry per address, the most recently heard-from id. The id is
+        regenerated per launch, so a peer whose app restarted inside the window
+        leaves its old id behind at the same address. Counted separately, that
+        one machine was two silent peers and got past localize.py's
+        single-silent-peer cap. The age filter runs first, so an entry outside
+        the window cannot claim an address. Entries with no address are all kept:
+        there is nothing to match them on.
         """
         cutoff = max(self.current_seconds, fresh_seconds)
-        view = []
+        in_window = []
         for peer in self._snapshot():
             age = self.age_seconds(peer)
             if age is None or age < 0 or age > cutoff:
                 continue
+            in_window.append((age, peer))
+        in_window.sort(key=lambda item: item[0])
+        seen_addresses = set()
+        view = []
+        for age, peer in in_window:
+            address = peer.get("address")
+            if address:
+                if address in seen_addresses:
+                    continue
+                seen_addresses.add(address)
             view.append(
                 {
                     "id": peer.get("id"),

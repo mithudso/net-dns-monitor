@@ -99,7 +99,7 @@ Mitigations in the code:
 | Tampering | The staged file is swapped between `visudo -cf` and `mv`. | Staging inside root-only `/etc/sudoers.d`. | None known. |
 | Repudiation | Root commands run with no record. | sudo logs every use. | None known. |
 | Denial of service | An invalid file breaks sudo for every user. | `visudo -cf` before the rename. | None known. |
-| Elevation of privilege | Any process running as the user runs the granted commands as root with no prompt. | Exact command lines only. | Accepted by design. The worst effect is a restarted DNS responder or a renewed DHCP lease, which interrupts this Mac's network briefly. |
+| Elevation of privilege | Any process running as the user runs the granted commands as root with no prompt. | Exact command lines only. | Accepted by design. The worst effect is a restarted DNS responder or a renewed DHCP lease. The app itself renews only an interface that holds a DHCP lease, but another process using the grant skips that check: `ipconfig set <if> DHCP` replaces a hand-set IPv4 setup, and with no DHCP server the interface stays without IPv4 until the next network configuration change. |
 
 ### 2. Router administrator script (`router.py`)
 

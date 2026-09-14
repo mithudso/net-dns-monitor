@@ -79,7 +79,14 @@ else
 fi
 
 # 4. Unbound Backend (192.168.4.1:53)
-if unbound-checkconf "$PREFIX/etc/unbound/unbound.conf" >/dev/null 2>&1; then
+# A nonzero checker exit is not by itself a syntax error: exit 127 means the
+# checker is not installed (or not on PATH, for example under sudo), and a missing
+# config file fails too. Both are ruled out first so neither reads as bad syntax.
+if ! command -v unbound-checkconf >/dev/null 2>&1; then
+    warn "unbound-checkconf not installed or not on PATH: Unbound config not checked"
+elif [ ! -f "$PREFIX/etc/unbound/unbound.conf" ]; then
+    fail "Unbound config not found at $PREFIX/etc/unbound/unbound.conf"
+elif unbound-checkconf "$PREFIX/etc/unbound/unbound.conf" >/dev/null 2>&1; then
     pass "Unbound configuration syntax is VALID"
 else
     fail "Unbound configuration has SYNTAX ERRORS"
@@ -95,7 +102,12 @@ else
 fi
 
 # 5. Dnsmasq DHCP (192.168.4.1:67)
-if dnsmasq --test -C "$PREFIX/etc/dnsmasq.conf" >/dev/null 2>&1; then
+# Same split as the Unbound check above.
+if ! command -v dnsmasq >/dev/null 2>&1; then
+    warn "dnsmasq not installed or not on PATH: Dnsmasq config not checked"
+elif [ ! -f "$PREFIX/etc/dnsmasq.conf" ]; then
+    fail "Dnsmasq config not found at $PREFIX/etc/dnsmasq.conf"
+elif dnsmasq --test -C "$PREFIX/etc/dnsmasq.conf" >/dev/null 2>&1; then
     pass "Dnsmasq configuration syntax is VALID"
 else
     fail "Dnsmasq configuration has SYNTAX ERRORS"

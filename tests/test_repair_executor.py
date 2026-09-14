@@ -84,6 +84,44 @@ def granted_executor(run_fn, interface="en0"):
     )
 
 
+# Trimmed from a real `ipconfig getpacket en0` on a DHCP-configured interface.
+LEASE_PACKET = """op = BOOTREPLY
+htype = 1
+yiaddr = 192.0.2.10
+options:
+Options count is 4
+dhcp_message_type (uint8): ACK 0x5
+lease_time (uint32): 0x15180
+router (ip_mult): {192.0.2.1}
+end (none):
+"""
+
+
+def getpacket_argv(interface):
+    return ["/usr/sbin/ipconfig", "getpacket", interface]
+
+
+def renewal_run_factory(
+    packet=LEASE_PACKET,
+    getpacket_returncode=0,
+    getpacket_stderr="",
+    set_returncode=0,
+    set_stderr="",
+):
+    """`ipconfig getpacket` answers with `packet`; everything else with the set result."""
+    calls = []
+
+    def run_fn(args, **kwargs):
+        calls.append(args)
+        if args[1:2] == ["getpacket"]:
+            return SimpleNamespace(
+                returncode=getpacket_returncode, stdout=packet, stderr=getpacket_stderr
+            )
+        return SimpleNamespace(returncode=set_returncode, stdout="", stderr=set_stderr)
+
+    return run_fn, calls
+
+
 def test_the_ungranted_stub_says_how_to_grant_it():
     """Otherwise the outcome is a dead end: it names a missing capability and no
     way to acquire it, which is what this whole feature was about.
@@ -142,7 +180,7 @@ def test_a_granted_rule_that_still_fails_is_reported_differently_from_no_grant()
 
 
 def test_renewing_a_lease_targets_the_default_route_interface():
-    run_fn, calls = fake_run_factory(returncode=0)
+    run_fn, calls = renewal_run_factory()
     outcome = granted_executor(run_fn, interface="en9")(
         LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
     )
@@ -190,7 +228,7 @@ def test_renewal_is_refused_when_the_grant_does_not_cover_this_interface():
 
 
 def test_renewal_runs_when_the_grant_covers_this_interface():
-    run_fn, calls = fake_run_factory(returncode=0)
+    run_fn, calls = renewal_run_factory()
     executor = make_repair_executor(
         run_fn=run_fn,
         # The mDNSResponder rule is irrelevant to a DHCP renewal once the
@@ -201,16 +239,89 @@ def test_renewal_runs_when_the_grant_covers_this_interface():
     )
     outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
     assert outcome.startswith("ok")
-    assert calls == [["/usr/bin/sudo", "-n", "/usr/sbin/ipconfig", "set", "en7", "DHCP"]]
+    # The method check is the unprivileged read, and it comes first.
+    assert calls == [
+        getpacket_argv("en7"),
+        ["/usr/bin/sudo", "-n", "/usr/sbin/ipconfig", "set", "en7", "DHCP"],
+    ]
 
 
 def test_a_failed_renewal_reports_the_command_and_the_error():
-    run_fn, _calls = fake_run_factory(returncode=1, stderr="no such interface")
+    run_fn, _calls = renewal_run_factory(set_returncode=1, set_stderr="no such interface")
     outcome = granted_executor(run_fn)(
         LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
     )
     assert outcome.startswith("failed")
     assert "no such interface" in outcome
+
+
+def is_set_call(args):
+    return "set" in args
+
+
+def test_renew_refuses_an_interface_not_using_dhcp():
+    """`ipconfig set <if> DHCP` de-configures the interface's existing IPv4
+    service first. On a hand-configured interface that replaces the static
+    address with DHCP, and on a network with no DHCP server the interface is
+    left without usable IPv4 -- while the report said "ok". `getpacket` prints
+    nothing when DHCP is not active on the interface.
+    """
+    run_fn, calls = renewal_run_factory(packet="")
+    outcome = granted_executor(run_fn, interface="en4")(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("cannot renew:")
+    assert "en4" in outcome
+    assert "Nothing was changed" in outcome
+    assert calls == [getpacket_argv("en4")]
+    assert not any(is_set_call(c) for c in calls)
+
+
+def test_renew_refuses_a_packet_that_holds_no_lease():
+    """An INFORM service configures its address by hand and only asks the DHCP
+    server for options, so any packet it holds carries no lease time (RFC 2131
+    4.3.5). Non-empty output is not enough to call the interface DHCP.
+    """
+    inform_ack = "op = BOOTREPLY\noptions:\ndhcp_message_type (uint8): ACK 0x5\nend (none):\n"
+    run_fn, calls = renewal_run_factory(packet=inform_ack)
+    outcome = granted_executor(run_fn)(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("cannot renew:")
+    assert not any(is_set_call(c) for c in calls)
+
+
+def test_renew_does_not_guess_when_the_dhcp_state_cannot_be_read():
+    """A getpacket that failed says nothing about how the interface is
+    configured. Reporting it as "not using DHCP" would be a confident wrong
+    diagnosis, and renewing anyway is the hazard the check exists for.
+    """
+    run_fn, calls = renewal_run_factory(
+        packet="", getpacket_returncode=1, getpacket_stderr="interface doesn't exist"
+    )
+    outcome = granted_executor(run_fn)(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("failed:")
+    assert "not using DHCP" not in outcome
+    assert "interface doesn't exist" in outcome
+    assert "Nothing was changed" in outcome
+    assert not any(is_set_call(c) for c in calls)
+
+
+def test_the_dhcp_method_check_runs_unprivileged_and_bounded():
+    seen = []
+
+    def run_fn(args, **kwargs):
+        seen.append((args, kwargs))
+        stdout = LEASE_PACKET if args[1:2] == ["getpacket"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    granted_executor(run_fn)(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    args, kwargs = seen[0]
+    assert args == getpacket_argv("en0")
+    assert "sudo" not in " ".join(args)
+    assert kwargs["timeout"] == 5
 
 
 def test_toggling_the_interface_is_never_automated_even_when_granted():

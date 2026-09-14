@@ -321,9 +321,38 @@ POSITIVE_KEYS = (
     "log_view_timeout_seconds",
     "notify_timeout_seconds",
     "failover_speedtest_timeout_seconds",
+    # ThreadPoolExecutor(max_workers=0) raises ValueError, so every resolution
+    # batch failed.
+    "resolution_max_workers",
 )
 
 PORT_KEYS = ("peer_port", "smtp_port", "failover_speedtest_port")
+
+# Every other numeric key. 0 is meaningful for some of these (no re-alert, no
+# automatic switching), so only the type is checked. A null loads as None, and
+# None reached float() inside load_config itself, or a comparison on every tick.
+NUMBER_KEYS = (
+    "failure_threshold",
+    "success_threshold",
+    "resolution_stall_seconds",
+    "ping_failure_threshold",
+    "ping_alert_repeat_seconds",
+    "ping_loss_window",
+    "peer_current_seconds",
+    "peer_recent_seconds",
+    "peer_probe_wait_seconds",
+    "history_max_samples",
+    "log_view_max_entries",
+    "log_view_row_limit",
+    "log_view_announce_limit",
+    "max_learned_domains",
+    "domain_learn_interval_seconds",
+    "failover_probe_timeout_seconds",
+    "failover_speedtest_max_bytes",
+    "failover_failback_threshold",
+    "failover_cooldown_seconds",
+    "failover_max_switches_per_hour",
+)
 
 # router.py interpolates these into a shell script that runs with administrator
 # rights, so anything but an address or an interface name is refused before it
@@ -348,6 +377,15 @@ class ConfigError(ValueError):
 
 def _is_port(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 65535
+
+
+def _is_number(value) -> bool:
+    # bool is an int subclass, and `true` for a threshold is a typo, not 1.
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _is_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def target_problem(entry) -> Optional[str]:
@@ -426,18 +464,29 @@ def validate_config(config: dict) -> None:
                 raise ConfigError(key, f"config key '{key}': {problem}")
 
     for key in POSITIVE_KEYS:
-        if key not in config:
-            continue
-        value = config[key]
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or value <= 0
-        ):
+        if key in config and not (_is_number(config[key]) and config[key] > 0):
             raise ConfigError(
-                key, f"config key '{key}' must be a number greater than 0, got {value!r}"
+                key, f"config key '{key}' must be a number greater than 0, got {config[key]!r}"
             )
+
+    for key in NUMBER_KEYS:
+        if key in config and not _is_number(config[key]):
+            raise ConfigError(key, f"config key '{key}' must be a number, got {config[key]!r}")
+
+    # Blank is not "don't ping": `ping ""` cannot resolve the host and exits 68,
+    # so every heartbeat is a lost ping and the alert fires on a healthy network.
+    if "ping_host" in config and not _is_text(config["ping_host"]):
+        raise ConfigError(
+            "ping_host",
+            f"config key 'ping_host' must be a host name or address, got {config['ping_host']!r}",
+        )
+
+    # `reports_dir:` with nothing after it loads as None, and expanduser(None)
+    # raises TypeError, which names no key. A blank path is refused too: it
+    # expands to "", and every write to it fails.
+    for key in PATH_KEYS:
+        if key in config and not _is_text(config[key]):
+            raise ConfigError(key, f"config key '{key}' must be a path, got {config[key]!r}")
 
     for key in PORT_KEYS:
         if key in config and not _is_port(config[key]):

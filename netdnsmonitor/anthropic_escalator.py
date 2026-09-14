@@ -25,6 +25,11 @@ FALLBACK_MODEL = "claude-sonnet-5"
 # The timeout bounds each attempt, not the call: the SDK also retries twice by
 # default and honours retry-after, which is why default_client sets
 # max_retries=0.
+# It also does not bound the name lookup. httpcore's sync backend connects with
+# socket.create_connection, which runs getaddrinfo before it applies the
+# timeout, so the lookup of api.anthropic.com waits on the system resolver --
+# which, on a DNS incident, is the thing that is broken. The bound is 30s per
+# request plus a name lookup that no timeout here limits.
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 # Instructions live in `system`, apart from the evidence. log_watcher accepts a

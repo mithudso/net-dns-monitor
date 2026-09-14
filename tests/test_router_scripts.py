@@ -14,6 +14,7 @@ INSTALL = SCRIPTS / "install_persistent_nat.sh"
 TEST_ROUTER = SCRIPTS / "test_router.sh"
 UNBOUND_INSTALL = ROOT / "unbound" / "install.sh"
 SERVICE = ROOT / "scripts" / "net-dns-monitor-service"
+NDM_INSTALL = ROOT / "scripts" / "install.sh"
 
 
 def _code_lines(path):
@@ -103,6 +104,38 @@ def test_the_bootpd_check_reads_the_launchd_job_not_the_process_list():
     assert "pass " in not_loaded
 
 
+def _check_block(code, tool):
+    """The if/elif/else chain that validates one tool's config."""
+    start = code.index(f"command -v {tool}")
+    return re.split(r"^fi$", code[start:], maxsplit=1, flags=re.MULTILINE)[0]
+
+
+def test_a_missing_tool_or_config_is_not_reported_as_a_syntax_error():
+    """A nonzero checkconf exit was always "SYNTAX ERRORS", including exit 127
+    from a tool that is not installed and a config file that does not exist.
+    Each is a different fault with a different fix.
+    """
+    code = _code_lines(TEST_ROUTER)
+    for tool, checker, conf in (
+        ("unbound-checkconf", "unbound-checkconf ", "$PREFIX/etc/unbound/unbound.conf"),
+        ("dnsmasq", "dnsmasq --test -C ", "$PREFIX/etc/dnsmasq.conf"),
+    ):
+        block = _check_block(code, tool)
+        missing_tool = block.index(f"command -v {tool}")
+        missing_conf = block.index(f'[ ! -f "{conf}" ]')
+        run = block.index(f'{checker}"{conf}"')
+        syntax = block.index("SYNTAX ERRORS")
+        assert missing_tool < missing_conf < run < syntax
+        tool_branch = block[missing_tool:missing_conf]
+        assert "warn " in tool_branch and "not installed" in tool_branch
+        assert "SYNTAX" not in tool_branch
+        conf_branch = block[missing_conf:run]
+        assert "fail " in conf_branch and "not found" in conf_branch
+    # No unguarded checker run is left elsewhere in the script.
+    assert code.count('unbound-checkconf "') == 1
+    assert code.count("dnsmasq --test") == 1
+
+
 def _function(code, name):
     match = re.search(rf"^{name}\(\) \{{\n(.*?)^\}}", code, re.MULTILINE | re.DOTALL)
     assert match, f"no {name}() function"
@@ -169,3 +202,23 @@ def test_the_service_script_remembers_the_bundle_it_installed_from():
 
 def test_the_service_script_no_longer_names_the_retired_worktree():
     assert "worktrees/dns-resolution-monitor" not in SERVICE.read_text(encoding="utf-8")
+
+
+# --- scripts/install.sh --------------------------------------------------------
+
+
+def test_the_fresh_install_domains_warning_matches_the_shipped_config():
+    """The warning said an empty `domains` latches a permanent false incident.
+    The shipped config sets control_domain, and load_config refuses an empty
+    `domains` with no control_domain, so that could not happen. What does happen
+    is quieter: the DNS check rests on control_domain, and a fault that spares
+    that one name goes unnoticed.
+    """
+    code = _code_lines(NDM_INSTALL)
+    assert "latches a permanent false incident" not in code
+    fresh = code[code.index('cp "$REPO_DIR/config.yaml" "$CONFIG_FILE"') :]
+    fresh = re.split(r"^fi$", fresh, maxsplit=1, flags=re.MULTILINE)[0]
+    warning = " ".join(re.findall(r'^\s*warn "(.*)"$', fresh, re.MULTILINE))
+    assert "'domains'" in warning
+    assert "control_domain" in warning
+    assert "unnoticed" in warning

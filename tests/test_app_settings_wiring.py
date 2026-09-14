@@ -229,6 +229,13 @@ def test_the_direct_builds_settings_window_keeps_its_defaults(tmp_path, monkeypa
             "ValueError",
         ),
         (yaml.YAMLError("line 3 quotes: slack_webhook: https://hooks.example/secret"), "YAMLError"),
+        # A value load_config has no check for, reaching float(None) or similar.
+        (TypeError("float() argument must be a string or a real number, secret"), "TypeError"),
+        # A config file this account cannot open.
+        (
+            PermissionError(13, "Permission denied", "/private/secret/config.yaml"),
+            "PermissionError",
+        ),
     ],
 )
 def test_main_on_a_refused_config_says_why_once_and_exits_2(
@@ -261,6 +268,27 @@ def test_main_on_a_refused_config_says_why_once_and_exits_2(
     assert path in err
     assert "secret" not in err
     assert "Traceback" not in err
+
+
+def test_main_names_a_blank_path_key_through_the_real_loader(tmp_path, capsys):
+    """`reports_dir:` with nothing after it used to reach expanduser(None) and
+    raise a TypeError that main() did not catch. It is now a ConfigError, so the
+    alert names the key to fix.
+    """
+    path = tmp_path / "config.yaml"
+    path.write_text("reports_dir:\n", encoding="utf-8")
+    alerts = []
+
+    with pytest.raises(SystemExit) as exited:
+        app_module.main(
+            startup_alert=lambda title, message: alerts.append((title, message)),
+            config_path=str(path),
+        )
+
+    assert exited.value.code == 2
+    assert len(alerts) == 1
+    assert alerts[0][1].startswith("ConfigError: config key 'reports_dir' must be a path")
+    assert "Traceback" not in capsys.readouterr().err
 
 
 def test_main_still_exits_2_when_the_alert_itself_fails(tmp_path, capsys):

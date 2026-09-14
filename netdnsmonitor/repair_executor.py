@@ -12,6 +12,8 @@ is lives:
   and, with the grant, also restarts mDNSResponder. Without it, the cache is
   still cleared and the outcome says so, and says how to fix it.
 * `renew_dhcp_lease` runs with the grant and reports NEEDS_PRIVILEGE without it.
+  It first confirms the interface holds a DHCP lease, because `ipconfig set`
+  replaces whatever IPv4 configuration the interface had.
 * `toggle_network_service` is never automated. Down and up cannot be one command,
   and shipping two means a crash in between leaves the machine offline. The stub
   explains that rather than pretending the grant is missing.
@@ -28,6 +30,7 @@ interface actually being renewed. Without it, renewal falls back to
 """
 
 import os
+import re
 import subprocess
 from types import SimpleNamespace
 from typing import Callable, Optional
@@ -41,6 +44,12 @@ RunFn = Callable[..., object]
 RESOLVER_DIR = "/etc/resolver"
 
 GRANT_HINT = 'Use "Grant elevated permissions" in the app window to allow this.'
+
+# A DHCP server must put a lease time in every ACK that grants an address (RFC
+# 2131 section 4.3.1, table 3). The ACK to an INFORM -- an address set by hand
+# that only asks the server for options -- must not carry one (4.3.5), so a
+# packet alone does not show the interface is on DHCP; the lease line does.
+_LEASE_LINE = re.compile(r"^lease_time\b", re.MULTILINE)
 
 
 def make_repair_executor(
@@ -125,6 +134,29 @@ def make_repair_executor(
             )
         if dhcp_granted_fn is not None and not dhcp_granted_fn(interface):
             return needs_privilege_stub("renew_dhcp_lease")
+        # `ipconfig set` de-configures the interface's existing IPv4 service
+        # before starting DHCP. On an address set by hand, that swaps the static
+        # configuration for DHCP, and on a network with no DHCP server the
+        # interface is left with no usable IPv4 until the next network
+        # configuration change (man ipconfig). So the renewal only runs on an
+        # interface that already holds a lease. `getpacket` is an unprivileged
+        # read that prints nothing when DHCP is not active or has no lease.
+        packet = run([privileges.IPCONFIG, "getpacket", interface])
+        if packet.returncode != 0:
+            # A failed read is not evidence of a manual configuration; saying
+            # "not using DHCP" here would be a guess.
+            return (
+                f"failed: could not read the DHCP state of {interface} (ipconfig getpacket "
+                f"-- {packet.stderr.strip()}), so it is unknown whether renewing would "
+                "replace a configuration set by hand. Nothing was changed."
+            )
+        if not _LEASE_LINE.search(packet.stdout or ""):
+            return (
+                f"cannot renew: {interface} holds no DHCP lease (ipconfig getpacket shows "
+                "none): either it is not configured for DHCP or DHCP has not obtained one, and "
+                f"ipconfig set {interface} DHCP would replace a configuration set by hand. "
+                "Nothing was changed."
+            )
         result = run([privileges.SUDO, "-n", privileges.IPCONFIG, "set", interface, "DHCP"])
         if result.returncode != 0:
             return f"failed: ipconfig set {interface} DHCP -- {result.stderr.strip()}"

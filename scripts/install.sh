@@ -120,8 +120,9 @@ if [ -f "$CONFIG_FILE" ]; then
 else
     cp "$REPO_DIR/config.yaml" "$CONFIG_FILE"
     ok "created $CONFIG_FILE from the repo's default config.yaml"
-    warn "edit 'domains' in that file. Left empty, dns_ok is never measured and the"
-    warn "anti-flap gate latches a permanent false incident -- see the comment there."
+    warn "add the sites you care about to 'domains' in that file. Until then the DNS"
+    warn "check resolves only control_domain and any name learned from the system log,"
+    warn "so a DNS fault that spares control_domain can go unnoticed."
 fi
 
 # Fail loudly here rather than after installing a LaunchAgent that cannot start.

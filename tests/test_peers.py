@@ -403,6 +403,77 @@ def test_a_future_dated_last_seen_is_neither_answered_nor_silent():
     assert reg.localization_view(fresh_seconds=15) == []
 
 
+def test_a_restarted_peer_is_one_silent_peer_not_two():
+    """The peer id is regenerated per launch, so a peer Mac whose app restarted
+    inside the `current` window leaves its old id behind at the same address.
+    Counted separately, the ghost and the new id were two silent peers, which
+    bypassed the single-silent-peer cap and blamed this machine at high
+    confidence when only one machine had gone quiet.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("old-launch", host="imac", address="192.168.1.9")
+    clock.advance(seconds=60)
+    reg.observe("new-launch", host="imac", address="192.168.1.9")
+    clock.advance(seconds=120)
+    view = reg.localization_view(fresh_seconds=15)
+    assert [(p["id"], p["answered"]) for p in view] == [("new-launch", False)]
+    result = localize(False, False, view)
+    assert result["verdict"] == LOCAL_MACHINE
+    assert result["confidence"] == "medium"
+
+
+def test_the_newest_id_at_an_address_is_the_one_kept():
+    """The ghost of the previous launch is silent by definition. Keeping it
+    instead of the id that just answered would turn a live peer into a silent one.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("old-launch", address="192.168.1.9")
+    clock.advance(seconds=300)
+    reg.observe("new-launch", address="192.168.1.9")
+    clock.advance(seconds=5)
+    view = reg.localization_view(fresh_seconds=15)
+    assert [(p["id"], p["answered"]) for p in view] == [("new-launch", True)]
+
+
+def test_a_stale_entry_does_not_hide_a_current_one_at_the_same_address():
+    """Only entries inside the window compete for an address, so an out-of-window
+    record cannot claim the address and push the live peer out of the view.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.load(
+        {
+            "peers": {
+                OTHER: [
+                    {
+                        "id": "future-skewed",
+                        "address": "192.168.1.9",
+                        "last_seen": (START + timedelta(hours=1)).isoformat(),
+                    }
+                ]
+            }
+        }
+    )
+    reg.observe("live", address="192.168.1.9")
+    view = reg.localization_view(fresh_seconds=15)
+    assert [(p["id"], p["answered"]) for p in view] == [("live", True)]
+
+
+def test_peers_at_different_addresses_or_with_no_address_are_all_kept():
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("peer-a", address="192.168.1.5")
+    reg.observe("peer-b", address="192.168.1.6")
+    reg.observe("no-address-1")
+    reg.observe("no-address-2")
+    clock.advance(seconds=120)
+    view = reg.localization_view(fresh_seconds=15)
+    assert sorted(p["id"] for p in view) == ["no-address-1", "no-address-2", "peer-a", "peer-b"]
+    assert localize(False, False, view)["confidence"] == "high"
+
+
 # --- concurrency -----------------------------------------------------------
 
 

@@ -499,6 +499,20 @@ def test_the_measurement_deadline_is_the_configured_speedtest_timeout():
     assert failover.measure_timeout == 12.0
 
 
+def test_the_probe_deadline_is_the_configured_failover_probe_timeout():
+    """The candidate probes run together and stop being waited for at
+    `probe_timeout`. A deadline shorter than the prober's own budget would cut
+    off a probe that was still going to answer, and read the link as unprobed.
+    """
+    failover = build_failover(enabled_config(failover_probe_timeout_seconds=7))
+    assert failover.probe_timeout == 7.0
+
+    fallback = build_failover(
+        enabled_config(failover_probe_timeout_seconds=0, probe_timeout_seconds=3.5)
+    )
+    assert fallback.probe_timeout == 3.5
+
+
 def test_the_app_re_exports_the_failover_builders_it_used_to_define():
     from netdnsmonitor import app, failover
 

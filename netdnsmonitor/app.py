@@ -58,7 +58,7 @@ from netdnsmonitor import (
     system_log,
 )
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
-from netdnsmonitor.classifier import classify
+from netdnsmonitor.classifier import Classification, classify
 from netdnsmonitor.config import ConfigError, load_config
 from netdnsmonitor.console_window import ConsoleWindowController
 from netdnsmonitor.dashboard import (
@@ -1234,13 +1234,14 @@ class NetDnsMonitorApp(rumps.App):
             # Single attribute rebind, so the main thread only ever observes
             # the old list or the new one -- never a partially built one.
             self.last_resolution_findings = self.resolution_job()
-        except Exception:  # noqa: BLE001 - a batch failure must surface, not die silently
-            # Without this, a job that raises every cycle (an unwritable
-            # resolution_log_path, say) leaves last_resolution_findings at its
-            # initial [] forever. _refresh_title then renders no resolution
-            # suffix at all -- visually identical to "every domain resolved
-            # fine". The monitor would be dead and the menu bar would look
-            # clean.
+        except Exception as exc:  # noqa: BLE001 - a batch failure must surface, not die silently
+            # A job that raises every cycle (an unwritable resolution_log_path,
+            # say) leaves last_resolution_findings at its initial [] forever, and
+            # _refresh_title then renders no resolution suffix -- the same as
+            # "every domain resolved fine". The title still looks that way; this
+            # is what puts the failure in `:status` instead. Class name only: an
+            # exception message can carry a path or a URL.
+            self.last_tick_error = f"resolution batch failed: {type(exc).__name__}"
             traceback.print_exc()
 
     def ping_tick(self, _sender=None):
@@ -2310,10 +2311,16 @@ class NetDnsMonitorApp(rumps.App):
         # attempted a failover the configuration had not put on the ladder.
         steps = ladder_for(classification, self.state_machine.failover_classifications)
         if not steps:
-            lines.append(
-                "No ladder for this classification -- nothing is broken, or "
-                "`domains` is empty so DNS could not be judged."
-            )
+            if classification is Classification.HEALTHY:
+                lines.append("No ladder to run: nothing is broken.")
+                return lines
+            # UNCLASSIFIED: a load-bearing field is None, meaning not probed. Name
+            # each one. "Nothing is broken" would claim a check that never ran.
+            lines.append("No ladder to run: the probe could not be classified.")
+            if probe.get("external_reachable") is None:
+                lines.append("    external_reachable was not probed (external_targets is empty)")
+            if probe.get("dns_ok") is None:
+                lines.append("    dns_ok was not probed (no domain to resolve)")
             return lines
         for step in steps:
             # Per step, for the reason given in _single_step. The classification
@@ -2515,10 +2522,38 @@ class NetDnsMonitorApp(rumps.App):
                     f"; not in use, because {name} is also set in the environment, "
                     "which takes precedence"
                 )
+            elif (waiting_on := self._credential_unused_reason(name)) is not None:
+                outcome += f"; not in use until {waiting_on}"
             else:
                 outcome += "; in use now"
         self._notify(CREDENTIALS_MENU, outcome)
         return outcome
+
+    def _credential_unused_reason(self, name: str) -> Optional[str]:
+        """What must change before anything reads `name`, or None if something does.
+
+        Mirrors the conditions in build_notifier, make_email_notifier and
+        build_escalator. Without it the menu said "in use now" for a password no
+        email channel would ever send, and someone waits for an alert that
+        cannot come. self.config is what _apply_credentials just built from.
+        """
+        config = self.config
+        if name == "ANTHROPIC_API_KEY":
+            if self.consent is not None and not self.consent.granted():
+                return f"Claude diagnosis is allowed ({CONSENT_ITEM})"
+        elif name == "SLACK_WEBHOOK_URL":
+            if not config.get("slack_enabled"):
+                return "slack_enabled is turned on"
+        elif name == "SMTP_PASSWORD":
+            if not config.get("email_enabled"):
+                return "email_enabled is turned on"
+            if not config.get("email_recipients"):
+                return "email_recipients lists at least one address"
+            if not config.get("smtp_username"):
+                return "smtp_username is set, since the password is only sent with it"
+            if not config.get("smtp_starttls", True):
+                return "smtp_starttls is turned on, since a login without TLS is refused"
+        return None
 
     def remove_credentials(self, _sender=None) -> str:
         """Delete all three of this app's Keychain items, after asking."""
@@ -3068,11 +3103,13 @@ def main(
     factory = NetDnsMonitorApp if app_factory is None else app_factory
     try:
         app = factory(config_path=config_path)
-    except (ConfigError, ValueError, yaml.YAMLError) as exc:
+    except (ConfigError, ValueError, TypeError, OSError, yaml.YAMLError) as exc:
         # Started from Finder, the Dock or a LaunchAgent, a traceback on stderr
         # reaches nobody: the app never appears, and Settings, which could fix
         # the file, never opens. config_error_text keeps a YAML message, which
-        # quotes the file, out of both.
+        # quotes the file, out of both. TypeError is a value of the wrong type
+        # that load_config has no check for; OSError is a config file this
+        # account cannot open. Either way the class name is all that is shown.
         problem = config_error_text(exc)
         print(f"{STARTUP_FAILED_TITLE}: {problem}", file=sys.stderr)
         print(f"Config file: {config_path}", file=sys.stderr)

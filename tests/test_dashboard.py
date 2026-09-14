@@ -9,6 +9,7 @@ would flash a window across the screen on every test run.
 
 from netdnsmonitor.dashboard import (
     ALL_ACTIONS,
+    EDIT_MENU_ITEMS,
     LEFT_WIDTH,
     LOG_ACTIONS,
     LOG_WIDTH,
@@ -300,6 +301,45 @@ def test_a_menu_action_that_raises_does_not_escape_into_appkit(capsys):
     err = capsys.readouterr().err
     assert "open_dashboard raised ConnectionError" in err
     assert SECRET not in err
+
+
+def test_the_edit_menu_table_carries_the_standard_editing_commands():
+    """AppKit finds Cmd-V by walking the main menu for an item whose key
+    equivalent matches. With no Edit menu there is no such item, so paste did
+    nothing in any text field -- including the store build's masked credentials
+    dialog, the only place an API key can be entered there.
+    """
+    entries = {entry[1]: entry[2] for entry in EDIT_MENU_ITEMS if entry is not None}
+    assert entries == {
+        "undo:": "z",
+        "redo:": "Z",
+        "cut:": "x",
+        "copy:": "c",
+        "paste:": "v",
+        "selectAll:": "a",
+    }
+
+
+def test_the_edit_menu_is_installed_with_nil_targets():
+    """A nil target is what sends the action up the responder chain to the
+    focused field. A target set to the dispatch object would swallow paste:.
+    Driving the real keystroke needs a window server, so Cmd-V in Credentials >
+    Set Anthropic API key stays a manual check.
+    """
+    import AppKit
+
+    install_main_menu(lambda action_id: None)
+    main_menu = AppKit.NSApplication.sharedApplication().mainMenu()
+    edit_menu = main_menu.itemAtIndex_(1).submenu()
+    assert edit_menu.title() == "Edit"
+
+    items = [edit_menu.itemAtIndex_(i) for i in range(edit_menu.numberOfItems())]
+    by_action = {str(item.action()): item for item in items if not item.isSeparatorItem()}
+    assert set(by_action) == {"undo:", "redo:", "cut:", "copy:", "paste:", "selectAll:"}
+    assert by_action["paste:"].keyEquivalent() == "v"
+    assert by_action["selectAll:"].keyEquivalent() == "a"
+    assert all(item.target() is None for item in by_action.values())
+    assert any(item.isSeparatorItem() for item in items)
 
 
 def test_the_search_field_reports_what_was_typed():

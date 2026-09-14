@@ -758,6 +758,57 @@ def test_saving_a_credential_the_environment_overrides_says_so(tmp_path):
     assert "from-the-shell" not in removed
 
 
+MAILABLE = {"email_enabled": True, "email_recipients": ["ops@example.test"], "smtp_username": "ops"}
+
+
+@pytest.mark.parametrize(
+    ("name", "settings", "named"),
+    [
+        ("SMTP_PASSWORD", {**MAILABLE, "email_recipients": []}, "email_recipients"),
+        ("SMTP_PASSWORD", {**MAILABLE, "email_enabled": False}, "email_enabled"),
+        ("SMTP_PASSWORD", {**MAILABLE, "smtp_username": None}, "smtp_username"),
+        ("SMTP_PASSWORD", {**MAILABLE, "smtp_starttls": False}, "smtp_starttls"),
+        ("SLACK_WEBHOOK_URL", {"slack_enabled": False}, "slack_enabled"),
+    ],
+)
+def test_a_credential_nothing_reads_does_not_claim_to_be_in_use(tmp_path, name, settings, named):
+    """build_notifier builds no email channel without recipients, and the email
+    channel logs in only with a username and TLS. "In use now" there sends
+    someone to wait for an alert that cannot use what they just saved.
+    """
+    app = build_app(
+        tmp_path, capabilities=DIRECT, secret_prompt=lambda title, message: "a-value", **settings
+    )
+    outcome = app.set_credential(name)
+    assert outcome.startswith(f"ok: {name} saved to the Keychain; not in use until ")
+    assert named in outcome
+    assert "in use now" not in outcome
+    assert "a-value" not in outcome
+
+
+def test_a_fully_configured_smtp_password_is_in_use_now(tmp_path):
+    app = build_app(
+        tmp_path, capabilities=DIRECT, secret_prompt=lambda title, message: "a-value", **MAILABLE
+    )
+    assert app.set_credential("SMTP_PASSWORD").endswith("; in use now")
+
+
+def test_a_store_build_api_key_waits_for_claude_permission(tmp_path, monkeypatch):
+    """The store build's escalator is gated on consent, so a key saved before
+    Allow Claude diagnosis is not used by the next incident.
+    """
+    monkeypatch.setattr("netdnsmonitor.app.default_client", lambda api_key=None: FakeClient())
+    app = build_app(tmp_path, secret_prompt=lambda title, message: API_KEY)
+
+    outcome = app.set_credential("ANTHROPIC_API_KEY")
+    assert CONSENT_ITEM in outcome
+    assert "in use now" not in outcome
+    assert API_KEY not in outcome
+
+    app.consent.grant()
+    assert app.set_credential("ANTHROPIC_API_KEY").endswith("; in use now")
+
+
 def test_a_credential_saved_but_not_applied_says_restart(tmp_path, monkeypatch):
     app = build_app(tmp_path, secret_prompt=lambda title, message: "a-password")
 

@@ -592,6 +592,19 @@ def test_the_explanation_lists_the_exact_commands_before_anyone_clicks():
     assert "no wildcards" in text.lower()
 
 
+def test_the_explanation_does_not_promise_the_worst_case_is_brief():
+    """`ipconfig set <if> DHCP` replaces a hand-set IPv4 configuration. Any
+    process running as the user can run it through the grant, and on a network
+    with no DHCP server the interface then has no working IPv4 until the next
+    network configuration change -- which is not a brief interruption.
+    """
+    text = explanation(["en0"])
+    assert "briefly interrupt" not in text
+    assert "not always briefly" in text
+    assert "set by hand" in text
+    assert "DHCP server" in text
+
+
 def test_the_explanation_says_what_is_broken_without_the_grant():
     text = explanation(["en0"])
     assert "half works" in text

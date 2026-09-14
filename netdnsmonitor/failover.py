@@ -312,6 +312,7 @@ class NetworkFailover:
         trigger_classifications: frozenset = frozenset({"network"}),
         time_fn: Callable[[], float] = time.time,
         auto_enabled: bool = True,
+        probe_timeout: float = 5.0,
     ):
         # Automatic switching and manual switching are separate capabilities.
         # With auto off and both service names set, the menu bar button still
@@ -328,6 +329,9 @@ class NetworkFailover:
         self.backup_services = names
         self.throughput_meter = throughput_meter
         self.measure_timeout = measure_timeout
+        # How long a round of interface probes is waited for. build_failover
+        # passes the prober's own budget; see _probe_all.
+        self.probe_timeout = probe_timeout
         self.store = store
         self.interface_prober = interface_prober
         self.run_fn = run_fn
@@ -379,6 +383,21 @@ class NetworkFailover:
             return PREFERRED
         return BACKUP if services[0].name in self.backup_services else PREFERRED
 
+    def _probe_all(self, devices: list) -> dict:
+        """Probe several interfaces against ONE deadline, keyed by device.
+
+        One after another, every backup adds a full probe timeout on the timer
+        thread during the outage being diagnosed -- the additive stall of
+        non-negotiable 7. A device whose probe has not returned by the deadline
+        maps to None: nothing was learned about it, and False would call a link
+        dead that was never heard from. The grace covers thread start-up and
+        the prober's interface lookup, which sit outside its own budget.
+        """
+        unique = list(dict.fromkeys(devices))
+        if not unique:
+            return {}
+        return measure_all(unique, self.interface_prober, self.probe_timeout, grace=0.5)
+
     def evaluate_candidates(self, services, measure: bool = True) -> list[Candidate]:
         """Probe (and optionally benchmark) every configured backup.
 
@@ -387,15 +406,14 @@ class NetworkFailover:
         path that carries no traffic, and paying for it would put the whole
         cost on the UI thread for no information.
         """
+        present = [(name, find_service(services, name)) for name in self.backup_services]
+        reach = self._probe_all([s.device for _, s in present if s is not None])
         found = []
-        for name in self.backup_services:
-            service = find_service(services, name)
+        for name, service in present:
             if service is None:
                 found.append((name, None, None, True))
                 continue
-            found.append(
-                (name, service.device, self.interface_prober(service.device), service.enabled)
-            )
+            found.append((name, service.device, reach.get(service.device), service.enabled))
 
         # Benchmark every reachable candidate at once against a single
         # deadline. Serially this is one timeout each, on the timer thread,
@@ -570,9 +588,9 @@ class NetworkFailover:
         """What the menu bar shows: which side is live, and whether each side
         can actually carry traffic right now.
 
-        Probes both interfaces, so this costs up to two timeouts and a
-        subprocess. Only ever called from an explicit user action or straight
-        after a switch -- never from the poll path.
+        Probes every configured interface at once, so this costs one probe
+        deadline and a subprocess. Only ever called from an explicit user action
+        or straight after a switch -- never from the poll path.
         """
         services = self._list_services()
         if not services:
@@ -581,6 +599,9 @@ class NetworkFailover:
                 "auto_enabled": self.auto_enabled,
                 "last_event": self.last_event,
             }
+
+        named = [find_service(services, n) for n in (self.preferred_service, *self.backup_services)]
+        reach = self._probe_all([s.device for s in named if s is not None])
 
         def describe(name: str) -> dict:
             service = find_service(services, name)
@@ -598,7 +619,7 @@ class NetworkFailover:
                 "device": service.device,
                 "found": True,
                 "enabled": service.enabled,
-                "reachable": self.interface_prober(service.device),
+                "reachable": reach.get(service.device),
                 "throughput_mbps": None,
             }
 
@@ -682,8 +703,9 @@ class NetworkFailover:
 
         active_side = self._active_side(services)
         # Decide which side we are on before probing anything. Probing costs up
-        # to one timeout per interface on the UI thread, and the wrong-direction
-        # request needs no probe at all to answer.
+        # to a probe timeout for the preferred link, and another for the backups
+        # when they are evaluated, on the UI thread; the wrong-direction request
+        # needs no probe at all to answer.
         if allow == FAILBACK and active_side == PREFERRED:
             self.preferred_streak = 0
             # Self-heal the failback gate. The pre-failover order is recorded
@@ -937,6 +959,7 @@ def build_failover(config: dict):
     if not preferred or not backups:
         return None
     timeout = float(config["failover_speedtest_timeout_seconds"])
+    probe_timeout = failover_probe_timeout(config)
     return NetworkFailover(
         preferred_service=preferred,
         backup_services=backups,
@@ -954,8 +977,11 @@ def build_failover(config: dict):
         store=FailoverStore(config["failover_state_path"]),
         interface_prober=make_interface_prober(
             targets=failover_probe_targets(config),
-            timeout=failover_probe_timeout(config),
+            timeout=probe_timeout,
         ),
+        # The prober's own budget, so the shared deadline never gives up on a
+        # probe that was still inside it.
+        probe_timeout=probe_timeout,
         failback_threshold=int(config["failover_failback_threshold"]),
         cooldown_seconds=float(config["failover_cooldown_seconds"]),
         max_switches_per_hour=max(0, int(config["failover_max_switches_per_hour"])),

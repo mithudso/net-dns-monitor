@@ -28,7 +28,9 @@ changes.
 thread, and returns. If the bind fails -- port already taken by another copy on
 this machine, or a sandbox denies it -- discovery is simply off and the monitor
 carries on; a network-monitoring tool that will not start because it could not
-open a discovery socket has its priorities backwards.
+open a discovery socket has its priorities backwards. The port is not shared
+(no SO_REUSEPORT; see start()), so a second copy on the same machine lands in
+this case rather than binding a port it would never hear pongs on.
 
 **What this discloses.** Any host that can reach the port can learn this
 machine's hostname and whether its network is currently healthy. That is the
@@ -288,10 +290,15 @@ class PeerNetwork:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # Two copies on one machine (a dev run beside the installed app) both
-            # need to receive, rather than the second one failing to bind.
-            if hasattr(socket, "SO_REUSEPORT"):
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            # SO_REUSEPORT is deliberately not set. With it, a second copy on this
+            # machine (a dev run beside the installed app) binds the same port,
+            # but macOS hands each unicast datagram to only one of the two
+            # sockets: over loopback, 5 of 5 went to the first-bound socket and
+            # none to the second. The second copy never hears its pongs, every
+            # peer looks silent, and during an outage fault localization blames
+            # this machine's own link. Without it, the second wildcard bind fails
+            # with EADDRINUSE (SO_REUSEADDR alone does not allow it on Darwin),
+            # and that copy runs with discovery off and gives no peer verdict.
             sock.bind(("", self.bind_port))
             # Read back, because a bind to port 0 gets a kernel-assigned port and
             # the advertised port and the default send port must be the real one.

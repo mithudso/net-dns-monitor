@@ -40,9 +40,15 @@ in its arguments -- would be equivalent to handing over unrestricted root, which
 is why the interfaces are enumerated at grant time and validated before they are
 written. Every use is logged by sudo.
 
-The worst realistic outcome of the grant being abused is a briefly interrupted
-network connection on this machine. The user can withdraw it at any time with the
-Revoke button, which deletes the file.
+The worst realistic outcome of the grant being abused is an interrupted network
+connection on this machine, and it is not always brief. `ipconfig set <interface>
+DHCP` de-configures the interface's existing IPv4 service first, so on an address
+set by hand it replaces that configuration with DHCP; with no DHCP server on the
+network, the interface then has no working IPv4 until the next network
+configuration change. The app's own renewal checks for a DHCP lease before it
+runs the command (repair_executor.py), but any other process using the grant does
+not have to. The user can withdraw the grant at any time with the Revoke button,
+which deletes the file.
 
 WHAT IS DELIBERATELY NOT GRANTED
 
@@ -160,8 +166,11 @@ without a password prompt:
 What that means: from then on, any process running as you -- not only this app --
 can run those specific commands as root with no prompt. sudo logs each use. The
 commands cannot take a file path, cannot read or write your data, and cannot run
-another program; the worst they can do is briefly interrupt this machine's own
-network. There are no wildcards in the file and no shell.
+another program. The worst they can do is interrupt this machine's own network,
+and not always briefly: on an interface whose address was set by hand, the DHCP
+command replaces that address, and with no DHCP server on the network the
+interface has no working IPv4 address until the network configuration next
+changes. There are no wildcards in the file and no shell.
 
 Without this, "Flush DNS cache" only half works (the cache is cleared but
 mDNSResponder is not restarted) and "renew DHCP lease" does not run at all.

@@ -754,6 +754,22 @@ APP_MENU_ITEMS = [
     ("Settings…", "open_settings", ","),
 ]
 
+# (title, selector, key equivalent), with None for a separator. A text field does
+# not handle Cmd-V itself: AppKit matches the keystroke against the main menu's
+# key equivalents and sends that item's action. With no Edit menu nothing matched,
+# so paste did nothing anywhere -- including the store build's masked credentials
+# dialog, the only place a key can be entered in that build. An uppercase key
+# equivalent implies Shift, which makes Redo Cmd-Shift-Z.
+EDIT_MENU_ITEMS = [
+    ("Undo", "undo:", "z"),
+    ("Redo", "redo:", "Z"),
+    None,
+    ("Cut", "cut:", "x"),
+    ("Copy", "copy:", "c"),
+    ("Paste", "paste:", "v"),
+    ("Select All", "selectAll:", "a"),
+]
+
 
 def install_main_menu(on_action: Callable[[str], None]):
     """Give the app a real application menu, and return the target to retain.
@@ -800,5 +816,22 @@ def install_main_menu(on_action: Callable[[str], None]):
     app_item.setSubmenu_(app_menu)
     main_menu = AppKit.NSMenu.alloc().init()
     main_menu.addItem_(app_item)
+
+    # No target on these, unlike the items above. A nil target sends the action
+    # to the first responder -- the focused field -- which is the object that can
+    # paste. Targeting the dispatch object would route paste: to it instead.
+    edit_menu = AppKit.NSMenu.alloc().initWithTitle_("Edit")
+    for entry in EDIT_MENU_ITEMS:
+        if entry is None:
+            edit_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+            continue
+        title, selector, key = entry
+        edit_menu.addItem_(
+            AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, key)
+        )
+    edit_item = AppKit.NSMenuItem.alloc().init()
+    edit_item.setSubmenu_(edit_menu)
+    main_menu.addItem_(edit_item)
+
     AppKit.NSApplication.sharedApplication().setMainMenu_(main_menu)
     return target

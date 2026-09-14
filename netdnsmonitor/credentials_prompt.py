@@ -42,7 +42,9 @@ def prompt_for_secret(title: str, message: str) -> Optional[str]:
     alert.addButtonWithTitle_("Save")
     alert.addButtonWithTitle_("Cancel")
     # NSSecureTextField, not NSTextField: it masks what is typed and refuses to
-    # copy it out, so the value is never on screen or on the pasteboard.
+    # copy it out, so the value is never on screen or on the pasteboard. Pasting
+    # INTO it depends on dashboard.install_main_menu's Edit menu: AppKit routes
+    # Cmd-V through a menu item's key equivalent, not through the field.
     field = AppKit.NSSecureTextField.alloc().initWithFrame_(
         AppKit.NSMakeRect(0, 0, SECURE_FIELD_WIDTH, SECURE_FIELD_HEIGHT)
     )
