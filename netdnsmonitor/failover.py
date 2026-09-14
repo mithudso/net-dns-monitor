@@ -90,8 +90,8 @@ def _is_finite_number(value) -> bool:
 
 def default_run(args: list[str], timeout: float = 5) -> object:
     """A subprocess failure has to arrive as data, not an exception: this runs
-    under the rumps timer, where an escaping error kills monitoring for the
-    rest of the session.
+    under the rumps timer. rumps catches the exception, but the rest of that
+    tick is skipped, and on an incident edge that loses the report and alert.
 
     `timeout` exists for the console, whose catalogue commands (traceroute)
     need far longer than a networksetup call. Failover callers keep the default.

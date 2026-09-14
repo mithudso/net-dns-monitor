@@ -30,7 +30,8 @@ every DNS lookup that has ever stalled on this machine.
 ## Requirements
 
 - macOS (uses `log show`, `scutil`, `dscacheutil`, `killall` -- all macOS-only)
-- Python 3.9+ (the code uses bare `list[...]`/`tuple[...]` generic type hints)
+- Python 3.13 or newer. CI tests 3.13 only, `constraints.txt` was frozen from it,
+  and `scripts/start.sh` and `scripts/install.sh` refuse anything older.
 - (Optional) an Anthropic API key, only needed for the Claude escalation
   feature
 
@@ -40,10 +41,15 @@ every DNS lookup that has ever stalled on this machine.
 git clone <this-repo-url> net-dns-monitor
 cd net-dns-monitor
 
-python3 -m venv .venv
+python3 -m venv .venv          # python3 must be 3.13 or newer
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 ```
+
+`constraints.txt` pins every transitive dependency to the tested versions.
+`./scripts/install.sh` does all of this section in one step, and also builds the
+bundle and installs the login LaunchAgent (see
+[Starting automatically at login](#starting-automatically-at-login)).
 
 Copy the shipped default config into place (`install.sh` does this for you):
 
@@ -160,7 +166,7 @@ ping_loss_window: 12
 ## Running the app
 
 Recommended: `scripts/start.sh` -- it checks the install (macOS, Python
-3.9+, required system tools, venv), verifies every component imports and
+3.13+, required system tools, venv), verifies every component imports and
 the config loads, materializes a default config if none exists, then
 launches with the recommended settings in one step.
 
@@ -222,41 +228,70 @@ Two independent timers start immediately:
 
 ### Starting automatically at login
 
-Install the LaunchAgent template at
-`scripts/com.mitchhudson.net-dns-monitor.plist` (edit the paths inside it to
-match your checkout):
+Install the supervised LaunchAgent with the install script. It builds the bundle,
+copies it to `~/Applications/Net-DNS-Monitor.app`, copies the service script to
+`~/.local/bin/net-dns-monitor-service`, writes the agent and starts the app:
 
 ```bash
-cp scripts/com.mitchhudson.net-dns-monitor.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mitchhudson.net-dns-monitor.plist
-launchctl list | grep net-dns    # confirm it registered
+./scripts/install.sh
 ```
 
-To stop it starting at login again:
+If the bundle is already built, install it with the service script alone:
 
 ```bash
-launchctl bootout gui/$(id -u)/com.mitchhudson.net-dns-monitor
+NDM_SOURCE_BUNDLE="$PWD/dist/Net-DNS-Monitor.app" scripts/net-dns-monitor-service install
 ```
 
-Three things about that plist are deliberate:
+Set `NDM_SOURCE_BUNDLE`. Without it, the script installs from its default source,
+the original author's `dns-resolution-monitor` worktree, which does not exist on
+other machines. `install.sh` sets it for you.
 
-- **`LaunchAgent`, not `LaunchDaemon`.** This is a GUI menu bar app and needs
-  the logged-in user's session. A daemon runs before login with no window
-  server access and could never draw a status item.
-- **`ProgramArguments` points at the executable inside the `.app` bundle**, not
-  at `python -m netdnsmonitor.app`. A bare module launch reintroduces the
-  "Python" Dock/Force-Quit name that the frozen bundle exists to fix.
-- **No `KeepAlive`.** With it, quitting from the menu bar's Quit item would
-  immediately relaunch the app, so you could never turn it off without
-  unloading the agent.
+Control the app with the service script:
 
-`launchctl bootstrap` runs the agent immediately as well as at login, so quit
-any copy you started by hand first or you'll get two menu bar items.
+```bash
+net-dns-monitor-service status      # is it running, is it ticking
+net-dns-monitor-service stop        # off, and stays off across login
+net-dns-monitor-service start       # back on, supervised
+net-dns-monitor-service restart
+net-dns-monitor-service update      # re-copy a freshly built bundle, then restart
+net-dns-monitor-service logs -f
+net-dns-monitor-service uninstall   # removes the agent; keeps the bundle and data
+```
 
-Note that the path inside the plist points at wherever you built the bundle. If
-you move or delete that checkout -- including removing this git worktree after
-merging -- login startup breaks silently. Fix by editing the path in the plist
-and running `launchctl bootout` then `bootstrap` again.
+`write_plist` in `scripts/net-dns-monitor-service` generates
+`~/Library/LaunchAgents/com.mitchhudson.net-dns-monitor.plist`, and `install`
+overwrites it each time. Edit that function, not the plist.
+`scripts/com.mitchhudson.net-dns-monitor.plist` is not a template: its dict is empty
+and defines no job. The generated plist sets:
+
+| Key | Value | Effect |
+|---|---|---|
+| `ProgramArguments` | `~/Applications/Net-DNS-Monitor.app/Contents/MacOS/Net-DNS-Monitor` | The frozen bundle shows "Net-DNS-Monitor" in the Dock and Force Quit; `python -m netdnsmonitor.app` shows "Python". The copy in `~/Applications` survives removal of the worktree it was built in. |
+| `KeepAlive` → `PathState` | `~/Library/Application Support/net-dns-monitor/supervise.enabled` = true | While that flag file exists, launchd starts the app at login and restarts it whenever it stops. |
+| `RunAtLoad` | not set | With it, the app would start at every login even with the flag removed, and `stop` would undo itself. |
+| `ThrottleInterval` | 15 | launchd waits at least 15s before respawning a job that just stopped. |
+| `EnvironmentVariables` | `LANG=en_US.UTF-8` | launchd starts jobs with no locale. |
+
+It also sets `ProcessType` to `Interactive` and sends stdout and stderr to
+`~/Library/Logs/net-dns-monitor.launchd.log`. It is a LaunchAgent, not a
+LaunchDaemon: a menu bar app needs the logged-in user's GUI session, so it starts at
+login, not at boot.
+
+Three consequences:
+
+- **Quit in the menu bar does not turn the app off.** `KeepAlive` restarts it. Run
+  `net-dns-monitor-service stop`, which removes the flag file before it stops the app.
+- **Do not launch a second copy by hand.** `scripts/start.sh` refuses to launch while
+  this agent is loaded. A copy that launchd did not start puts a second icon in the
+  menu bar, and `status` warns about it.
+- **`KeepAlive` restarts a process that exits, not one that hangs.** `status` warns
+  when the app has been up for more than 900s and has not written the resolution log
+  for more than 900s. Run `net-dns-monitor-service restart`.
+
+The menu bar's **Start at Login** item is the lighter alternative. It writes
+`~/Library/LaunchAgents/com.netdnsmonitor.plist` with `RunAtLoad` set and `KeepAlive`
+false, so the app starts at the next login and nothing restarts it. Unchecking the
+item removes only that file. Use one of the two, not both.
 
 ## Feature: incident detection and auto-repair
 
@@ -857,8 +892,11 @@ build does and does not do.
 
 ```bash
 source .venv/bin/activate
-python -m pytest -v
+pip install -r requirements-dev.txt -c constraints.txt   # adds pytest and ruff
+ruff check . && ruff format --check . && python -m pytest -q
 ```
+
+The last line is the CI gate. `python -m pytest -v` lists each test by name.
 
 All decision logic (classification, anti-flap gating, the troubleshooting
 ladder, escalation redaction/gating, report building, query-log parsing,
@@ -886,36 +924,78 @@ tested separately, on its own). The rest needs a real macOS run loop.
 | `scripts/start.sh` finishes with no visible menu bar icon | `open -n dist/Net-DNS-Monitor.app` failed silently, or the app errored before reaching rumps | Check `net-dns-monitor.log` in the repo root for the actual error |
 | `python setup.py py2app` fails with `[Errno 66] Directory not empty` | py2app's intermediate `build/` staging dir from a previous run wasn't cleaned (seen intermittently) | `scripts/start.sh` already does this before every build; if running the command by hand, `rm -rf build dist` first |
 | Ctrl-C in the terminal doesn't stop the app | Expected once launched via `scripts/start.sh`'s `.app` bundle -- it's an independent process, not a child of the shell | Quit via the menu bar's Quit item, or `pkill -f netdnsmonitor.app`; use `python -m netdnsmonitor.app` directly instead if you want Ctrl-C to work |
-| Repair steps report `NEEDS_PRIVILEGE` | DHCP renewal / interface toggling need elevated rights this sandboxed app doesn't have | Not implemented in this MVP; see Honest scope below |
+| `renew_dhcp_lease` reports `NEEDS_PRIVILEGE` | The sudoers grant is not installed, or does not cover the interface that holds the default route | Click **Grant elevated permissions** in the dashboard; see [Permissions](#permissions). `toggle_network_service` reports `NOT_AUTOMATED` by design, with or without the grant |
+| The report's log excerpt is one line starting `[net-dns-monitor] no log evidence:` | `log show` timed out after 10s or failed, so no log was read. An empty excerpt means the read ran and matched nothing | Keep `log_lookback` short (default `5m`); a 30m lookback measured 10.15s |
+| A second menu bar icon appears | A copy was started by hand while the supervised LaunchAgent also runs one | `net-dns-monitor-service status` names the untracked pids; kill them. `scripts/start.sh` refuses to launch while the agent is loaded |
 
 ## Project layout
 
+Modules, all in `netdnsmonitor/`. The list matches `ls netdnsmonitor/*.py`
+(`__init__.py` is empty); each purpose comes from the module docstring.
+
+- `ai_consent.py` -- explicit, versioned, revocable permission before incident data goes to Anthropic
+- `alert.py` -- Dock bounce + network-failed notification when the ping heartbeat fails
+- `anthropic_escalator.py` -- the Claude API call itself, on an already-redacted bundle
+- `app.py` -- the rumps menu bar shell; wires the tested modules to timers and menus
 - `classifier.py` -- network-vs-DNS-vs-healthy-vs-unclassified split
-- `flap_gate.py` -- anti-flap consecutive-count debounce
-- `ladder.py` -- the offline troubleshooting ladder definition
-- `repair_executor.py` -- dispatches ladder steps to real macOS commands
+- `cli.py` -- the single command-line entry point (`python3 -m netdnsmonitor.cli`)
+- `cli_console.py` -- the terminal REPL behind `netdns console`
+- `commands.py` -- the diagnostic command catalogue the CLI console offers, each marked if it mutates
+- `config.py` -- YAML config loading, defaults, normalisation and validation
+- `console.py` -- the GUI console's decisions: built-ins, `cd`, the guarded runner
+- `console_window.py` -- AppKit shell for the GUI console; holds no decisions
+- `credentials.py` -- the three credentials, from the environment first, then the Keychain
+- `credentials_prompt.py` -- the modal dialogs behind the menu's Credentials and Claude-permission items
+- `dashboard.py` -- the window: contents as pure data plus the AppKit view
+- `distribution.py` -- detects the Mac App Store sandbox and names the features that build cannot use
 - `dns_query.py` -- raw UDP query against a specific public resolver
-- `prober.py` -- TCP-connect reachability + DNS resolution aggregation
+- `dock_icon.py` -- draws the Dock tile as the current reading, in the status colour
+- `domain_learner.py` -- learns/validates/prunes domains from failed log lookups
+- `escalation.py` -- redaction + the escalate-or-not gate
+- `failover.py` -- executes the reorder, verifies it, persists the old order
+- `failover_policy.py` -- the pure switch/don't-switch decision + rate brakes
+- `flap_gate.py` -- anti-flap consecutive-count debounce
+- `forensic_log.py` -- down/up episode journal and per-episode write-up
+- `graphs.py` -- renders each series to an NSImage (pixel-testable)
+- `history.py` -- bounded rolling sample history behind the graphs
+- `interface_probe.py` -- reachability forced out of a named interface
+- `ladder.py` -- the offline troubleshooting ladder definition
+- `localize.py` -- the decision matrix that turns an outage into a place to look
+- `log_watcher.py` -- `log show` excerpt of DNS/network errors for the incident report
+- `mini_window.py` -- the floating always-on-top panel
+- `net_stats.py` -- interface byte counters and throughput derivation
+- `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
+- `peer_net.py` -- UDP announce/probe/pong and the listener thread
+- `peers.py` -- peer registry, recency buckets, and the file record
 - `ping.py` -- one-shot ICMP ping with round-trip-time parsing
 - `ping_monitor.py` -- packet-loss window + the edge-triggered alert decision
-- `net_stats.py` -- interface byte counters and throughput derivation
-- `alert.py` -- Dock bounce + the network-failed notification
-- `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
-- `stall_log.py` -- selects every ever-stalled domain from the resolution log
-- `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)
-- `resolution_prober.py` -- parallel DNS resolution of a domain batch
+- `privileges.py` -- the narrow sudoers grant, its revoke, and reading back what is granted
+- `prober.py` -- TCP-connect reachability + DNS resolution aggregation
+- `query_log.py` -- `log show` reading + top-queried-domain extraction; used by Prewarm DNS, not by the resolution monitor
+- `repair_executor.py` -- dispatches ladder steps to real macOS commands
+- `report.py` -- incident report schema and its Markdown rendering
+- `report_storage.py` -- writes each report to disk as JSON and Markdown
 - `resolution_log.py` -- JSONL append for resolution-monitor findings
-- `escalation.py` -- redaction + the escalate-or-not gate
-- `anthropic_escalator.py` -- the Claude API call itself
-- `report.py` / `report_storage.py` -- incident report schema + persistence
+- `resolution_prober.py` -- parallel, deadline-bounded DNS resolution of a domain batch
+- `router.py` -- the app's router mode: bootpd DHCP plus pf NAT, behind the admin dialog
+- `router_window.py` -- the Router Management Console window
+- `service_order.py` -- parses the macOS network service list and guards every new order
+- `settings_window.py` -- a field per config key, and the safe save
+- `stall_log.py` -- selects every ever-stalled domain from the resolution log
+- `state_machine.py` -- orchestrates detect, classify, ladder, recheck, escalate and report
 - `status.py` -- menu bar title logic + the shared healthy/flaky/incident status decision
-- `dock_icon.py` -- draws the Dock tile as the current reading, in the status colour
-- `dock_icon.py` -- renders the tinted network-glyph Dock icon
-- `state_machine.py` -- orchestrates incident detection end to end
-- `config.py` -- YAML config loading with defaults
-- `app.py` -- the rumps menu bar shell wiring everything together
+- `system_log.py` -- reads the unified log for the dashboard's system log pane
+- `throughput.py` -- bounded download forced out of one interface, to rank backups
+
+Outside the package:
+
+- `scripts/install.sh` -- preflight, venv, dependencies, bundle build, supervised LaunchAgent, verification
 - `scripts/start.sh` -- install check + component verification + builds/launches the frozen `.app` bundle
+- `scripts/net-dns-monitor-service` -- installs and controls the supervised LaunchAgent; `write_plist` generates it
+- `scripts/appstore/` -- the Mac App Store build, icon and sandbox probe; see `docs/APP_STORE_SUBMISSION.md`
+- `router/`, `dnsmasq/`, `unbound/` -- the separate `router/` stack; see `router/docs/ROUTER.md`
 - `setup.py` -- py2app build spec (run `python setup.py py2app`; output at `dist/Net-DNS-Monitor.app`, gitignored)
+- `constraints.txt` -- exact versions for every transitive dependency; pass it with `-c`
 
 ## Honest scope / known limitations
 
@@ -927,10 +1007,11 @@ tested separately, on its own). The rest needs a real macOS run loop.
 - Cannot fix an ISP outage, a misconfigured upstream DNS server, or a
   captive portal -- those need a human. The diagnostic report is the
   primary deliverable for most real incidents, not a fallback.
-- Repairs needing elevated privilege (renewing a DHCP lease, toggling a
-  network interface) are stubbed as `NEEDS_PRIVILEGE` rather than executed,
-  since a sandboxed menu-bar app doesn't have the rights to do them. Adding
-  a proper `SMAppService` privileged helper would remove this limitation.
+- Renewing a DHCP lease needs root. It runs only after the user installs the
+  sudoers grant (see [Permissions](#permissions)); without the grant it reports
+  `NEEDS_PRIVILEGE` and runs nothing. The grant has not been exercised on a live
+  machine; only fakes cover it. Toggling a network interface is never automated
+  and reports `NOT_AUTOMATED`.
 - The resolution monitor's stall list is seeded from records the app wrote
   itself, which were originally produced by a regex over raw `log show` text
   rather than a parse of mDNSResponder's internal log schema (not stable
@@ -962,7 +1043,8 @@ population. On this machine that population is the 16k-record history left by
 the retired query-log path, which yields 91 domains.
 
 `query_log.extract_top_domains` -- which used to do the discovery -- is still
-present and still unit-tested, just not wired into `app.py`. Re-adding a
+present and still unit-tested. The resolution job does not use it; the dashboard's
+**Prewarm DNS** button does. Re-adding a
 discovery pass to `build_resolution_job` is about a five-line change if you
 later want new stalls to be found automatically.
 

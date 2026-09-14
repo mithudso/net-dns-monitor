@@ -76,7 +76,10 @@ RESPAWN_GRACE_SECONDS=10
 # is exactly why `install` copies the bundle out to ~/Applications instead of
 # pointing launchd straight at it. Only `install` and `update` read this path,
 # and both fail with a clear message if the worktree is gone.
-SOURCE_BUNDLE="${NDM_SOURCE_BUNDLE:-$HOME/dev/net-dns-monitor/.claude/worktrees/dns-resolution-monitor/dist/Net-DNS-Monitor.app}"
+# Defaults to the dist/ build of the checkout this script lives in; the old
+# default named a retired worktree that no longer exists.
+SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+SOURCE_BUNDLE="${NDM_SOURCE_BUNDLE:-$SCRIPT_REPO/dist/Net-DNS-Monitor.app}"
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }

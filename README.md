@@ -187,13 +187,16 @@ silently, using the same authorization right — but that is a prior, not proof.
 
 ## Setup
 
-Requires Python 3.9+ (the code uses bare `list[...]`/`tuple[...]` generic
-type hints).
+Requires Python 3.13 or newer. CI tests 3.13 only, and `constraints.txt` was frozen
+from it. `scripts/start.sh` and `scripts/install.sh` refuse anything older.
+
+`./scripts/install.sh` does every step below, builds the `.app` bundle and installs
+the login LaunchAgent. To set up by hand:
 
 ```bash
-python3 -m venv .venv
+python3 -m venv .venv          # python3 must be 3.13 or newer
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 
 mkdir -p ~/.config/net-dns-monitor
 cp config.yaml ~/.config/net-dns-monitor/config.yaml
@@ -242,8 +245,8 @@ Honest limits, same shape as the escalation caveat above:
 - Notifications fire on incident *onset* only. Recovery produces no report
   (see `status.py`), so there is no "back to normal" message; the menu bar
   icon is the recovery signal.
-- Send timeouts are short (`notify_timeout_seconds`, default 5s) because this
-  runs on the UI thread at the moment the network is known to be broken.
+- Send timeouts are short (`notify_timeout_seconds`, default 5s). The send runs on
+  a worker thread, so a slow channel does not freeze the menu bar or the heartbeat.
 - A delivery failure is recorded and swallowed, never raised: a Slack outage
   must not stop the report from being saved.
 
@@ -481,8 +484,8 @@ logging configuration profile, and no amount of privilege changes it.
   gives a small always-on-top panel showing just the status dot, round-trip time
   and loss. Draggable, stays above other windows, remembers where you left it,
   and does not vanish when you switch apps. Toggle it back from the same places.
-- **A settings window** (`Cmd-,`) with a field for **every** one of the 34
-  config keys, grouped by area, and marked where a restart is needed. Saving
+- **A settings window** (`Cmd-,`) with a field for **every** config key (a test
+  enforces this), grouped by area, and marked where a restart is needed. Saving
   rewrites `config.yaml` and **does not keep its comments** -- the previous file
   is backed up as `config.yaml.bak-<timestamp>` first, and a new timestamp each
   save so repeated saves cannot eat the only commented copy.
@@ -691,11 +694,55 @@ Note that `resolution_timeout_seconds` is not enforceable per lookup:
 blocking call into the system resolver. Measured on macOS, a missing `.local`
 name took 5.01s against a 2.0 setting. The batch deadline is the real ceiling.
 
+## Router stack
+
+This repository holds two separate router implementations. They conflict: both serve
+DHCP on UDP 67 and both set `net.inet.ip.forwarding`. Which one is canonical is an
+open decision for the owner, so neither has been removed.
+
+| | App router (`netdnsmonitor/router.py`) | `router/` stack |
+|---|---|---|
+| DHCP | macOS `bootpd` | `dnsmasq` (`dnsmasq/dnsmasq.conf`) |
+| LAN | 192.168.10.0/24 by default | 192.168.4.0/24 |
+| DNS for clients | hands out 8.8.8.8 and 1.1.1.1 | `unbound` DNS-over-TLS cache on 192.168.4.1 (`unbound/`) |
+| NAT | pf anchor `com.apple/netdnsmonitor_nat` | pf anchor `com.apple/custom_nat` |
+| Starts | **Router → Start** or the router window, behind the admin dialog; never at launch | the `com.custom.router.nat` LaunchDaemon, at load and every 60s |
+| Enable | `router_enabled: true` (default `false`) | `sudo router/scripts/install_persistent_nat.sh` |
+
+The app router refuses to start or stop while
+`/Library/LaunchDaemons/com.custom.router.nat.plist` exists. Starting it would
+conflict with the `router/` stack, and its stop script sets forwarding to 0, which
+cuts off every client of that stack. `router/docs/ROUTER.md` describes the `router/`
+stack.
+
+If the NAT LaunchDaemon was installed before the installer fix, re-run
+`router/scripts/install_persistent_nat.sh` as root. The old daemon runs
+`enable_nat.sh` from the checkout, which the checkout's owner can edit, as root. The
+fixed installer copies the script to
+`/Library/PrivilegedHelperTools/net-dns-monitor/enable_nat.sh`, owned by root, and
+points the daemon there.
+
+## Mac App Store build
+
+The Mac App Store build runs in the App Sandbox and may not ask for root. It is a
+reduced edition: it has no failover switch, no privileged repairs, no unified-log
+evidence, no router, no shell console and no LaunchAgent login item.
+`netdnsmonitor/distribution.py` decides which features a build has, from the
+environment; `NETDNS_DISTRIBUTION=appstore` forces the store behaviour outside the
+sandbox. `netdnsmonitor/credentials.py` reads credentials from the Keychain after the
+environment, and `netdnsmonitor/ai_consent.py` records the explicit permission needed
+before anything goes to Anthropic.
+
+[`docs/APP_STORE_SUBMISSION.md`](docs/APP_STORE_SUBMISSION.md) is the authoritative
+guide: what was measured in the sandbox, how to build and sign, what App Store Connect
+needs, and what has not been verified.
+
 ## Tests
 
 ```bash
 source .venv/bin/activate
-python -m pytest -v
+pip install -r requirements-dev.txt -c constraints.txt   # adds pytest and ruff
+ruff check . && ruff format --check . && python -m pytest -q
 ```
 
 `docs/SCRIPTS.md` is the operator's manual for every entry point — including the
@@ -712,43 +759,59 @@ not, since that needs a real macOS event loop.
 
 ## Project layout
 
+Every module is in `netdnsmonitor/`. The list matches `ls netdnsmonitor/*.py`
+(`__init__.py` is empty); each purpose comes from the module docstring.
+
+- `ai_consent.py` -- explicit, versioned, revocable permission before incident data goes to Anthropic
+- `alert.py` -- Dock bounce + network-failed notification when the ping heartbeat fails
+- `anthropic_escalator.py` -- the Claude API call itself, on an already-redacted bundle
+- `app.py` -- the rumps menu bar shell; wires the tested modules to timers and menus
 - `classifier.py` -- network-vs-DNS-vs-healthy-vs-unclassified split
-- `flap_gate.py` -- anti-flap consecutive-count debounce
-- `ladder.py` -- the offline troubleshooting ladder definition
-- `repair_executor.py` -- dispatches ladder steps to real macOS commands
+- `cli.py` -- the single command-line entry point (`python3 -m netdnsmonitor.cli`)
+- `cli_console.py` -- the terminal REPL behind `netdns console`
+- `commands.py` -- the diagnostic command catalogue the CLI console offers, each marked if it mutates
+- `config.py` -- YAML config loading, defaults, normalisation and validation
+- `console.py` -- the GUI console's decisions: built-ins, `cd`, the guarded runner
+- `console_window.py` -- AppKit shell for the GUI console; holds no decisions
+- `credentials.py` -- the three credentials, from the environment first, then the Keychain
+- `credentials_prompt.py` -- the modal dialogs behind the menu's Credentials and Claude-permission items
+- `dashboard.py` -- the window: contents as pure data plus the AppKit view
+- `distribution.py` -- detects the Mac App Store sandbox and names the features that build cannot use
 - `dns_query.py` -- raw UDP query against a specific public resolver
-- `prober.py` -- TCP-connect reachability + DNS resolution aggregation
+- `dock_icon.py` -- draws the Dock tile as the current reading, in the status colour
+- `domain_learner.py` -- learns/validates/prunes domains from failed log lookups
+- `escalation.py` -- redaction + the escalate-or-not gate
+- `failover.py` -- executes the reorder, verifies it, persists the old order
+- `failover_policy.py` -- the pure switch/don't-switch decision + rate brakes
+- `flap_gate.py` -- anti-flap consecutive-count debounce
+- `forensic_log.py` -- down/up episode journal and per-episode write-up
+- `graphs.py` -- renders each series to an NSImage (pixel-testable)
+- `history.py` -- bounded rolling sample history behind the graphs
+- `interface_probe.py` -- reachability forced out of a named interface
+- `ladder.py` -- the offline troubleshooting ladder definition
+- `localize.py` -- the decision matrix that turns an outage into a place to look
+- `log_watcher.py` -- `log show` excerpt of DNS/network errors for the incident report
+- `mini_window.py` -- the floating always-on-top panel
+- `net_stats.py` -- interface byte counters and throughput derivation
+- `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
+- `peer_net.py` -- UDP announce/probe/pong and the listener thread
+- `peers.py` -- peer registry, recency buckets, and the file record
 - `ping.py` -- one-shot ICMP ping with round-trip-time parsing
 - `ping_monitor.py` -- loss window + the edge-triggered alert decision
-- `net_stats.py` -- interface byte counters and throughput derivation
-- `alert.py` -- Dock bounce + network-failed notification
-- `forensic_log.py` -- down/up episode journal and per-episode write-up
-- `peers.py` -- peer registry, recency buckets, and the file record
-- `peer_net.py` -- UDP announce/probe/pong and the listener thread
-- `dashboard.py` -- the window: contents as pure data plus the AppKit view
-- `history.py` -- bounded rolling sample history behind the graphs
-- `graphs.py` -- renders each series to an NSImage (pixel-testable)
-- `localize.py` -- the decision matrix that turns an outage into a place to look
-- `mini_window.py` -- the floating always-on-top panel
-- `settings_window.py` -- a field per config key, and the safe save
-- `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
-- `stall_log.py` -- selects every ever-stalled domain from the resolution log
-- `query_log.py` -- `log show` reading + top-queried-domain extraction; no longer wired into the resolution monitor (kept and still unit-tested)
-- `resolution_prober.py` -- parallel, deadline-bounded DNS resolution of a domain batch
+- `privileges.py` -- the narrow sudoers grant, its revoke, and reading back what is granted
+- `prober.py` -- TCP-connect reachability + DNS resolution aggregation
+- `query_log.py` -- `log show` reading + top-queried-domain extraction; used by Prewarm DNS, not by the resolution monitor
+- `repair_executor.py` -- dispatches ladder steps to real macOS commands
+- `report.py` -- incident report schema and its Markdown rendering
+- `report_storage.py` -- writes each report to disk as JSON and Markdown
 - `resolution_log.py` -- JSONL append for resolution-monitor findings
-- `escalation.py` -- redaction + the escalate-or-not gate
-- `service_order.py` -- parses/reorders the macOS network service list
-- `interface_probe.py` -- reachability forced out of a named interface
-- `failover_policy.py` -- the pure switch/don't-switch decision + rate brakes
-- `failover.py` -- executes the reorder, verifies it, persists the old order
-- `domain_learner.py` -- learns/validates/prunes domains from failed log lookups
-- `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
-- `anthropic_escalator.py` -- the Claude API call itself
-- `report.py` / `report_storage.py` -- incident report schema + persistence
+- `resolution_prober.py` -- parallel, deadline-bounded DNS resolution of a domain batch
+- `router.py` -- the app's router mode: bootpd DHCP plus pf NAT, behind the admin dialog
+- `router_window.py` -- the Router Management Console window
+- `service_order.py` -- parses the macOS network service list and guards every new order
+- `settings_window.py` -- a field per config key, and the safe save
+- `stall_log.py` -- selects every ever-stalled domain from the resolution log
+- `state_machine.py` -- orchestrates detect, classify, ladder, recheck, escalate and report
 - `status.py` -- menu bar title/stats-segment logic + the console's `:status` text
-- `console.py` -- the console's decisions: built-ins, `cd`, the guarded runner
-- `console_window.py` -- AppKit shell for the console; holds no decisions
-- `dock_icon.py` -- draws the Dock tile as the current reading
-- `state_machine.py` -- orchestrates all of the above
-- `config.py` -- YAML config loading with defaults
-- `app.py` -- the rumps menu bar shell
+- `system_log.py` -- reads the unified log for the dashboard's system log pane
+- `throughput.py` -- bounded download forced out of one interface, to rank backups

@@ -215,7 +215,7 @@ DEFAULT_CONFIG = {
     # from an interface-bound socket.
     # What the interface prober aims at, when that must differ from
     # `external_targets`. Empty means "use external_targets". See
-    # app.failover_probe_targets for why the two are separable.
+    # failover.failover_probe_targets for why the two are separable.
     "failover_probe_targets": [],
     # One deadline is spent across ALL failover probe targets, so the budget is
     # a function of how many are listed. 0 means "use probe_timeout_seconds".
@@ -245,7 +245,8 @@ DEFAULT_CONFIG = {
     "failover_state_path": ("~/Library/Application Support/net-dns-monitor/failover.json"),
     # --- in-app router (NAT + DHCP) ----------------------------------------
     # Off by default. When on, App.__init__ builds netdnsmonitor/router.py's
-    # Router from these and starts it with administrator rights. That router
+    # Router from these but never starts it; Router > Start (or the router
+    # window) starts it with administrator rights. That router
     # and the standalone router/ stack both rewrite pf NAT rules and serve DHCP
     # on the LAN interface, so they conflict: run one or the other, never both.
     # The values match the fallbacks app.py used before these keys existed.

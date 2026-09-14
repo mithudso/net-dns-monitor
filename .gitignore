@@ -18,3 +18,12 @@ dist/
 net-dns-monitor.log
 .chroma_db/
 *.old
+# Local credentials. .env.example documents the names; real values never enter git.
+.env
+# Session memory written by local tooling.
+.remember/
+# Apple signing material must never be committed.
+*.p8
+*.provisionprofile
+*.p12
+*.cer

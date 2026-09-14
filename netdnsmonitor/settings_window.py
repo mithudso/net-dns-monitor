@@ -199,7 +199,7 @@ GROUPS = [
         # rewrite pf NAT rules and run DHCP on the LAN interface.
         "Router (not with the router/ stack)",
         [
-            ("router_enabled", "Share connection at launch (admin)", "bool"),
+            ("router_enabled", "Enable Router menu (bootpd; admin)", "bool"),
             ("wan_interface", "Upstream interface (e.g. en3)", "str"),
             ("lan_interface", "LAN interface (e.g. en0)", "str"),
             ("lan_ip", "LAN address", "str"),
@@ -285,8 +285,9 @@ NEEDS_RESTART = {
     "failover_speedtest_port",
     "failover_speedtest_timeout_seconds",
     "failover_speedtest_max_bytes",
-    # The Router is built and started once in App.__init__. The router window
-    # changes the live Router object; this window only changes the file.
+    # The Router is built once in App.__init__ but never started there: only
+    # Router > Start or the router window starts it. That object is built from
+    # these keys at launch, so a change here needs a restart to reach it.
     "router_enabled",
     "wan_interface",
     "lan_interface",
