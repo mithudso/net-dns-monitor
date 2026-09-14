@@ -1223,3 +1223,40 @@ def test_a_failed_save_leaves_the_previous_record_loadable(tmp_path, monkeypatch
 def test_default_run_takes_a_timeout_and_fails_as_data():
     result = default_run(["/nonexistent/networksetup-does-not-exist"], timeout=1)
     assert result.returncode == 1
+
+
+def test_default_run_decodes_utf8_whatever_the_process_locale(monkeypatch):
+    """An app launched from Finder has no LANG, so text=True alone decoded with
+    US-ASCII and a service named "Thunderbolt-Brücke" raised on every tick.
+    surrogateescape, not replace, so a name that is not valid UTF-8 still
+    round-trips byte for byte into the -ordernetworkservices argv.
+    """
+    import netdnsmonitor.failover as failover_module
+
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="(1) Thunderbolt-Brücke\n", stderr="")
+
+    monkeypatch.setattr(failover_module.subprocess, "run", fake_run)
+
+    result = default_run(["networksetup", "-listnetworkserviceorder"])
+
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "surrogateescape"
+    assert result.stdout == "(1) Thunderbolt-Brücke\n"
+
+
+def test_default_run_turns_a_decode_error_into_a_failed_result(monkeypatch):
+    import netdnsmonitor.failover as failover_module
+
+    def fake_run(args, **kwargs):
+        raise UnicodeDecodeError("ascii", b"\xc3\xbc", 0, 1, "ordinal not in range(128)")
+
+    monkeypatch.setattr(failover_module.subprocess, "run", fake_run)
+
+    result = default_run(["networksetup", "-listnetworkserviceorder"])
+
+    assert result.returncode == 1
+    assert result.stdout == ""

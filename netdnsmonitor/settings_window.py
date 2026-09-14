@@ -537,7 +537,21 @@ def _same(before, after) -> bool:
     return before == after or (before in (None, "") and after in (None, ""))
 
 
-def restart_note(updates: dict, previous: Optional[dict] = None) -> str:
+# How each build restarts. The store build ships no service script, so naming
+# it there sends someone after a command that does not exist.
+SERVICE_RESTART_HINT = "Run: net-dns-monitor-service restart"
+STORE_RESTART_HINT = "Quit and reopen Net-DNS-Monitor."
+
+# Where the direct build keeps its config. The store build's is inside its
+# sandbox container, so the app passes the real path there instead.
+DEFAULT_CONFIG_PATH_DISPLAY = "~/.config/net-dns-monitor/config.yaml"
+
+
+def restart_note(
+    updates: dict,
+    previous: Optional[dict] = None,
+    restart_hint: str = SERVICE_RESTART_HINT,
+) -> str:
     """Which of these need a restart, in words for the window.
 
     The window sends every field, so `updates` alone names every restart-only key
@@ -553,7 +567,23 @@ def restart_note(updates: dict, previous: Optional[dict] = None) -> str:
     return (
         "Saved. These need a restart to take effect "
         f"({len(pending)}): {', '.join(pending)}.\n"
-        "Run: net-dns-monitor-service restart"
+        f"{restart_hint}"
+    )
+
+
+def settings_notice(
+    config_path_display: str = DEFAULT_CONFIG_PATH_DISPLAY,
+    restart_hint: str = SERVICE_RESTART_HINT,
+) -> str:
+    """The warning above the fields. The path gets a line of its own: a sandbox
+    container path is longer than the label is wide.
+    """
+    name = os.path.basename(config_path_display) or "config.yaml"
+    return (
+        "Saving rewrites this file and does not keep its comments:\n"
+        f"{config_path_display}\n"
+        f"The previous file is backed up as {name}.bak-<timestamp>.\n"
+        f"Most changes need a restart. {restart_hint}"
     )
 
 
@@ -564,13 +594,21 @@ ROW_HEIGHT = 26
 LABEL_WIDTH = 300
 FIELD_WIDTH = 210
 GROUP_GAP = 24
-CHROME_HEIGHT = 132
+# Room for the notice's path line to wrap once: a sandbox container path runs
+# past the width of the window.
+NOTICE_HEIGHT = 70
+CHROME_HEIGHT = 76 + NOTICE_HEIGHT
 
 
 class SettingsWindow:
     """A field per option, in a scrolling list. Retained by App, like the others."""
 
-    def __init__(self, on_save: Callable[[dict], str]):
+    def __init__(
+        self,
+        on_save: Callable[[dict], str],
+        config_path_display: Optional[str] = None,
+        restart_hint: Optional[str] = None,
+    ):
         import AppKit
 
         from netdnsmonitor.dashboard import _label, _make_button_target
@@ -600,10 +638,11 @@ class SettingsWindow:
         # the comments are already gone.
         self.notice = _label(
             AppKit,
-            AppKit.NSMakeRect(16, visible_height + 62, WINDOW_WIDTH - 32, 56),
-            "Saving rewrites ~/.config/net-dns-monitor/config.yaml and does not keep its\n"
-            "comments. The previous file is backed up as config.yaml.bak-<timestamp>.\n"
-            "Most changes need: net-dns-monitor-service restart",
+            AppKit.NSMakeRect(16, visible_height + 62, WINDOW_WIDTH - 32, NOTICE_HEIGHT),
+            settings_notice(
+                config_path_display or DEFAULT_CONFIG_PATH_DISPLAY,
+                restart_hint or SERVICE_RESTART_HINT,
+            ),
             9.5,
         )
         outer.addSubview_(self.notice)

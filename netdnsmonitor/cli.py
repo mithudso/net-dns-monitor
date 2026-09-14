@@ -19,6 +19,8 @@ import subprocess
 import sys
 from typing import Callable, Optional
 
+import yaml
+
 from netdnsmonitor import privileges
 from netdnsmonitor.classifier import classify
 from netdnsmonitor.commands import BY_KEY, CATALOG, missing_placeholder, resolve
@@ -345,9 +347,11 @@ def cmd_failover(args, config, out, context: Optional[tuple] = None) -> int:
     target = BACKUP if args.action == "backup" else PREFERRED
     outcome = failover.switch_now(target, service=args.service)
     out(outcome)
-    # `no switch:` means the machine is already where it was asked to be. The
-    # outcome text still says so; the exit code must not call it an error.
-    return 0 if outcome.startswith(("ok:", "no switch:")) else 1
+    # Only `no switch: already on` means the machine is where it was asked to
+    # be, and that is not an error. Every other `no switch:` is a refusal (a
+    # third service at the head of the order, a switch already in progress),
+    # so `netdns failover preferred && ...` must not carry on as if it worked.
+    return 0 if outcome.startswith(("ok:", "no switch: already on")) else 1
 
 
 def cmd_priority(args, config, out) -> int:
@@ -546,7 +550,14 @@ def main(
     load_config_fn: Callable[[str], dict] = load_config,
 ) -> int:
     args = build_parser().parse_args(argv)
-    config = load_config_fn(os.path.expanduser(args.config))
+    # A config the loader refuses is the user's to fix, so it gets one line and
+    # exit 2, not a traceback. ConfigError and a non-UTF-8 file are ValueErrors;
+    # a YAML syntax error is not.
+    try:
+        config = load_config_fn(os.path.expanduser(args.config))
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
     try:
         return args.func(args, config, out)
     except KeyboardInterrupt:

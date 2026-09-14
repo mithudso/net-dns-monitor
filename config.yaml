@@ -380,9 +380,10 @@ failover_probe_targets: []
 failover_probe_timeout_seconds: 0
 
 # --- In-app router (NAT + DHCP) ---------------------------------------------
-# Off by default. When on, the app shares its upstream connection: at launch it
-# addresses lan_interface, turns on IP forwarding, loads a pf NAT rule, and
-# serves DHCP from dhcp_start to dhcp_end, all with administrator rights.
+# Off by default. When on, the Router menu and router window can start it;
+# starting it addresses lan_interface, turns on IP forwarding, loads a pf NAT
+# rule and serves DHCP from dhcp_start to dhcp_end, with administrator rights.
+# Nothing starts at launch.
 #
 # CONFLICT: this in-app router and the standalone stack in the repo's router/
 # directory both rewrite pf NAT rules and run DHCP on the LAN interface. Run one

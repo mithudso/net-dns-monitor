@@ -139,8 +139,15 @@ def _connect_bound(
     A literal of a family the interface cannot route fails here, and the next
     literal gets what is left of the budget instead of the whole measurement
     reporting the interface as unmeasurable.
+
+    Each connect is armed with a *slice* of the budget, not all of it. A family
+    with no route may blackhole rather than refuse, and a connect armed with the
+    whole budget then spends every second of it, so the literal after it is
+    never tried. Each slice is what is left over the literals still to try, so
+    time a fast refusal leaves unspent goes to the literals after it. This is
+    the same slicing interface_probe uses, for the same reason.
     """
-    for literal in addresses:
+    for i, literal in enumerate(addresses):
         left = remaining()
         if left <= 0:
             return None
@@ -152,7 +159,7 @@ def _connect_bound(
         try:
             sock = socket_factory(family, socket.SOCK_STREAM)
             sock.setsockopt(level, option, index)
-            sock.settimeout(left)
+            sock.settimeout(left / (len(addresses) - i))
             sock.connect((literal, port))
             return sock
         except OSError:

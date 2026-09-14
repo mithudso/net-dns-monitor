@@ -82,9 +82,9 @@ python3 -m netdnsmonitor.cli failover preferred                 # back to the re
 
 | Exit code | Meaning |
 |---|---|
-| 0 | `status` printed, or the outcome starts with `ok:` or `no switch:`. `status` also exits 0 when it prints `Failover: could not read the network service order`. |
-| 1 | The outcome starts with `failed:` or `NEEDS_PRIVILEGE:`. Also an uncaught `ConfigError` from loading the config, which prints a traceback. |
-| 2 | Failover is not configured (`Failover: not configured ...`), or argparse rejected the command line. |
+| 0 | `status` printed, or the outcome starts with `ok:` or `no switch: already on`. `status` also exits 0 when it prints `Failover: could not read the network service order`. |
+| 1 | The outcome starts with `failed:` or `NEEDS_PRIVILEGE:`, or it is any other `no switch:`: a third service is at the head of the order, or another switch attempt is already in progress. |
+| 2 | Failover is not configured (`Failover: not configured ...`), the config file could not be loaded (`config error: ...` on stderr), or argparse rejected the command line. |
 | 130 | Interrupted with Ctrl-C. |
 
 ### From the menu bar

@@ -795,6 +795,65 @@ def test_remove_saved_credentials_asks_then_deletes_all_three(tmp_path):
     assert app.notes == [(CREDENTIALS_MENU, outcome)]
 
 
+# --- last report ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("capabilities", [STORE, DIRECT])
+def test_open_last_report_is_clickable_in_both_builds(tmp_path, capabilities):
+    """A bare title with no callback and no `@rumps.clicked` is drawn greyed out."""
+    app = build_app(tmp_path, capabilities=capabilities)
+    register_clicked_handlers(app)
+    assert app.menu["Open last report"].callback == app.open_last_report
+
+
+def test_open_last_report_hands_an_encoded_file_url_to_the_url_opener(tmp_path, monkeypatch):
+    monkeypatch.setattr("webbrowser.open", refuse("webbrowser.open"))
+    opened = []
+    app = build_app(tmp_path, url_opener=lambda url: opened.append(url) or True)
+    report = tmp_path / "Application Support" / "incident report.md"
+    app.last_report_path = str(report)
+
+    app.menu["Open last report"].callback(None)
+
+    assert opened == [report.as_uri()]
+    assert opened[0].startswith("file:///") and "%20" in opened[0] and " " not in opened[0]
+    assert app.notes == []
+
+
+def test_a_last_report_that_does_not_open_says_so(tmp_path):
+    app = build_app(tmp_path, url_opener=lambda url: False)
+    app.last_report_path = str(tmp_path / "report.md")
+
+    outcome = app.open_last_report(None)
+
+    assert outcome == f"failed: could not open {app.last_report_path}"
+    assert app.notes == [("Last report", outcome)]
+
+
+def test_an_opener_that_raises_is_reported_by_class_name_only(tmp_path):
+    def opener(url):
+        raise RuntimeError("NSWorkspace said something about /private/secret-path")
+
+    app = build_app(tmp_path, url_opener=opener)
+    app.last_report_path = str(tmp_path / "report.md")
+
+    outcome = app.open_last_report(None)
+
+    assert outcome == f"failed: could not open {app.last_report_path} (RuntimeError)"
+    assert app.notes == [("Last report", outcome)]
+    assert "secret-path" not in repr(app.notes)
+
+
+def test_open_last_report_before_any_report_says_so_and_opens_nothing(tmp_path):
+    app = build_app(tmp_path)  # the default opener here fails the test if called
+    app.last_report_path = None
+
+    outcome = app.open_last_report(None)
+
+    assert app.notes == [("Last report", "No report has been generated yet.")]
+    assert outcome == "No report has been generated yet."
+
+
 # --- privacy policy ------------------------------------------------------------
 
 

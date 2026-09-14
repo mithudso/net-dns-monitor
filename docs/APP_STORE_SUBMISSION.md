@@ -54,7 +54,7 @@ notarization (§10). Both can coexist.
 - `scripts/appstore/build_appstore.py` builds, fixes and signs the bundle, then packages it:
   - rebuilds py2app's launcher against the current SDK;
   - strips the `itms-services` string that App Review has rejected in bundled Python ([cpython#120522](https://github.com/python/cpython/issues/120522));
-  - refuses any link to a library outside the bundle or the OS;
+  - deletes rpaths that point outside the bundle, and refuses any link to a library outside the bundle or the OS;
   - sets the minimum macOS version from the bundled binaries;
   - signs inside-out, verifies, and runs `productbuild`.
 - `scripts/appstore/make_icon.py` generates a placeholder ICNS with the 512 and 512@2x sizes App Store Connect requires.
@@ -244,7 +244,7 @@ real time" ([definition](https://developer.apple.com/app-store/app-privacy-detai
 **Decision for you.** Two defensible answers:
 
 1. **Conservative (recommended).** Data Types → **Diagnostics → Other Diagnostic Data** and **Other Data → Other Data Types**. For each: **Not linked** to the user's identity, **not used for tracking**, purpose **App Functionality**.
-2. **Data Not Collected.** Defensible because every destination is a service the user configures and pays for, and nothing reaches the publisher. It is weaker if a reviewer treats Anthropic as a third-party partner of the app.
+2. **Data Not Collected.** Defensible because nothing reaches the publisher, and the only destinations that receive incident content are services the user configures (Anthropic, Slack, email). It is weaker if a reviewer treats Anthropic as a third-party partner of the app. Note that the default connectivity checks (1.1.1.1, 8.8.8.8, a DNS lookup of api.anthropic.com) and the on-by-default LAN peer announcement run without configuration; they carry no incident content, and the privacy policy discloses both.
 
 Slack and email alerts go to destinations the user controls. They are
 disclosed in the privacy policy either way.
@@ -363,7 +363,7 @@ you can reply without a new build when a note is enough.
 | 2.5.2: bundled Python flagged for `itms-services` | Mitigated | Build strips and scans for it |
 | 2.5.2: bundled interpreter treated as executing code | Unverified; no Apple text either way | Review notes state all code ships in the bundle and nothing is downloaded |
 | 5.1.2(i): third-party AI without permission | Mitigated | Versioned consent gate, disclosure dialog, revoke menu |
-| 5.1.1(i): privacy policy link inside the app | Menu item pending in the store build | Point it at the hosted policy |
+| 5.1.1(i): privacy policy link inside the app | Mitigated | The store build's Privacy Policy menu item opens the bundled `NDMPrivacyPolicyURL`; release builds refuse to run without `--privacy-policy-url` |
 | 2.4.5(viii): deprecated technologies | Risk | `rumps` posts notifications with `NSUserNotificationCenter`, deprecated since macOS 11; `alert.py` falls back to `osascript`. Neither has been tested sandboxed. If review objects, move to `UNUserNotificationCenter`, which needs a new dependency (`pyobjc-framework-UserNotifications`). |
 | 4.2: minimum functionality | Low | Native menu bar utility with a real window |
 | Icon quality | Placeholder | Replace `make_icon.py` output with a designed icon before release |

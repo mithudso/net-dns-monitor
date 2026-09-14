@@ -13,6 +13,7 @@ SCRIPTS = ROOT / "router" / "scripts"
 INSTALL = SCRIPTS / "install_persistent_nat.sh"
 TEST_ROUTER = SCRIPTS / "test_router.sh"
 UNBOUND_INSTALL = ROOT / "unbound" / "install.sh"
+SERVICE = ROOT / "scripts" / "net-dns-monitor-service"
 
 
 def _code_lines(path):
@@ -89,14 +90,54 @@ def test_bridge100_is_a_warning_not_a_failure():
     assert "warn " in bridge and "fail " not in bridge
 
 
-def test_unbound_install_validates_sources_before_copying_and_backs_up():
+def test_the_bootpd_check_reads_the_launchd_job_not_the_process_list():
+    """bootpd is socket-activated: launchd holds UDP 67 while the job is loaded
+    and no bootpd process exists until a request arrives.
+    """
+    code = _code_lines(TEST_ROUTER)
+    assert "pgrep -q bootpd" not in code
+    block = code[code.index("launchctl print system/com.apple.bootpd") :]
+    block = re.split(r"\bfi\b", block, maxsplit=1)[0]
+    loaded, _, not_loaded = block.partition("else")
+    assert "fail " in loaded and "UDP 67" in loaded
+    assert "pass " in not_loaded
+
+
+def _function(code, name):
+    match = re.search(rf"^{name}\(\) \{{\n(.*?)^\}}", code, re.MULTILINE | re.DOTALL)
+    assert match, f"no {name}() function"
+    return match.group(1)
+
+
+def test_unbound_install_validates_sources_before_deploying_and_backs_up():
     code = _code_lines(UNBOUND_INSTALL)
     assert "set -euo pipefail" in code
     check = code.index('unbound-checkconf "$UNBOUND_SRC"')
     test = code.index('dnsmasq --test -C "$DNSMASQ_SRC"')
-    first_copy = code.index('cp "$UNBOUND_SRC"')
-    assert check < first_copy and test < first_copy
-    assert code.index('backup "$UNBOUND_CONF_DIR/unbound.conf"') < first_copy
+    first_deploy = code.index('deploy "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"')
+    assert check < first_deploy and test < first_deploy
+    assert code.index('deploy "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"') > first_deploy
+    deploy = _function(code, "deploy")
+    assert deploy.index('backup "$dst"') < deploy.index('cp "$src" "$dst"')
+    # The only config copy is the guarded one inside deploy().
+    assert re.findall(r'\bcp "', code) == ['cp "']
+
+
+def test_unbound_install_never_copies_through_a_symlink():
+    """On a machine whose deployed configs are links into a checkout, `cp`
+    rewrote that checkout's tracked file, or failed on "are identical" after
+    the backup when run from that same checkout.
+    """
+    code = _code_lines(UNBOUND_INSTALL)
+    deploy = _function(code, "deploy")
+    copy = deploy.index('cp "$src" "$dst"')
+    assert deploy.index('"$src" -ef "$dst"') < copy
+    refuse = _function(code, "refuse_foreign_link")
+    assert '-L "$dst"' in refuse and 'readlink "$dst"' in refuse and "exit 1" in refuse
+    # Both destinations are checked before either file is replaced.
+    first_deploy = code.index('deploy "$UNBOUND_SRC"')
+    assert code.index('refuse_foreign_link "$UNBOUND_SRC"') < first_deploy
+    assert code.index('refuse_foreign_link "$DNSMASQ_SRC"') < first_deploy
 
 
 def test_unbound_install_only_claims_success_after_dnsmasq_holds_udp_67():
@@ -104,3 +145,27 @@ def test_unbound_install_only_claims_success_after_dnsmasq_holds_udp_67():
     verify = code.index("lsof -nP -iUDP:67")
     assert verify < code.index("ARCHITECTURE DEPLOYED")
     assert "exit 1" in code[verify : code.index("ARCHITECTURE DEPLOYED")]
+
+
+# --- scripts/net-dns-monitor-service ------------------------------------------
+
+
+def test_the_service_script_remembers_the_bundle_it_installed_from():
+    """Installed at ~/.local/bin, the script's own directory says nothing about
+    where the build lives, so `update` has to reuse the recorded path.
+    """
+    code = _code_lines(SERVICE)
+    assert 'SOURCE_BUNDLE_RECORD="$SUPPORT_DIR/source-bundle"' in code
+    env = code.index('if [ -n "${NDM_SOURCE_BUNDLE:-}" ]')
+    recorded = code.index('head -n 1 "$SOURCE_BUNDLE_RECORD"')
+    checkout = code.index('SOURCE_BUNDLE="$SCRIPT_REPO/dist/Net-DNS-Monitor.app"')
+    assert env < recorded < checkout
+    record = _function(code, "record_source_bundle")
+    assert '> "$SOURCE_BUNDLE_RECORD"' in record
+    for command in ("cmd_install", "cmd_update"):
+        body = _function(code, command)
+        assert body.index("replace_installed_bundle") < body.index("record_source_bundle")
+
+
+def test_the_service_script_no_longer_names_the_retired_worktree():
+    assert "worktrees/dns-resolution-monitor" not in SERVICE.read_text(encoding="utf-8")

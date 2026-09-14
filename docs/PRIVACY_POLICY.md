@@ -18,8 +18,9 @@ work out what is wrong when it breaks. The publisher does not receive,
 collect, sell or track any of your data. The app has no analytics, no
 advertising and no account.
 
-Data leaves your Mac only in the cases below, and only to services you
-configure yourself.
+Data leaves your Mac only in the cases below. Some happen with the default
+settings: the connectivity checks and the announcement to nearby copies of
+the app. The rest happen only after you configure them.
 
 ## What stays on your Mac
 
@@ -75,19 +76,20 @@ the outcome of any repair step, the Claude diagnosis if one was made, and the
 file path of the local report. The report path includes your macOS account
 name. Slack's or your email provider's privacy terms govern that delivery.
 
-## Nearby copies of the app (optional)
+## Nearby copies of the app (on by default)
 
-If peer discovery is on, the app announces itself on your local network so
-other copies of Net-DNS-Monitor on the same network can compare results.
-The announcement contains:
+Peer discovery is on by default. The app announces itself on your local
+network so other copies of Net-DNS-Monitor on the same network can compare
+results. The announcement stays on your local network and is not sent to the
+internet. It contains:
 
 - this Mac's name;
 - the app's status;
 - whether this Mac can currently reach the internet and resolve DNS.
 
 The app accepts these announcements only from addresses on the same local
-subnet, and it does not authenticate them. You can turn peer discovery off in
-Settings.
+subnet, and it does not authenticate them. To stop announcing, turn peer
+discovery off in Settings and restart the app.
 
 ## Children
 

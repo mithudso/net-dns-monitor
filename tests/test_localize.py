@@ -6,6 +6,8 @@ these is not that the happy path works -- it is that the verdict is *specific*
 and that the module refuses to guess when the evidence does not support one.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from netdnsmonitor.localize import (
@@ -17,6 +19,7 @@ from netdnsmonitor.localize import (
     UPSTREAM_OUTAGE,
     localize,
 )
+from netdnsmonitor.peers import PeerRegistry
 
 
 def peer(answered=True, external=None, dns=None, host="mac-b"):
@@ -305,10 +308,46 @@ def test_peers_that_do_not_report_whether_they_answered_yield_no_verdict():
     assert "localization_view" in result["reason"]
 
 
-def test_an_explicitly_silent_peer_still_gives_the_high_confidence_verdict():
+def test_an_explicitly_silent_peer_still_points_at_this_machine():
     """The fix must not cost the real signal: a peer that genuinely did not answer
-    is still the strongest evidence that our own link is the problem.
+    is still evidence that our own link is the problem. One silent peer is only
+    medium confidence, though -- see the next test.
     """
     result = localize(our_external_reachable=False, our_dns_ok=None, peers=[peer(answered=False)])
     assert result["verdict"] == LOCAL_MACHINE
+    assert result["confidence"] == "medium"
+    assert "asleep or switched off" in result["reason"]
+
+
+def test_a_lone_peer_that_went_quiet_is_not_a_high_confidence_verdict():
+    """A peer that announced a few minutes ago and then had its lid closed is
+    still in the `current` window, so it reads as silent. During an ISP outage
+    that one sleeping laptop used to produce "this machine" at HIGH confidence --
+    a confident wrong diagnosis. One silence cannot tell "our link died" from
+    "that machine went to sleep".
+    """
+    clock = {"now": datetime(2026, 8, 4, 12, 0, 0, tzinfo=timezone.utc)}
+    reg = PeerRegistry(self_id="me", current_seconds=600, clock=lambda: clock["now"])
+    reg.observe("laptop", host="mac-b", address="192.168.1.5")
+    clock["now"] += timedelta(seconds=280)
+
+    result = localize(False, False, reg.localization_view(fresh_seconds=15))
+
+    assert result["evidence"]["peers_asked"] == 1
+    assert result["verdict"] == LOCAL_MACHINE
+    assert result["confidence"] != "high"
+    assert "asleep or switched off" in result["reason"]
+
+
+def test_two_silent_peers_keep_the_high_confidence_verdict():
+    """Two machines going quiet at the same moment as our connectivity is much
+    less likely to be coincidental sleep, so the strong signal stands.
+    """
+    result = localize(
+        our_external_reachable=False,
+        our_dns_ok=None,
+        peers=[peer(answered=False, host="mac-b"), peer(answered=False, host="mac-c")],
+    )
+    assert result["verdict"] == LOCAL_MACHINE
     assert result["confidence"] == "high"
+    assert "asleep or switched off" not in result["reason"]

@@ -9,6 +9,7 @@ so the defaults cannot reach real user data, but pointing it explicitly is what
 lets these assert against the documents on disk.
 """
 
+import pathlib
 import threading
 import time
 
@@ -40,7 +41,7 @@ class FakeStateMachine:
         self.flap_gate = FakeFlapGate(flap_state, consecutive_failures)
         self._report = report
         self.prober = lambda: {"external_reachable": True, "dns_ok": False}
-        self.repair_executor = lambda step: f"ran {step.name}"
+        self.repair_executor = lambda step, classification=None: f"ran {step.name}"
         # The two attributes the manual steps read off the real StateMachine.
         self.lock = threading.RLock()
         self.failover_classifications = failover_classifications
@@ -295,6 +296,47 @@ def test_full_diagnosis_uses_the_configured_failover_classifications(tmp_path):
 
     assert "switch_to_backup_network" not in diagnose(frozenset())
     assert "switch_to_backup_network" in diagnose(frozenset({"network"}))
+
+
+def test_full_diagnosis_tells_the_executor_what_it_is_responding_to(tmp_path):
+    """The failover step refuses a classification it was not configured for. With
+    no classification passed, the executor assumed "network", so a DNS fault on a
+    DNS-only failover config reported that "network" was not a trigger.
+    """
+    app = make_app(tmp_path, FakeStateMachine(failover_classifications=frozenset({"dns"})))
+    app.state_machine.prober = lambda: {"external_reachable": True, "dns_ok": False}
+    app.state_machine.repair_executor = lambda step, classification=None: (
+        f"ran {step.name} for {classification}"
+    )
+    output = []
+    app._append_output = output.append
+
+    app.handle_dashboard_action("full_diagnosis")
+    app._action_thread.join(timeout=5)
+    app.ui_tick()
+
+    text = "".join(output)
+    assert "ran switch_to_backup_network for dns" in text
+    assert "ran flush_dns_cache for dns" in text
+    assert "for None" not in text
+
+
+def test_the_dashboards_open_last_report_goes_through_the_url_opener(tmp_path, monkeypatch):
+    """`webbrowser` pipes an AppleScript into osascript, which the store build
+    may not send, and it ran on the run loop with its result ignored.
+    """
+    monkeypatch.setattr(
+        "webbrowser.open", lambda *a, **k: pytest.fail("webbrowser.open must not be used")
+    )
+    app = make_app(tmp_path)
+    opened = []
+    app.url_opener = lambda url: opened.append(url) or True
+    app.last_report_path = str(tmp_path / "Application Support" / "incident report.md")
+
+    app.handle_dashboard_action("open_last_report")
+
+    assert opened == [pathlib.Path(app.last_report_path).as_uri()]
+    assert app._action_thread is None
 
 
 def _secondary_ids():

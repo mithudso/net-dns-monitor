@@ -83,12 +83,10 @@ def make_escalator(
                 messages=[{"role": "user", "content": prompt}],
                 timeout=timeout,
             )
-            # Inside the try on purpose. This indexing can raise on its own --
-            # an empty `content` list gives IndexError, a non-text first block
-            # gives AttributeError -- and outside the guard that propagated
-            # through state_machine (which has no per-step guard) and aborted
-            # the whole tick, so no incident report was written at all. That
-            # directly contradicted this function's contract below.
+            # Inside the try on purpose: an empty `content` list raises
+            # IndexError and a non-text block raises AttributeError.
+            # state_machine._escalate would contain either, but only by class
+            # name; handling it here keeps the model name in the result.
             analysis = response.content[0].text
         except Exception as exc:  # noqa: BLE001 - report the failure, never crash the pipeline
             # Class name and status code only. SDK status errors carry the

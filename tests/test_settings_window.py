@@ -15,8 +15,11 @@ import yaml
 
 from netdnsmonitor.config import DEFAULT_CONFIG, load_config
 from netdnsmonitor.settings_window import (
+    DEFAULT_CONFIG_PATH_DISPLAY,
     FIELDS,
     NEEDS_RESTART,
+    SERVICE_RESTART_HINT,
+    STORE_RESTART_HINT,
     SettingsWindow,
     backup_path,
     collect,
@@ -24,6 +27,7 @@ from netdnsmonitor.settings_window import (
     parse_field,
     restart_note,
     save_config,
+    settings_notice,
 )
 
 # --- coverage --------------------------------------------------------------
@@ -396,6 +400,27 @@ def test_changes_that_need_a_restart_are_named(tmp_path):
     assert "ping_failure_threshold" in note
 
 
+def test_the_restart_note_names_the_service_script_by_default():
+    note = restart_note({"failure_threshold": 3})
+    assert note.endswith("\n" + SERVICE_RESTART_HINT)
+    assert "net-dns-monitor-service restart" in note
+
+
+def test_the_restart_note_can_name_another_way_to_restart():
+    """The store build ships no service script, so naming it sends someone
+    looking for a command that does not exist.
+    """
+    note = restart_note({"failure_threshold": 3}, restart_hint=STORE_RESTART_HINT)
+    assert "failure_threshold" in note
+    assert note.endswith("\n" + STORE_RESTART_HINT)
+    assert "net-dns-monitor-service" not in note
+
+
+def test_an_immediate_change_names_no_way_to_restart():
+    note = restart_note({"ping_host": "1.1.1.1"}, restart_hint=STORE_RESTART_HINT)
+    assert STORE_RESTART_HINT not in note
+
+
 def test_changes_that_take_effect_immediately_say_so():
     note = restart_note({"ping_host": "1.1.1.1"})
     assert "immediately" in note
@@ -526,6 +551,52 @@ def test_the_window_warns_before_saving_not_after():
     window = SettingsWindow(on_save=lambda values: "")
     assert "comments" in window.notice.stringValue()
     assert "bak-" in window.notice.stringValue()
+    assert DEFAULT_CONFIG_PATH_DISPLAY in window.notice.stringValue()
+    assert SERVICE_RESTART_HINT in window.notice.stringValue()
+
+
+CONTAINER_CONFIG = (
+    "/Users/someone/Library/Containers/example.netdnsmonitor/Data/.config/"
+    "net-dns-monitor/config.yaml"
+)
+
+
+def test_the_notice_names_the_file_and_the_restart_it_is_given():
+    text = settings_notice(CONTAINER_CONFIG, STORE_RESTART_HINT)
+    assert CONTAINER_CONFIG in text.splitlines()
+    assert "config.yaml.bak-<timestamp>" in text
+    assert "comments" in text
+    assert STORE_RESTART_HINT in text
+    assert "~/.config" not in text
+    assert "net-dns-monitor-service" not in text
+
+
+def test_the_window_shows_the_notice_for_the_path_and_restart_it_is_given():
+    window = SettingsWindow(
+        on_save=lambda values: "",
+        config_path_display=CONTAINER_CONFIG,
+        restart_hint=STORE_RESTART_HINT,
+    )
+    assert window.notice.stringValue() == settings_notice(CONTAINER_CONFIG, STORE_RESTART_HINT)
+
+
+def test_a_container_path_notice_fits_its_label_without_clipping():
+    """A container path wraps inside the label; the label must be tall enough
+    for the wrapped text, or the restart line is the part cut off.
+    """
+    import AppKit
+
+    long_path = "/Users/a-longer-user-name" + CONTAINER_CONFIG[len("/Users/someone") :]
+    window = SettingsWindow(
+        on_save=lambda values: "",
+        config_path_display=long_path,
+        restart_hint=STORE_RESTART_HINT,
+    )
+    frame = window.notice.frame()
+    needed = window.notice.cell().cellSizeForBounds_(
+        AppKit.NSMakeRect(0, 0, frame.size.width, 10_000)
+    )
+    assert needed.height <= frame.size.height
 
 
 # --- deep-optimizer regressions --------------------------------------------

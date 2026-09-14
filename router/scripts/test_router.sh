@@ -37,10 +37,13 @@ else
 fi
 
 # 2b. Zombie DHCP (bootpd) Conflict Check
-if pgrep -q bootpd; then
-    fail "Apple's bootpd is RUNNING and hogging DHCP port 67. Dnsmasq will crash."
+# bootpd is socket-activated: while its launchd job is loaded, launchd itself
+# holds UDP 67 and no bootpd process exists until a request arrives. `pgrep`
+# therefore passed this check while dnsmasq could not bind the port.
+if launchctl print system/com.apple.bootpd >/dev/null 2>&1; then
+    fail "bootpd launchd job is loaded: launchd holds UDP 67, so dnsmasq cannot bind it."
 else
-    pass "Apple bootpd is NOT running (Port 67 is free for Dnsmasq)"
+    pass "bootpd launchd job not loaded (UDP 67 not held by launchd)"
 fi
 
 # 2c. Zombie Bridge Check

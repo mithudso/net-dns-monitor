@@ -8,14 +8,17 @@ import base64
 import plistlib
 import re
 import subprocess
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 from netdnsmonitor import router as router_module
 from netdnsmonitor.router import (
+    BUSY_MESSAGE,
     CONFLICT_MESSAGE,
     PF_ANCHOR,
+    PF_TOKEN_FILE,
     ROUTER_STACK_DAEMON,
     Router,
     bootpd_plist,
@@ -199,6 +202,37 @@ def test_stop_reports_failure_from_the_exit_code():
     assert make_router(run).stop().startswith("failed: exit 5")
 
 
+def test_a_nat_read_back_failure_is_named_from_osascripts_stderr():
+    """osascript itself exits 1 for every `do shell script` error. The script's
+    own exit code reaches the caller only inside stderr, as `(5)`.
+    """
+    run = Recorder(returncode=1, stderr="0:9: execution error: NDM_NAT_STILL_LOADED (5)\n")
+    outcome = make_router(run).stop()
+    assert outcome.startswith("failed: exit 5; ")
+    assert f"still loaded in {PF_ANCHOR}" in outcome
+    assert "NDM_NAT_STILL_LOADED" not in outcome
+
+
+def test_a_bootpd_read_back_failure_is_named_from_its_marker():
+    run = Recorder(returncode=1, stderr="0:9: execution error: NDM_BOOTPD_STILL_LOADED (6)")
+    outcome = make_router(run).stop()
+    assert outcome.startswith("failed: exit 6; ")
+    assert "bootpd launchd job is still loaded" in outcome
+
+
+def test_an_exit_code_without_a_marker_is_not_read_as_a_read_back_failure():
+    """`set -e` passes on any failing step's own code, and 5 is a common one."""
+    run = Recorder(returncode=1, stderr="0:9: execution error: sysctl: denied for sk-x (5)")
+    outcome = make_router(run).stop()
+    assert outcome == "failed: exit 5; steps before the failing one may have taken effect"
+
+
+def test_the_stop_read_backs_write_their_markers_to_stderr():
+    stop = stop_script()
+    assert "echo NDM_NAT_STILL_LOADED >&2; exit 5; fi" in stop
+    assert "echo NDM_BOOTPD_STILL_LOADED >&2; exit 6; fi" in stop
+
+
 def test_a_runner_that_cannot_start_is_a_failure_with_only_the_class_name():
     run = Recorder(raises=OSError("secret-ish detail"))
     outcome = make_router(run).start()
@@ -261,4 +295,81 @@ def test_ok_is_only_claimed_after_the_script_reads_its_changes_back():
     assert start.index("launchctl load") < start.index("launchctl print")
     assert f"pfctl -a {PF_ANCHOR} -s nat" in start
     stop = stop_script()
-    assert "then exit 5" in stop and "then exit 6" in stop
+    assert "exit 5; fi" in stop and "exit 6; fi" in stop
+
+
+def test_forwarding_is_turned_on_only_after_nat_and_bootpd_read_back():
+    """A read-back that fails under `set -e` must not leave forwarding on with
+    no NAT or DHCP behind it.
+    """
+    start = start_script(validate(**GOOD))
+    forwarding = start.index("net.inet.ip.forwarding=1")
+    assert forwarding > start.index(f"pfctl -a {PF_ANCHOR} -s nat")
+    assert forwarding > start.index("launchctl print")
+
+
+def _step(script, needle):
+    steps = [step for step in script.split("; if ") if needle in step]
+    assert len(steps) == 1, steps
+    return steps[0]
+
+
+def test_start_takes_one_pf_reference_only_when_it_holds_none():
+    """Every `pfctl -E` adds a reference; without the token check each start
+    leaked one and pf could never be released.
+    """
+    start = start_script(validate(**GOOD))
+    assert start.count("pfctl -E") == 1
+    enable = _step(start, "pfctl -E")
+    assert f"[ ! -s {PF_TOKEN_FILE} ]" in enable
+    # A token left from before a `pfctl -d` is void, so pf being off retakes one.
+    assert "! /sbin/pfctl -s info 2>/dev/null | /usr/bin/grep -q 'Status: Enabled'" in enable
+    assert enable.index("Status: Enabled") < enable.index("pfctl -E")
+    assert "s/^Token : //p" in enable
+    assert f"> {PF_TOKEN_FILE}" in enable
+    # An enable that printed no token fails the start instead of passing silently.
+    assert f"; [ -s {PF_TOKEN_FILE} ]" in start
+    assert start.index("pfctl -E") < start.index(f"; [ -s {PF_TOKEN_FILE} ]")
+
+
+def test_stop_releases_the_recorded_pf_reference_and_forgets_it():
+    stop = stop_script()
+    release = _step(stop, "pfctl -X")
+    assert f"[ -s {PF_TOKEN_FILE} ]" in release
+    assert f'/sbin/pfctl -X "$(/bin/cat {PF_TOKEN_FILE})" || true' in release
+    assert release.index("pfctl -X") < release.index(f"/bin/rm -f {PF_TOKEN_FILE}")
+
+
+def test_a_start_while_another_start_or_stop_runs_is_refused():
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def blocking_run(argv, **kwargs):
+        calls.append(argv)
+        entered.set()
+        release.wait(5)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    router = make_router(blocking_run)
+    results = []
+    worker = threading.Thread(target=lambda: results.append(router.start()))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        assert router.start() == BUSY_MESSAGE
+        assert router.stop() == BUSY_MESSAGE
+    finally:
+        release.set()
+        worker.join(5)
+    assert len(calls) == 1
+    assert results[0].startswith("ok:")
+    assert router.stop().startswith("ok:")
+
+
+def test_a_raising_runner_does_not_strand_the_lock():
+    router = make_router(Recorder(raises=RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        router.start()
+    router.run_fn = Recorder()
+    assert router.start().startswith("ok:")

@@ -29,12 +29,36 @@ backup() {
     fi
 }
 
-mkdir -p "$UNBOUND_CONF_DIR"
-backup "$UNBOUND_CONF_DIR/unbound.conf"
-cp "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"
+# `cp` onto a symlink writes through it. Where a deployed config is a link into
+# a checkout, a run from another tree rewrote that checkout's tracked file, and
+# a run from the same checkout failed on "are identical" after the backup.
+# Both destinations are checked before either file is replaced.
+refuse_foreign_link() {
+    local src="$1" dst="$2"
+    if [[ -L "$dst" ]] && ! [[ "$src" -ef "$dst" ]]; then
+        echo "ERROR: $dst is a symlink to $(readlink "$dst")." >&2
+        echo "       Copying onto it would overwrite that file. No configuration was changed." >&2
+        echo "       Remove the link or point it at $src, then re-run." >&2
+        exit 1
+    fi
+}
 
-backup "$DNSMASQ_CONF_DIR/dnsmasq.conf"
-cp "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"
+deploy() {
+    local src="$1" dst="$2"
+    if [[ "$src" -ef "$dst" ]]; then
+        echo "   $dst already resolves to $src; not copied"
+        return 0
+    fi
+    backup "$dst"
+    cp "$src" "$dst"
+}
+
+refuse_foreign_link "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"
+refuse_foreign_link "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"
+
+mkdir -p "$UNBOUND_CONF_DIR"
+deploy "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"
+deploy "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"
 
 echo "=> Clearing old PF NAT rules..."
 sudo pfctl -a com.apple/unbound_dns -F all 2>/dev/null || true

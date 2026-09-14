@@ -19,6 +19,7 @@ import os
 import plistlib
 import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -46,6 +47,11 @@ BOOTPD_PLIST = "/etc/bootpd.plist"
 BOOTPS_DAEMON = "/System/Library/LaunchDaemons/bootps.plist"
 BOOTPD_LABEL = "com.apple.bootpd"
 ROUTER_STACK_DAEMON = "/Library/LaunchDaemons/com.custom.router.nat.plist"
+# The token `pfctl -E` prints for the pf enable reference this app holds. pf
+# stays enabled while any reference is outstanding, so stop can release only
+# the one start took. /var/run is root-only and cleared at boot, which is also
+# when the kernel forgets every reference.
+PF_TOKEN_FILE = "/var/run/netdnsmonitor_pf.token"
 
 # Long enough for a human to answer the authentication dialog; the script itself
 # takes seconds. Unbounded, a caller on the main thread freezes the menu bar and
@@ -54,16 +60,23 @@ DEFAULT_TIMEOUT_SECONDS = 180.0
 
 _INTERFACE_RE = re.compile(r"[a-z]+[0-9]+")
 
-# Exit codes the stop script's read-back uses; see stop_script.
+# Markers the stop script's read-backs print to stderr before exiting 5 or 6.
+# Matched by marker, not by exit code: `set -e` exits with whatever code the
+# failing step returned, and 5 is an ordinary one (launchctl's I/O error).
 _READBACK_FAILURES = {
-    5: f"NAT rules are still loaded in {PF_ANCHOR} after the flush",
-    6: "the bootpd launchd job is still loaded after the unload",
+    "NDM_NAT_STILL_LOADED": f"NAT rules are still loaded in {PF_ANCHOR} after the flush",
+    "NDM_BOOTPD_STILL_LOADED": "the bootpd launchd job is still loaded after the unload",
 }
+# `do shell script` makes osascript exit 1 whatever the script returned; the
+# script's own code survives only as the trailing "(5)" of the error text.
+_SCRIPT_EXIT_RE = re.compile(r"\((\d+)\)\s*$")
 
 CONFLICT_MESSAGE = (
     "refused: the router/ NAT LaunchDaemon (com.custom.router.nat) is installed; "
     "the app's bootpd router would conflict with it"
 )
+
+BUSY_MESSAGE = "refused: another router start or stop is still running"
 
 
 @dataclass(frozen=True)
@@ -158,11 +171,19 @@ def start_script(settings: RouterSettings) -> str:
         [
             "set -e",
             f"/sbin/ifconfig {settings.lan_if} {settings.lan_ip} netmask {settings.netmask}",
-            "/usr/sbin/sysctl -w net.inet.ip.forwarding=1",
             f"echo {rule} | /usr/bin/base64 -D | /sbin/pfctl -a {PF_ANCHOR} -f -",
             # -E, not -e: `-e` exits non-zero when pf is already enabled, which
-            # under `set -e` would abort a start on any machine with pf on.
-            "/sbin/pfctl -E",
+            # under `set -e` would abort a start on any machine with pf on. But
+            # each -E adds a reference that only its token releases, so a second
+            # start while this app already holds one takes none. A token with pf
+            # disabled is void (`pfctl -d` drops every reference), so it is
+            # replaced rather than trusted.
+            f"if [ ! -s {PF_TOKEN_FILE} ] || "
+            "! /sbin/pfctl -s info 2>/dev/null | /usr/bin/grep -q 'Status: Enabled'; then "
+            f"/sbin/pfctl -E 2>&1 | /usr/bin/sed -n 's/^Token : //p' > {PF_TOKEN_FILE}; fi",
+            # The pipeline's status is sed's, so a failed enable shows up here
+            # as a missing token rather than being passed over.
+            f"[ -s {PF_TOKEN_FILE} ]",
             # Staged inside /etc (root-only) and renamed into place.
             "tmp=$(/usr/bin/mktemp /etc/.bootpd.plist.XXXXXX)",
             f'echo {plist} | /usr/bin/base64 -D > "$tmp"',
@@ -175,6 +196,9 @@ def start_script(settings: RouterSettings) -> str:
             # can exit 0 without loading, and an anchor can be loaded empty.
             f"/sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null | /usr/bin/grep -q 'nat on'",
             f"/bin/launchctl print system/{BOOTPD_LABEL} >/dev/null 2>&1",
+            # Last, so a step that fails above never leaves the Mac forwarding
+            # packets with no NAT or DHCP behind it.
+            "/usr/sbin/sysctl -w net.inet.ip.forwarding=1",
         ]
     )
 
@@ -189,10 +213,18 @@ def stop_script() -> str:
             # may be non-zero for an anchor that was never loaded.
             f"/sbin/pfctl -a {PF_ANCHOR} -F all || true",
             "/usr/sbin/sysctl -w net.inet.ip.forwarding=0",
+            # Releases only the reference start took; pf stays on if anything
+            # else on the machine still holds one. `|| true`: a token from
+            # before a `pfctl -d` is already void, and must not block the stop.
+            f"if [ -s {PF_TOKEN_FILE} ]; then "
+            f'/sbin/pfctl -X "$(/bin/cat {PF_TOKEN_FILE})" || true; /bin/rm -f {PF_TOKEN_FILE}; fi',
             f"/bin/launchctl unload -w {BOOTPS_DAEMON} || true",
             # `set -e` does not fire on a negated test, hence the explicit exits.
-            f"if /sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null | /usr/bin/grep -q 'nat on'; then exit 5; fi",
-            f"if /bin/launchctl print system/{BOOTPD_LABEL} >/dev/null 2>&1; then exit 6; fi",
+            # The marker names the read-back; see _READBACK_FAILURES.
+            f"if /sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null | /usr/bin/grep -q 'nat on'; "
+            "then echo NDM_NAT_STILL_LOADED >&2; exit 5; fi",
+            f"if /bin/launchctl print system/{BOOTPD_LABEL} >/dev/null 2>&1; "
+            "then echo NDM_BOOTPD_STILL_LOADED >&2; exit 6; fi",
         ]
     )
 
@@ -222,6 +254,11 @@ class Router:
         self.run_fn = run_fn
         self.exists_fn = exists_fn
         self.timeout = timeout
+        # The menu and the router window each run start/stop on their own
+        # worker; two root scripts interleaving on pf and bootpd is worse than
+        # either one. Non-blocking: a second caller is told, not queued behind a
+        # password dialog that may never be answered.
+        self._lock = threading.Lock()
 
     def settings(self) -> RouterSettings:
         return validate(
@@ -242,6 +279,14 @@ class Router:
 
     def start(self) -> str:
         """Returns an outcome string: `ok:`, `cancelled:`, `refused:` or `failed:`."""
+        if not self._lock.acquire(blocking=False):
+            return BUSY_MESSAGE
+        try:
+            return self._start()
+        finally:
+            self._lock.release()
+
+    def _start(self) -> str:
         if self._conflict():
             return CONFLICT_MESSAGE
         try:
@@ -258,6 +303,14 @@ class Router:
         return outcome
 
     def stop(self) -> str:
+        if not self._lock.acquire(blocking=False):
+            return BUSY_MESSAGE
+        try:
+            return self._stop()
+        finally:
+            self._lock.release()
+
+    def _stop(self) -> str:
         # The stop script sets forwarding to 0, which would cut off every client
         # of the router/ stack; the same guard as start applies.
         if self._conflict():
@@ -288,9 +341,17 @@ class Router:
         rc = getattr(result, "returncode", 1)
         if rc == 0:
             return "ok"
-        if _CANCELLED_RE.search(getattr(result, "stderr", "") or ""):
+        stderr = getattr(result, "stderr", "") or ""
+        if _CANCELLED_RE.search(stderr):
             return "cancelled: nothing was changed"
-        # The exit code only: stderr from an authorisation failure is not echoed.
-        # `set -e` stops at the first failing step, so earlier steps may stand.
-        detail = _READBACK_FAILURES.get(rc, "steps before the failing one may have taken effect")
+        # The exit code and a fixed description only: stderr from an
+        # authorisation failure is not echoed. `set -e` stops at the first
+        # failing step, so earlier steps may stand.
+        code = _SCRIPT_EXIT_RE.search(stderr)
+        if code is not None:
+            rc = int(code.group(1))
+        detail = next(
+            (text for marker, text in _READBACK_FAILURES.items() if marker in stderr),
+            "steps before the failing one may have taken effect",
+        )
         return f"failed: exit {rc}; {detail}"

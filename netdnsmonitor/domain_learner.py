@@ -132,77 +132,91 @@ class LearnedDomainStore:
     """A capped, de-duplicated, JSON-backed set of learned domains. A missing
     or corrupt file is treated as empty rather than fatal -- this is a cache
     of an inference, not user data.
+
+    Safe to share between threads. The rumps tick and the dashboard's worker
+    thread both run the prober, so both add and prune. Unlocked, add() could
+    insert a name twice or pass the cap, and two saves could land out of order
+    and leave an older list on disk.
     """
 
     def __init__(self, path: str, max_domains: int = 20):
         self.path = os.path.expanduser(path)
         self.max_domains = max_domains
         self._domains: list[str] = []
+        # Re-entrant because add() and remove() call save() while holding it.
+        self._lock = threading.RLock()
         self.load()
 
     def load(self) -> list[str]:
-        try:
-            with open(self.path) as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            self._domains = []
-            return []
-        if not isinstance(data, list):
-            self._domains = []
-            return []
-        # Normalize on load, not just on add: a hand-edited file holding
-        # "Example.COM." would otherwise dodge the dedup in add() and burn a
-        # second cap slot on the same name.
-        normalized = []
-        for entry in data:
-            if not isinstance(entry, str):
-                continue
-            domain = entry.strip().strip(".").lower()
-            if is_probeable_domain(domain) and domain not in normalized:
-                normalized.append(domain)
-        self._domains = normalized[: self.max_domains]
-        return list(self._domains)
+        with self._lock:
+            try:
+                with open(self.path) as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                self._domains = []
+                return []
+            if not isinstance(data, list):
+                self._domains = []
+                return []
+            # Normalize on load, not just on add: a hand-edited file holding
+            # "Example.COM." would otherwise dodge the dedup in add() and burn a
+            # second cap slot on the same name.
+            normalized = []
+            for entry in data:
+                if not isinstance(entry, str):
+                    continue
+                domain = entry.strip().strip(".").lower()
+                if is_probeable_domain(domain) and domain not in normalized:
+                    normalized.append(domain)
+            self._domains = normalized[: self.max_domains]
+            return list(self._domains)
 
     def save(self) -> None:
-        try:
-            directory = os.path.dirname(self.path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-            # Temp file plus rename: truncating in place and then failing part-way
-            # left a file load() reads as empty, losing every learned domain.
-            _atomic_write(self.path, json.dumps(self._domains, indent=2))
-        except OSError:
-            # A cache we cannot persist is still usable in memory. makedirs has
-            # to be inside the try: exist_ok=True only forgives an existing
-            # *directory*, and a read-only volume or a path component that is a
-            # file would otherwise raise all the way into the UI thread.
-            pass
+        with self._lock:
+            try:
+                directory = os.path.dirname(self.path)
+                if directory:
+                    os.makedirs(directory, exist_ok=True)
+                # Temp file plus rename: truncating in place and then failing
+                # part-way left a file load() reads as empty, losing every
+                # learned domain.
+                _atomic_write(self.path, json.dumps(self._domains, indent=2))
+            except OSError:
+                # A cache we cannot persist is still usable in memory. makedirs
+                # has to be inside the try: exist_ok=True only forgives an
+                # existing *directory*, and a read-only volume or a path
+                # component that is a file would otherwise raise all the way
+                # into the UI thread.
+                pass
 
     @property
     def domains(self) -> list[str]:
-        return list(self._domains)
+        with self._lock:
+            return list(self._domains)
 
     def add(self, candidates: list[str]) -> list[str]:
         """Add valid, unseen domains up to the cap. Returns what was added."""
-        added = []
-        for candidate in candidates:
-            domain = candidate.strip().strip(".").lower()
-            if len(self._domains) >= self.max_domains:
-                break
-            if domain in self._domains or not is_probeable_domain(domain):
-                continue
-            self._domains.append(domain)
-            added.append(domain)
-        if added:
-            self.save()
-        return added
+        with self._lock:
+            added = []
+            for candidate in candidates:
+                domain = candidate.strip().strip(".").lower()
+                if len(self._domains) >= self.max_domains:
+                    break
+                if domain in self._domains or not is_probeable_domain(domain):
+                    continue
+                self._domains.append(domain)
+                added.append(domain)
+            if added:
+                self.save()
+            return added
 
     def remove(self, domains: list[str]) -> list[str]:
-        removed = [d for d in domains if d in self._domains]
-        if removed:
-            self._domains = [d for d in self._domains if d not in removed]
-            self.save()
-        return removed
+        with self._lock:
+            removed = [d for d in domains if d in self._domains]
+            if removed:
+                self._domains = [d for d in self._domains if d not in removed]
+                self.save()
+            return removed
 
 
 def prune_dead_domains(
@@ -263,14 +277,20 @@ def make_domain_learner(
     monitor itself the heaviest thing on the machine.
 
     `spawn` starts the scan. The scan thread only reads the log and extracts
-    names; `store` is touched only by the thread calling domains(), which picks
-    up finished scans. A scan's names therefore appear on the first call after
-    it finishes. With a spawn that runs the scan inline, that is the call that
+    names; `store` is touched only by threads calling domains(), which pick up
+    finished scans. A scan's names therefore appear on the first call after it
+    finishes. With a spawn that runs the scan inline, that is the call that
     started it.
+
+    domains() may be called from more than one thread at once: the rumps tick
+    and the dashboard's worker thread both run the prober. One lock covers the
+    whole call, because the due check and setting `scan_running` are separate
+    steps, and two callers between them would each start a scan.
     """
     last_scan_at: Optional[float] = None
     scan_running = False
     finished: queue.Queue = queue.Queue()
+    lock = threading.Lock()
 
     def scan() -> None:
         try:
@@ -293,24 +313,26 @@ def make_domain_learner(
 
     def domains() -> list[str]:
         nonlocal last_scan_at, scan_running
-        collect_finished()
-        now = clock()
-        due = last_scan_at is None or (now - last_scan_at) >= interval_seconds
-        if due and not scan_running:
-            last_scan_at = now
-            scan_running = True
-            try:
-                spawn(scan)
-            except RuntimeError:
-                # Thread.start raises RuntimeError when no thread can be made.
-                # Learning is opportunistic, so try again at the next interval.
-                scan_running = False
-        collect_finished()
-        configured = [d.strip().strip(".").lower() for d in configured_domains]
-        merged = list(configured)
-        for domain in store.domains:
-            if domain not in merged:
-                merged.append(domain)
-        return merged
+        with lock:
+            collect_finished()
+            now = clock()
+            due = last_scan_at is None or (now - last_scan_at) >= interval_seconds
+            if due and not scan_running:
+                last_scan_at = now
+                scan_running = True
+                try:
+                    spawn(scan)
+                except RuntimeError:
+                    # Thread.start raises RuntimeError when no thread can be
+                    # made. Learning is opportunistic, so try again at the next
+                    # interval.
+                    scan_running = False
+            collect_finished()
+            configured = [d.strip().strip(".").lower() for d in configured_domains]
+            merged = list(configured)
+            for domain in store.domains:
+                if domain not in merged:
+                    merged.append(domain)
+            return merged
 
     return domains

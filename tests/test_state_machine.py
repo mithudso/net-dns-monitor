@@ -421,3 +421,32 @@ def test_truncating_a_log_line_cannot_cut_a_sensitive_string_past_redaction():
     sent = escalator.received_bundles[0]["log_excerpts"]
     assert "mail.corp" not in str(sent)
     assert all(len(line) <= 300 for line in sent)
+
+
+def test_a_sensitive_string_matching_a_bundle_key_cannot_cost_the_report():
+    """The four top-level bundle keys are code-owned schema, not evidence. When
+    redaction ran over them, a configured "excerpt" renamed "log_excerpts", the
+    pipeline's own lookup of that key raised KeyError after the gate had moved to
+    incident, and that incident's only report and alert were lost.
+    """
+    escalator = FakeEscalator()
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING]),
+        repair_executor=FakeRepairExecutor(),
+        escalator=escalator,
+        log_watcher=lambda: ["excerpt from a result line"],
+        failure_threshold=1,
+        sensitive_strings=["excerpt", "result", "class"],
+    )
+
+    report = sm.tick()
+
+    assert report is not None
+    sent = escalator.received_bundles[0]
+    assert set(sent) == {"classification", "probe_results", "log_excerpts", "ladder_results"}
+    assert all(value is not None for value in sent.values())
+    # Left unredacted: the escalator picks its model from this value.
+    assert sent["classification"] == "dns"
+    # The evidence under the fixed keys is still redacted.
+    assert sent["log_excerpts"] == ["[REDACTED] from a [REDACTED] line"]
+    assert sent["ladder_results"]

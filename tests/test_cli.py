@@ -11,6 +11,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from netdnsmonitor import cli, privileges
 from netdnsmonitor.cli import (
@@ -25,7 +26,8 @@ from netdnsmonitor.cli import (
     render_interfaces,
     run_catalog_command,
 )
-from netdnsmonitor.config import DEFAULT_CONFIG
+from netdnsmonitor.config import DEFAULT_CONFIG, ConfigError
+from netdnsmonitor.failover import _BUSY, _neither_side
 from netdnsmonitor.repair_executor import make_repair_executor
 
 
@@ -140,6 +142,26 @@ def test_main_loads_the_config_that_was_named(tmp_path, argv_order):
     assert main(argv, out=out, load_config_fn=load) == 0
     assert loaded == [str(path)]
     assert "what to do when the network breaks" in lines[0]
+
+
+def _refuse_config(path):
+    raise ConfigError("poll_interval_seconds", "must be a positive number")
+
+
+def _unparseable_config(path):
+    return yaml.safe_load("a: [b")
+
+
+def _unreadable_config(path):
+    raise PermissionError(13, "Permission denied", path)
+
+
+@pytest.mark.parametrize("load", [_refuse_config, _unparseable_config, _unreadable_config])
+def test_a_bad_config_exits_2_with_a_message_instead_of_a_traceback(load, capsys):
+    lines, out = collect()
+    assert main(["status"], out=out, load_config_fn=load) == 2
+    assert lines == []
+    assert capsys.readouterr().err.startswith("config error: ")
 
 
 # --- run --------------------------------------------------------------------
@@ -350,12 +372,20 @@ def failover_context(outcome):
     [
         ("ok: service order now starts with 'AX88179B'", 0),
         ("no switch: already on the preferred network", 0),
+        ("no switch: already on the backup network", 0),
+        ("no switch: already on 'iPhone USB'", 0),
         ("failed: could not read the current network service order", 1),
         ("NEEDS_PRIVILEGE: reordering network services was refused", 1),
+        # The real texts, so a rewording cannot quietly turn these into successes.
+        (_neither_side("Thunderbolt Bridge"), 1),
+        (_BUSY, 1),
     ],
 )
 def test_failover_exit_code_follows_the_outcome(outcome, expected):
-    """Already being where you asked to be is not an error."""
+    """Already being where you asked to be is not an error. A refusal worded as
+    "no switch:" is: the machine is not where it was asked to be, so
+    `netdns failover preferred && ...` must not carry on as if it were.
+    """
     lines, out = collect()
     args = build_parser().parse_args(["failover", "preferred"])
     assert cmd_failover(args, {}, out, context=failover_context(outcome)) == expected

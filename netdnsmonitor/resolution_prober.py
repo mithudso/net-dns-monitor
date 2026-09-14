@@ -125,7 +125,7 @@ def resolve_domains_parallel(
             wait(futures, timeout=max(0.0, remaining))
 
         findings = []
-        for domain, future in zip(domains, futures):
+        for domain, future in zip(domains, futures, strict=True):
             findings.append(_finding_for(domain, future, started))
         return findings
     finally:

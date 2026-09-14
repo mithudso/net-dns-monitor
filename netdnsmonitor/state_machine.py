@@ -123,23 +123,27 @@ class StateMachine:
         ladder_results: list,
     ) -> dict:
         omitted = max(0, len(log_excerpts) - MAX_OUTBOUND_LOG_LINES)
-        bundle = redact(
-            {
-                "classification": classification.value,
-                "probe_results": probe,
-                "log_excerpts": log_excerpts[omitted:],
-                "ladder_results": ladder_results,
-            },
-            self.sensitive_strings,
-        )
+        # Redact the values, never the four top-level keys. Those keys are this
+        # code's schema, not evidence: redacting them let a sensitive string such
+        # as "excerpt" rename "log_excerpts", and the lookup below then raised
+        # after the gate had moved to incident. The escalator also picks its
+        # model from the classification value. Keys nested inside the values are
+        # still redacted, because domain_results is keyed by hostname.
         # Truncate after redacting. Cutting first can split a sensitive string at
         # the boundary into a fragment that no longer matches it, and the
         # fragment then leaves the machine unredacted.
-        capped = [str(line)[:MAX_OUTBOUND_LOG_LINE_CHARS] for line in bundle["log_excerpts"]]
+        capped = [
+            str(line)[:MAX_OUTBOUND_LOG_LINE_CHARS]
+            for line in redact(log_excerpts[omitted:], self.sensitive_strings)
+        ]
         if omitted:
             capped.insert(0, f"[{omitted} earlier log lines omitted]")
-        bundle["log_excerpts"] = capped
-        return bundle
+        return {
+            "classification": classification.value,
+            "probe_results": redact(probe, self.sensitive_strings),
+            "log_excerpts": capped,
+            "ladder_results": redact(ladder_results, self.sensitive_strings),
+        }
 
     def _run_incident_pipeline(self, classification: Classification, probe: ProbeResult) -> dict:
         started_at = datetime.now(timezone.utc)

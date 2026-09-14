@@ -263,6 +263,36 @@ def test_a_backup_without_an_ipv6_route_still_measures_over_ipv4():
     assert wrapped == [(sockets[1], "speed.example")]
 
 
+def test_a_blackholing_ipv6_literal_leaves_budget_for_ipv4():
+    """A v6 route that blackholes rather than refusing stalls connect for its
+    whole armed timeout. Armed with the full budget, it spent all 5s, IPv4 was
+    never tried, and a working backup read as unmeasurable -- ranked behind a
+    slower link that happened to be measured.
+    """
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.1, script=[b"x" * 125_000])
+    kwargs, sockets, _ = seams(clock, stream)
+
+    class BlackholeSocket(FakeSocket):
+        def connect(self, address):
+            self.clock.now += self.timeouts[-1]
+            raise TimeoutError("timed out")
+
+    def socket_factory(family, kind):
+        cls = BlackholeSocket if family == socket.AF_INET6 else FakeSocket
+        sock = cls(family, clock)
+        sockets.append(sock)
+        return sock
+
+    kwargs["socket_factory"] = socket_factory
+    result = default_measure("en12", address=[V6, V4], timeout=5.0, **kwargs)
+
+    assert result is not None
+    assert [s.family for s in sockets] == [socket.AF_INET6, socket.AF_INET]
+    assert sockets[0].timeouts[0] <= 2.5
+    assert sockets[1].connected_to == (V4, 443)
+
+
 def test_no_literal_that_connects_is_unmeasured_not_zero():
     clock = FakeClock()
     kwargs, sockets, _ = seams(

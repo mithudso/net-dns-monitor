@@ -39,11 +39,11 @@ import threading
 import time
 import traceback
 import uuid
-import webbrowser
 from collections.abc import Mapping
 from typing import Callable, Optional
 
 import rumps
+import yaml
 
 from netdnsmonitor import (
     ai_consent,
@@ -115,6 +115,8 @@ from netdnsmonitor.router_window import (
 )
 from netdnsmonitor.settings_window import (
     NEEDS_RESTART,
+    SERVICE_RESTART_HINT,
+    STORE_RESTART_HINT,
     SettingsWindow,
     collect,
     restart_note,
@@ -1937,9 +1939,20 @@ class NetDnsMonitorApp(rumps.App):
         self._refresh_privilege_status()
         dashboard.show(activate=activate)
 
+    def _settings_restart_hint(self) -> str:
+        # The store build ships no service script to restart it with.
+        return STORE_RESTART_HINT if self.capabilities.is_app_store else SERVICE_RESTART_HINT
+
     def open_settings(self):
         if self._settings is None:
-            self._settings = SettingsWindow(on_save=self._save_settings)
+            options = {}
+            if self.capabilities.is_app_store:
+                # Its config sits in the sandbox container, not at ~/.config.
+                options = {
+                    "config_path_display": self.config_path,
+                    "restart_hint": self._settings_restart_hint(),
+                }
+            self._settings = SettingsWindow(on_save=self._save_settings, **options)
         # The file, not the running config: restart-only keys keep their launch
         # values in self.config, and the window edits what is on disk.
         problem = None
@@ -1978,7 +1991,7 @@ class NetDnsMonitorApp(rumps.App):
         previous = dict(self.config)
         result = save_config(self.config_path, updates)
         self._apply_live_config(load_config(self.config_path))
-        note = restart_note(updates, previous=previous)
+        note = restart_note(updates, previous=previous, restart_hint=self._settings_restart_hint())
         if result["backup"]:
             note += f"\nPrevious config saved as {os.path.basename(result['backup'])}"
         return note
@@ -2303,9 +2316,11 @@ class NetDnsMonitorApp(rumps.App):
             )
             return lines
         for step in steps:
-            # Per step, for the reason given in _single_step.
+            # Per step, for the reason given in _single_step. The classification
+            # goes with it: without one the failover step assumes "network",
+            # and a DNS fault on a DNS-only trigger list read as "not a trigger".
             with self.state_machine.lock:
-                outcome = self.state_machine.repair_executor(step)
+                outcome = self.state_machine.repair_executor(step, classification.value)
             lines.append(f"[{step.kind}] {step.name}")
             lines.append(f"    why: {step.reason}")
             lines.append(f"    result: {outcome}")
@@ -2409,7 +2424,13 @@ class NetDnsMonitorApp(rumps.App):
             # console is the arbitrary-shell one, reachable from here and from the
             # dashboard button, and both go through the single controller.
             items.append(rumps.MenuItem("Open console", callback=self.open_console))
-        items += ["Toggle mini window", "Open last report", None]
+        # With an explicit callback: a bare title that no `@rumps.clicked` names
+        # is drawn greyed out, and this one was, in both builds.
+        items += [
+            "Toggle mini window",
+            rumps.MenuItem("Open last report", callback=self.open_last_report),
+            None,
+        ]
         if caps.router:
             items.append(self._router_menu())
         if caps.launch_agent_login_item:
@@ -2719,7 +2740,10 @@ class NetDnsMonitorApp(rumps.App):
         if not self.capabilities.network_order_write and lines and lines[0].startswith("Active: "):
             # "failover is automatic" would be false here: nothing can switch.
             lines[0] = lines[0].split(" — ")[0] + " — read-only in this build"
-        for row, text in zip(self.failover_rows, lines + [""] * len(self.failover_rows)):
+        # strict=False: the padded list is longer than the rows on purpose.
+        for row, text in zip(
+            self.failover_rows, lines + [""] * len(self.failover_rows), strict=False
+        ):
             # An empty title would leave a clickable-looking blank row.
             row.title = text or " "
 
@@ -2758,13 +2782,29 @@ class NetDnsMonitorApp(rumps.App):
             text = f"{text} {unavailable}"
         rumps.notification("Net/DNS Monitor", "Network failover", text)
 
-    def open_last_report(self, _sender):
-        if self.last_report_path:
+    def open_last_report(self, _sender=None) -> str:
+        """Through `url_opener`, as the privacy policy is: see
+        open_url_with_workspace for why not `webbrowser`. Reached from the menu
+        and from the dashboard's "Open last incident report".
+        """
+        path = self.last_report_path
+        if not path:
+            outcome = "No report has been generated yet."
+            self._notify("Last report", outcome)
+            return outcome
+        detail = ""
+        try:
             # as_uri() percent-encodes: the default reports_dir sits under
             # "Application Support", and a raw space makes an invalid file URL.
-            webbrowser.open(pathlib.Path(self.last_report_path).as_uri())
-        else:
-            rumps.notification("Net/DNS Monitor", "", "No report has been generated yet.")
+            opened = bool(self.url_opener(pathlib.Path(path).as_uri()))
+        except Exception as exc:  # noqa: BLE001 - class name only, never raised into the menu
+            opened = False
+            detail = f" ({type(exc).__name__})"
+        if not opened:
+            outcome = f"failed: could not open {path}{detail}"
+            self._notify("Last report", outcome)
+            return outcome
+        return f"ok: opened {path}"
 
     @rumps.clicked("Test network alert")
     def test_network_alert(self, _sender):
@@ -2806,10 +2846,14 @@ class NetDnsMonitorApp(rumps.App):
             if self.router_window is None:
                 # A getter and the path, not a copy of the dict: the window writes
                 # its own keys through save_config, and reads the live config.
+                # The key through the credential store: an app started by
+                # LaunchServices has no shell environment, so a Keychain key is
+                # the only one it can have.
                 self.router_window = RouterWindowController(
                     config_getter=lambda: self.config,
                     config_path=self.config_path,
                     app=self,
+                    api_key_getter=lambda: self.credentials.get("ANTHROPIC_API_KEY"),
                 )
             self.router_window.show()
         except Exception:
@@ -3001,8 +3045,43 @@ class NetDnsMonitorApp(rumps.App):
         sender.state = login_item_installed()
 
 
-def main():
-    NetDnsMonitorApp().run()
+STARTUP_FAILED_TITLE = "Net-DNS-Monitor could not start"
+
+
+def show_startup_alert(title: str, message: str) -> None:
+    """Modal, which is acceptable only here: no timer has started, so there is
+    no monitoring for it to hold up. rumps.App.run activates the shared
+    application before any alert of its own; this runs before run(), so it
+    does the same.
+    """
+    from AppKit import NSApplication
+
+    NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    rumps.alert(title=title, message=message)
+
+
+def main(
+    app_factory: Optional[Callable[..., rumps.App]] = None,
+    startup_alert: Callable[[str, str], object] = show_startup_alert,
+    config_path: str = DEFAULT_CONFIG_PATH,
+) -> None:
+    factory = NetDnsMonitorApp if app_factory is None else app_factory
+    try:
+        app = factory(config_path=config_path)
+    except (ConfigError, ValueError, yaml.YAMLError) as exc:
+        # Started from Finder, the Dock or a LaunchAgent, a traceback on stderr
+        # reaches nobody: the app never appears, and Settings, which could fix
+        # the file, never opens. config_error_text keeps a YAML message, which
+        # quotes the file, out of both.
+        problem = config_error_text(exc)
+        print(f"{STARTUP_FAILED_TITLE}: {problem}", file=sys.stderr)
+        print(f"Config file: {config_path}", file=sys.stderr)
+        try:
+            startup_alert(STARTUP_FAILED_TITLE, f"{problem}\n\nConfig file: {config_path}")
+        except Exception:  # noqa: BLE001 - stderr already has it; still exit 2
+            traceback.print_exc()
+        sys.exit(2)
+    app.run()
 
 
 if __name__ == "__main__":

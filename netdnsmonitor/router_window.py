@@ -12,6 +12,7 @@ main thread freezes the window, the menu bar, and the rumps timers doing the
 actual monitoring.
 """
 
+import contextlib
 import ipaddress
 import os
 import re
@@ -197,7 +198,7 @@ def ai_config_check(
     fwd = fwd.strip() if fwd is not None else f"(not available: {error})"
     prompt = redact_prompt(build_ai_prompt(values, routes, fwd), sensitive_strings)
     try:
-        client = (client_factory or default_client)()
+        client = (client_factory or (lambda: default_client(api_key=api_key)))()
         response = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=AI_MAX_TOKENS,
@@ -297,6 +298,7 @@ class RouterWindowController:
         spawn: Optional[Callable[[Callable[[], None]], None]] = None,
         environ: Optional[Mapping] = None,
         config: Optional[Mapping] = None,
+        api_key_getter: Optional[Callable[[], Optional[str]]] = None,
     ):
         # `config` is the old keyword: a dict captured once. A getter sees the
         # app's current config instead of whatever it was when the window opened.
@@ -316,6 +318,9 @@ class RouterWindowController:
         self.post = post or _default_post
         self.spawn = spawn or _default_spawn
         self.environ = environ if environ is not None else os.environ
+        # A getter over the app's credential store reaches a key kept in the
+        # Keychain; an app launched by LaunchServices has no shell environment.
+        self.api_key_getter = api_key_getter or (lambda: self.environ.get("ANTHROPIC_API_KEY"))
         self.window = None
         self.text_view = None
         self.interfaces: list = []
@@ -338,15 +343,55 @@ class RouterWindowController:
     def show(self):
         import AppKit
 
-        if self.window is None:
-            self.interfaces = get_interfaces(self.run_fn)
+        first_open = self.window is None
+        if first_open:
+            # Built with empty popups: `networksetup` can take its whole timeout,
+            # and on the main thread that freezes the menu bar and the timers.
             self._target = _router_target_class().alloc().initWithController_(self)
             self._build_window()
-            if not self.interfaces:
-                self.append_log("Could not list network interfaces.")
         self.window.makeKeyAndOrderFront_(None)
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        self.on_refresh()
+        if first_open:
+            # The first diagnostics wait for the list, so the same-interface
+            # check reads the configured WAN and LAN rather than two empty popups.
+            self._request_interfaces(refresh=True)
+        else:
+            self.on_refresh()
+
+    def _request_interfaces(self, refresh: bool = False) -> bool:
+        """List interfaces on a worker and fill the popups on the main thread."""
+        run_fn = self.run_fn
+
+        def runner():
+            try:
+                names = get_interfaces(run_fn)
+            except Exception:  # noqa: BLE001 - an empty list is reported as one
+                names = []
+            self.post(self._populate_interfaces, names, refresh)
+
+        try:
+            self.spawn(runner)
+        except RuntimeError as exc:
+            self.append_log(f"failed: could not start a worker ({type(exc).__name__})")
+            return False
+        return True
+
+    def _populate_interfaces(self, names, refresh: bool = False) -> None:
+        self.interfaces = list(names)
+        for popup, key in (
+            (getattr(self, "wan_popup", None), "wan_interface"),
+            (getattr(self, "lan_popup", None), "lan_interface"),
+        ):
+            if popup is None:
+                continue
+            popup.removeAllItems()
+            popup.addItemsWithTitles_(self.interfaces)
+            self._select_interface(popup, self._default(key))
+        if refresh:
+            self.on_refresh()
+        # After the refresh, which clears the log and would erase this line.
+        if not self.interfaces:
+            self.append_log("Could not list network interfaces.")
 
     def _button(self, content, frame, title, action):
         import AppKit
@@ -516,6 +561,10 @@ class RouterWindowController:
         return True
 
     def _router_action(self, label: str, action: Callable[[], object]) -> None:
+        starter = getattr(self.app, "_start_router_worker", None)
+        if callable(starter):
+            self._router_action_on_app(starter, label, action)
+            return
         if self._busy:
             self.append_log("(the previous router action is still running)")
             return
@@ -533,12 +582,35 @@ class RouterWindowController:
             # every later click is refused as "still running".
             self._busy = False
 
+    def _router_action_on_app(self, starter, label: str, action: Callable[[], object]) -> None:
+        """The menu's Start/Stop use the app's `_router_thread` slot. A second
+        guard here let both run a root script at once, so this window takes the
+        same slot and the app refuses (and says so) while it is taken.
+        """
+
+        def work():
+            try:
+                outcome = action()
+            except Exception as exc:  # noqa: BLE001 - reported, never raised
+                outcome = f"failed: {type(exc).__name__}"
+            # A failed hop to the window must not turn a finished action into
+            # a failure: the app still shows the outcome this returns.
+            with contextlib.suppress(Exception):
+                self.post(self.append_log, f"{label}: {outcome}")
+            return outcome
+
+        if not starter("_router_thread", label, work):
+            self.append_log(f"{label}: not started (the notification says why)")
+
     def on_start(self, values: Optional[Mapping] = None):
         values = dict(values) if values is not None else self._form_values()
         self.append_log("Starting router...")
-        if values.get("wan_interface") and values.get("wan_interface") == values.get(
-            "lan_interface"
-        ):
+        if not values.get("wan_interface") or not values.get("lan_interface"):
+            # on_save_config refuses this too, but returns before it updates the
+            # router, which would then start on interfaces nobody selected here.
+            self.append_log("refused: select both a WAN and a LAN interface")
+            return
+        if values.get("wan_interface") == values.get("lan_interface"):
             self.append_log("refused: WAN and LAN are the same interface")
             return
         router = getattr(self.app, "router", None)
@@ -593,8 +665,14 @@ class RouterWindowController:
         values = dict(values) if values is not None else self._form_values()
         self.append_log("\nAnalyzing config with Anthropic AI...")
         sensitive = self._config().get("sensitive_strings", [])
-        api_key = self.environ.get("ANTHROPIC_API_KEY")
-        run_fn, factory = self.run_fn, self.client_factory
-        self._in_background(
-            lambda: ai_config_check(values, run_fn, sensitive, api_key, client_factory=factory)
-        )
+        run_fn, factory, getter = self.run_fn, self.client_factory, self.api_key_getter
+
+        def work():
+            # On the worker: a Keychain read can block on an access prompt.
+            try:
+                api_key = getter()
+            except Exception as exc:  # noqa: BLE001 - class name only, never the message
+                return f"skipped: could not read ANTHROPIC_API_KEY ({type(exc).__name__})"
+            return ai_config_check(values, run_fn, sensitive, api_key, client_factory=factory)
+
+        self._in_background(work)

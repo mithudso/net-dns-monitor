@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import threading
 import time
 
@@ -389,3 +390,100 @@ def test_a_thread_that_cannot_start_does_not_stop_later_scans(tmp_path):
     assert domains() == []
     now["t"] = 400.0
     assert domains() == ["learned.example.com"]
+
+
+# --- thread safety ------------------------------------------------------------
+#
+# domains() is called from the rumps tick (through the prober) and from the
+# dashboard's worker thread (the "full diagnosis" action runs the same prober),
+# and both paths prune through store.remove.
+
+
+class InMemoryStore(LearnedDomainStore):
+    """Every real save is file I/O, which releases the GIL and serialises the
+    threads around it, hiding the race this is meant to expose. Measured: with
+    real saves the unlocked store passed; with this it broke every run.
+    """
+
+    def save(self) -> None:
+        pass
+
+
+def test_the_store_stays_consistent_under_concurrent_add_and_remove(tmp_path):
+    """Unsynchronised, add() checked membership and the cap and then appended, so
+    two threads could insert the same name twice or push past max_domains.
+    """
+    store = InMemoryStore(str(tmp_path / "learned.json"), max_domains=5)
+    names = [f"host{i}.example.com" for i in range(8)]
+    violations = []
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+
+    def churn(offset):
+        for i in range(2000):
+            store.add([names[(i + offset) % len(names)]])
+            if i % 3 == 0:
+                store.remove([names[(i + offset + 1) % len(names)]])
+            current = store.domains
+            if len(current) != len(set(current)) or len(current) > 5:
+                violations.append(current)
+
+    try:
+        workers = [threading.Thread(target=churn, args=(n,)) for n in (0, 0, 3, 5)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=60)
+    finally:
+        sys.setswitchinterval(previous)
+
+    assert violations == []
+
+
+def test_a_second_caller_waits_for_the_first_so_only_one_scan_starts(tmp_path):
+    """Both callers could read "no scan running, scan due" before either set
+    scan_running, and both started a `log show` of whole seconds for the same
+    window. That gap is a few bytecodes with no seam inside it, so this checks
+    what closes it: while one call is inside domains(), another cannot be.
+    """
+    spawned = []
+    first_inside = threading.Event()
+    release_first = threading.Event()
+    second_done = threading.Event()
+    calls = []
+
+    def clock():
+        calls.append(threading.current_thread().name)
+        if len(calls) == 1:
+            first_inside.set()
+            release_first.wait(timeout=5)
+        return 0.0
+
+    domains = make_domain_learner(
+        log_watcher=lambda: [],
+        store=LearnedDomainStore(str(tmp_path / "learned.json")),
+        configured_domains=["configured.example.com"],
+        interval_seconds=300.0,
+        clock=clock,
+        spawn=spawned.append,  # records the scan without running it
+    )
+    results = []
+
+    def second():
+        results.append(domains())
+        second_done.set()
+
+    first = threading.Thread(target=lambda: results.append(domains()), name="first")
+    first.start()
+    assert first_inside.wait(timeout=5)
+    other = threading.Thread(target=second, name="second")
+    other.start()
+    try:
+        assert not second_done.wait(timeout=0.2), "a second caller ran inside the first"
+    finally:
+        release_first.set()
+        first.join(timeout=5)
+        other.join(timeout=5)
+
+    assert results == [["configured.example.com"], ["configured.example.com"]]
+    assert len(spawned) == 1

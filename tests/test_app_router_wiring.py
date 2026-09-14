@@ -28,6 +28,8 @@ from netdnsmonitor.app import (
     login_agent_path,
     login_agent_plist,
 )
+from netdnsmonitor.credentials import ERR_SEC_ITEM_NOT_FOUND, CredentialStore
+from netdnsmonitor.router_window import RouterWindowController
 
 
 class FakeRouter:
@@ -177,6 +179,88 @@ def test_a_raising_router_is_reported_by_class_name(tmp_path):
 
     assert any("failed: RuntimeError" in text for text in app.output)
     assert not any("secret-script" in text for text in app.output)
+
+
+# --- the menu and the router window share one worker slot ------------------
+
+WINDOW_VALUES = {
+    "wan_interface": "en5",
+    "lan_interface": "en6",
+    "lan_ip": "192.168.10.1",
+    "lan_netmask": "255.255.255.0",
+    "dhcp_start": "192.168.10.100",
+    "dhcp_end": "192.168.10.200",
+}
+
+
+def window_for(app):
+    """A real RouterWindowController on the real app, with no window and no
+    worker of its own: every router action it takes must go through the app.
+    """
+    started_own = []
+    ran = []
+    controller = RouterWindowController(
+        config_getter=lambda: app.config,
+        config_path=app.config_path,
+        app=app,
+        run_fn=lambda *args, **kwargs: ran.append(args),
+        post=lambda fn, *args: fn(*args),
+        spawn=started_own.append,
+        environ={},
+    )
+    controller.lines = []
+    controller.append_log = controller.lines.append
+    controller.started_own = started_own
+    controller.ran = ran
+    return controller
+
+
+def test_a_window_start_waiting_on_its_dialog_makes_the_menu_stop_refuse(tmp_path):
+    """The window and the menu used to guard with two separate flags, so a Stop
+    from the menu ran its root script while the window's Start was still inside
+    its own.
+    """
+    app = build_app(tmp_path)
+    window = window_for(app)
+    app.router.release.clear()  # the window's admin dialog is open
+
+    window.on_start(WINDOW_VALUES)
+    running = app._router_thread
+    assert running is not None and running.is_alive()
+
+    app.stop_router(None)
+
+    assert app._router_thread is running
+    assert ("Router", "Stop router: the previous router action is still running.") in app.notes
+    app.router.release.set()
+    drain(app, running)
+    assert app.router.calls == ["start"]
+    assert window.started_own == [] and window.ran == []
+    assert window.lines[-1] == "Start router: ok: router started (read back: NAT en0 -> en3)"
+    assert any(message.startswith("Start router: ok:") for _s, message in app.notes)
+
+
+@pytest.mark.parametrize(
+    ("window_action", "label"),
+    [("on_stop", "Stop router"), ("on_start", "Start router")],
+)
+def test_a_menu_start_waiting_on_its_dialog_makes_the_window_refuse(tmp_path, window_action, label):
+    app = build_app(tmp_path)
+    window = window_for(app)
+    app.router.release.clear()  # the menu's admin dialog is open
+    app.start_router(None)
+    running = app._router_thread
+
+    args = (WINDOW_VALUES,) if window_action == "on_start" else ()
+    getattr(window, window_action)(*args)
+
+    assert app._router_thread is running
+    assert window.lines[-1] == f"{label}: not started (the notification says why)"
+    assert ("Router", f"{label}: the previous router action is still running.") in app.notes
+    app.router.release.set()
+    drain(app, running)
+    assert app.router.calls == ["start"]
+    assert window.started_own == [] and window.ran == []
 
 
 # --- read-only router menu items --------------------------------------------
@@ -334,6 +418,39 @@ def test_the_router_window_reads_the_live_config_and_the_apps_path(tmp_path, mon
     assert controller.kwargs["app"] is app
     assert controller.kwargs["config_getter"]() is app.config
     assert "config" not in controller.kwargs
+
+
+class KeychainWithKey:
+    def __init__(self, items):
+        self.items = {name: value.encode() for name, value in items.items()}
+
+    def read(self, account):
+        if account not in self.items:
+            return ERR_SEC_ITEM_NOT_FOUND, None
+        return 0, self.items[account]
+
+
+def test_the_router_windows_ai_check_reads_the_key_from_the_apps_credential_store(
+    tmp_path, monkeypatch
+):
+    """An app launched from Finder or the Dock has no shell environment, so a
+    key saved in the Keychain is the only one it can have. The window read
+    os.environ, and the AI check said the key was missing.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    RecordingController.instances = []
+    monkeypatch.setattr(app_module, "RouterWindowController", RecordingController)
+    app = build_app(tmp_path)
+    keychain = KeychainWithKey({"ANTHROPIC_API_KEY": "sk-ant-keychain-not-real"})
+    app.credentials = CredentialStore(env={}, backend_factory=lambda: keychain)
+
+    app.open_router_window(None)
+
+    getter = RecordingController.instances[0].kwargs["api_key_getter"]
+    assert getter() == "sk-ant-keychain-not-real"
+    # Read when the check runs, not captured when the window opened.
+    keychain.items.clear()
+    assert getter() is None
 
 
 def test_a_router_window_that_fails_to_open_notifies_and_is_rebuilt_next_time(

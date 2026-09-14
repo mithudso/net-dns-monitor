@@ -26,8 +26,10 @@ Everything py2app cannot do is here, in order:
    same one-line change at build time; Homebrew and python.org builds do not.
    The whole bundle, zip members included, is then scanned, and the build stops
    if the string is anywhere else.
-3. Refuse any Mach-O that links a library outside the bundle or the OS (a
-   Homebrew dylib would work on this Mac and crash on every other one).
+3. Delete rpaths that point outside the bundle, then refuse any Mach-O that
+   links a library outside the bundle or the OS, or an @rpath library no
+   bundle-relative rpath resolves (a Homebrew dylib would work on this Mac and
+   crash on every other one).
 4. Set LSMinimumSystemVersion to the highest `minos` of any bundled binary.
    Guessing lower produces an app that installs on a Mac it cannot launch on.
 5. Strip extended attributes (uploads must not carry com.apple.quarantine).
@@ -118,6 +120,48 @@ def parse_otool_libraries(otool_output: str) -> list[str]:
         if name:
             libraries.append(name)
     return libraries
+
+
+BUNDLE_RELATIVE_RPATH_PREFIXES = ("@executable_path/", "@loader_path/")
+
+
+def parse_rpaths(otool_l_output: str) -> list[str]:
+    """Every LC_RPATH path in `otool -l` output, in load-command order."""
+    return re.findall(
+        r"cmd LC_RPATH\s*\n\s*cmdsize \d+\s*\n\s*path (.+?) \(offset \d+\)", otool_l_output
+    )
+
+
+def external_rpaths(rpaths: Iterable[str]) -> list[str]:
+    """Search paths that point outside the bundle.
+
+    An absolute rpath such as /opt/homebrew/lib (60 binaries in a Homebrew-built
+    bundle carry it) lets dyld satisfy an @rpath link from the build Mac's
+    Homebrew. The app then works here and fails to import on every other Mac.
+    """
+    return [r for r in rpaths if not r.startswith(BUNDLE_RELATIVE_RPATH_PREFIXES)]
+
+
+def resolve_rpath_library(
+    binary: Path, name: str, rpaths: Iterable[str], app: Path, exists=os.path.exists
+) -> Path | None:
+    """The bundle file an `@rpath/...` install name resolves to, or None."""
+    if not name.startswith("@rpath/"):
+        return None
+    tail = name[len("@rpath/") :]
+    executable_dir = app / "Contents" / "MacOS"
+    for rpath in rpaths:
+        if rpath.startswith("@loader_path/"):
+            base = binary.parent / rpath[len("@loader_path/") :]
+        elif rpath.startswith("@executable_path/"):
+            base = executable_dir / rpath[len("@executable_path/") :]
+        else:
+            continue
+        candidate = Path(os.path.normpath(base / tail))
+        inside = str(candidate).startswith(str(app) + os.sep)
+        if inside and exists(candidate):
+            return candidate
+    return None
 
 
 def disallowed_libraries(libraries: Iterable[str], own_install_name: str = "") -> list[str]:
@@ -407,16 +451,39 @@ def find_forbidden_string(app: Path) -> list[str]:
     return hits
 
 
+def strip_external_rpaths(app: Path, binaries: Iterable[Path]) -> int:
+    """Delete every rpath that points outside the bundle; return how many.
+
+    Runs before signing, because install_name_tool invalidates signatures.
+    """
+    removed = 0
+    for binary in binaries:
+        for rpath in external_rpaths(parse_rpaths(capture(["otool", "-l", binary]))):
+            run(["install_name_tool", "-delete_rpath", rpath, binary])
+            removed += 1
+    return removed
+
+
 def check_linkage(app: Path, binaries: Iterable[Path]) -> list[str]:
     problems = []
     for binary in binaries:
         libraries = parse_otool_libraries(capture(["otool", "-L", binary]))
+        rpaths = parse_rpaths(capture(["otool", "-l", binary]))
         own = ""
         id_output = capture(["otool", "-D", binary]).splitlines()
         if len(id_output) > 1:
             own = id_output[-1].strip()
-        for name in disallowed_libraries(libraries, own):
-            problems.append(f"{binary.relative_to(app)} links {name}")
+        where = binary.relative_to(app)
+        for rpath in external_rpaths(rpaths):
+            problems.append(f"{where} searches {rpath}")
+        for name in libraries:
+            if name == own:
+                continue
+            if name.startswith("@rpath/"):
+                if resolve_rpath_library(binary, name, rpaths, app) is None:
+                    problems.append(f"{where} links {name}, which no bundle rpath resolves")
+            elif name in disallowed_libraries([name]):
+                problems.append(f"{where} links {name}")
     return problems
 
 
@@ -509,6 +576,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("itms-services is still present in:\n  " + "\n  ".join(remaining))
 
     binaries = macho_files(app)
+    removed = strip_external_rpaths(app, binaries)
+    print(f"removed {removed} rpath(s) pointing outside the bundle")
     problems = check_linkage(app, binaries)
     if problems:
         raise SystemExit("libraries outside the bundle or the OS:\n  " + "\n  ".join(problems))

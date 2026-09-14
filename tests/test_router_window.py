@@ -215,6 +215,51 @@ def test_ai_check_failure_shows_only_the_exception_class_name():
     assert "sk-ant-SECRET" not in out
 
 
+def test_ai_check_passes_the_key_to_the_default_client(monkeypatch):
+    """A sandboxed app has no shell environment for the SDK's own lookup, so the
+    key the caller resolved has to reach the client explicitly.
+    """
+    from netdnsmonitor import anthropic_escalator
+
+    client = FakeClient()
+    keys = []
+    monkeypatch.setattr(
+        anthropic_escalator, "default_client", lambda api_key=None: keys.append(api_key) or client
+    )
+    out = ai_config_check(VALUES, Runner(), [], "from-keychain")
+    assert keys == ["from-keychain"]
+    assert out == "\n[AI Analysis]\nlooks fine"
+
+
+def test_ai_check_reads_the_key_from_the_getter_on_the_worker(tmp_path):
+    client = FakeClient()
+    reads = []
+    jobs = []
+    ctrl, lines = controller(
+        tmp_path,
+        client_factory=lambda: client,
+        environ={},
+        api_key_getter=lambda: reads.append(1) or "k",
+        spawn=jobs.append,
+    )
+    ctrl.on_ai_check(VALUES)
+    assert reads == []  # a Keychain read must not block the main thread
+    jobs.pop()()
+    assert reads == [1]
+    assert lines[-1] == "\n[AI Analysis]\nlooks fine"
+
+
+def test_a_failing_key_getter_is_reported_by_class_name_only(tmp_path):
+    def broken():
+        raise RuntimeError("keychain item sk-ant-SECRET")
+
+    made = []
+    ctrl, lines = controller(tmp_path, client_factory=lambda: made.append(1), api_key_getter=broken)
+    ctrl.on_ai_check(VALUES)
+    assert lines[-1] == "skipped: could not read ANTHROPIC_API_KEY (RuntimeError)"
+    assert made == []
+
+
 def test_ai_check_through_the_controller_posts_the_result(tmp_path):
     client = FakeClient(text="fine")
     ctrl, lines = controller(
@@ -276,6 +321,18 @@ def test_start_refuses_same_wan_and_lan(tmp_path):
     assert "refused: WAN and LAN are the same interface" in lines
 
 
+def test_start_without_both_interfaces_never_reaches_the_router(tmp_path):
+    """The save refuses an empty popup; start used to go ahead anyway on
+    whatever interfaces the router already held.
+    """
+    router = FakeRouter()
+    ctrl, lines = controller(tmp_path, router=router)
+    ctrl.on_start({**VALUES, "wan_interface": None})
+    assert router.started == 0
+    assert "refused: select both a WAN and a LAN interface" in lines
+    assert not (tmp_path / "config.yaml").exists()
+
+
 def test_start_reports_the_routers_own_outcome(tmp_path):
     router = FakeRouter(
         outcome="failed: exit 1; steps before the failing one may have taken effect"
@@ -302,6 +359,171 @@ def test_a_failed_worker_start_does_not_strand_the_busy_flag(tmp_path):
     ctrl, lines = controller(tmp_path, router=FakeRouter(), spawn=dead)
     ctrl.on_stop()
     assert ctrl._busy is False
+
+
+class WorkerApp:
+    """The app's side of the router worker: one slot shared with the menu."""
+
+    def __init__(self, router, accept=True):
+        self.router = router
+        self.accept = accept
+        self.jobs = []
+
+    def _start_router_worker(self, slot, label, work, reveal=False):
+        self.jobs.append((slot, label, work))
+        return self.accept
+
+
+def window_on(app, tmp_path):
+    def no_own_worker(fn):
+        raise AssertionError("the window started its own router worker")
+
+    ctrl = RouterWindowController(
+        config_getter=dict,
+        config_path=str(tmp_path / "config.yaml"),
+        app=app,
+        run_fn=Runner(),
+        post=lambda fn, *args: fn(*args),
+        spawn=no_own_worker,
+        environ={},
+    )
+    lines = []
+    ctrl.append_log = lines.append
+    return ctrl, lines
+
+
+def test_router_actions_share_the_apps_worker_slot_with_the_menu(tmp_path):
+    """Two guards on two threads let the menu and the window run root scripts
+    at the same time; the app's slot is the one both must go through.
+    """
+    router = FakeRouter()
+    app = WorkerApp(router)
+    ctrl, lines = window_on(app, tmp_path)
+
+    ctrl.on_start(VALUES)
+    ctrl.on_stop()
+
+    assert [(slot, label) for slot, label, _ in app.jobs] == [
+        ("_router_thread", "Start router"),
+        ("_router_thread", "Stop router"),
+    ]
+    assert router.started == 0  # queued on the app's worker, not run here
+    assert app.jobs[0][2]() == "ok: started"
+    assert lines[-1] == "Start router: ok: started"
+
+
+def test_an_action_the_app_refuses_says_so_in_the_window(tmp_path):
+    app = WorkerApp(FakeRouter(), accept=False)
+    ctrl, lines = window_on(app, tmp_path)
+    ctrl.on_stop()
+    assert lines[-1] == "Stop router: not started (the notification says why)"
+
+
+def test_a_raising_router_action_is_logged_by_class_name(tmp_path):
+    class Broken(FakeRouter):
+        def stop(self):
+            raise RuntimeError("detail at /private/path")
+
+    app = WorkerApp(Broken())
+    ctrl, lines = window_on(app, tmp_path)
+    ctrl.on_stop()
+    assert app.jobs[0][2]() == "failed: RuntimeError"
+    assert lines[-1] == "Stop router: failed: RuntimeError"
+
+
+class FakePopup:
+    def __init__(self):
+        self.items = []
+        self.selected = None
+
+    def removeAllItems(self):
+        self.items = []
+        self.selected = None
+
+    def addItemsWithTitles_(self, titles):
+        self.items.extend(titles)
+
+    def selectItemAtIndex_(self, index):
+        self.selected = index
+
+    def titleOfSelectedItem(self):
+        return self.items[self.selected] if self.selected is not None else None
+
+
+class FakeField:
+    def __init__(self, text):
+        self.text = text
+
+    def stringValue(self):
+        return self.text
+
+
+def fake_form(ctrl):
+    """The widgets `_build_window` would create, for the handlers that read them."""
+    ctrl.wan_popup, ctrl.lan_popup = FakePopup(), FakePopup()
+    ctrl.lan_ip = FakeField(VALUES["lan_ip"])
+    ctrl.lan_nm = FakeField(VALUES["lan_netmask"])
+    ctrl.dhcp_s = FakeField(VALUES["dhcp_start"])
+    ctrl.dhcp_e = FakeField(VALUES["dhcp_end"])
+
+
+HARDWARE_PORTS = "Hardware Port: Wi-Fi\nDevice: en0\n\nHardware Port: USB LAN\nDevice: en3\n"
+
+
+def test_interfaces_are_listed_on_the_worker_not_the_main_thread(tmp_path):
+    """`networksetup` can take its full timeout; show() used to wait for it."""
+    run = Runner({"networksetup": HARDWARE_PORTS})
+    jobs = []
+    config = {"wan_interface": "en3", "lan_interface": "en0"}
+    ctrl, lines = controller(tmp_path, run_fn=run, spawn=jobs.append, config=config)
+    fake_form(ctrl)
+
+    assert ctrl._request_interfaces() is True
+    assert run.calls == []
+
+    jobs.pop()()
+    assert ctrl.interfaces == ["Wi-Fi (en0)", "USB LAN (en3)"]
+    assert ctrl.wan_popup.titleOfSelectedItem() == "USB LAN (en3)"
+    assert ctrl.lan_popup.titleOfSelectedItem() == "Wi-Fi (en0)"
+    assert jobs == []  # no refresh was asked for
+
+
+def test_the_first_refresh_waits_for_the_selected_interfaces(tmp_path):
+    run = Runner({"networksetup": HARDWARE_PORTS})
+    jobs = []
+    config = {"wan_interface": "en0", "lan_interface": "en0"}
+    ctrl, lines = controller(tmp_path, run_fn=run, spawn=jobs.append, config=config)
+    fake_form(ctrl)
+
+    ctrl._request_interfaces(refresh=True)
+    jobs.pop()()
+    jobs.pop()()  # the diagnostics the populate step asked for
+    assert "same interface" in lines[-1]
+
+
+def test_an_empty_interface_list_is_said_after_the_refresh_clears_the_log(tmp_path):
+    jobs = []
+    ctrl, lines = controller(tmp_path, run_fn=Runner(returncode=1), spawn=jobs.append)
+    fake_form(ctrl)
+    cleared = []
+    ctrl._clear_log = lambda: cleared.append(len(lines))
+
+    ctrl._request_interfaces(refresh=True)
+    jobs.pop()()
+    assert ctrl.interfaces == []
+    assert cleared == [0]
+    assert lines == ["Could not list network interfaces."]
+
+
+def test_a_worker_that_cannot_start_leaves_the_popups_empty(tmp_path):
+    def dead(fn):
+        raise RuntimeError("can't start new thread")
+
+    run = Runner({"networksetup": HARDWARE_PORTS})
+    ctrl, lines = controller(tmp_path, run_fn=run, spawn=dead)
+    assert ctrl._request_interfaces() is False
+    assert run.calls == []
+    assert lines[-1] == "failed: could not start a worker (RuntimeError)"
 
 
 def test_ping_refuses_an_option_and_never_runs(tmp_path):

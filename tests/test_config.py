@@ -244,6 +244,17 @@ def test_the_shipped_config_declares_nothing_the_app_ignores():
     )
 
 
+def test_the_shipped_config_does_not_say_the_router_starts_at_launch():
+    """The comment still said so after app.py stopped starting the router at
+    launch, because the admin dialog appeared unasked on every login. app.py
+    builds the router at launch, but only the Router menu and the router window
+    start it.
+    """
+    text = SHIPPED_CONFIG.read_text(encoding="utf-8")
+    assert "at launch it addresses" not in text
+    assert "Nothing starts at launch." in text
+
+
 def test_learn_interval_is_clamped_above_the_poll_interval(tmp_path):
     """At or below the poll interval, a dead domain is re-added every tick, the
     flap gate's success counter never resets, and one dead name latches a

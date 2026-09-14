@@ -101,9 +101,22 @@ def default_run(args: list[str], timeout: float = 5) -> object:
     # the rumps timer thread, and networksetup contends with SystemConfiguration
     # during exactly the network churn being diagnosed -- a longer ceiling turns
     # one attempt into a menu-bar freeze.
+    # The encoding is explicit because text=True alone decodes with the process
+    # locale, and an app launched from Finder or the Dock has no LANG: a
+    # non-ASCII service name then raised UnicodeDecodeError on every call.
+    # networksetup writes UTF-8. surrogateescape rather than replace, because
+    # parsed names go back into the -ordernetworkservices argv and must
+    # round-trip byte for byte; a replaced character names no service.
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-    except (subprocess.SubprocessError, OSError) as exc:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=timeout,
+        )
+    except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
         return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
 
 

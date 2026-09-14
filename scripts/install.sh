@@ -17,11 +17,13 @@
 # Why this exists separately from scripts/start.sh and net-dns-monitor-service
 #
 # start.sh launches the app in the foreground for development. net-dns-monitor-
-# service owns supervision, but it installs *from an already-built bundle* and
-# its default SOURCE_BUNDLE points at the developer's own worktree -- a path that
-# does not exist on any other machine. This script is the missing piece: it
-# builds the bundle first and then hands the service script an explicit
-# NDM_SOURCE_BUNDLE pointing into this checkout.
+# service owns supervision, but it installs *from an already-built bundle*. Its
+# default source is the bundle path it recorded at the last install, then the
+# dist/ of the checkout the script sits in -- and the installed copy in
+# ~/.local/bin sits in no checkout. This script is the missing piece: it builds
+# the bundle first and then hands the service script an explicit
+# NDM_SOURCE_BUNDLE pointing into this checkout, which the service script then
+# records for later `update` runs.
 #
 # "Starts on boot" precisely: a LaunchAgent, not a LaunchDaemon, so it starts at
 # *login* rather than at boot. That is deliberate and not a shortcut -- this is a
@@ -161,8 +163,8 @@ install -m 0755 "$SERVICE_SRC" "$SERVICE_DST"
 ok "installed $SERVICE_DST"
 
 # The service script copies the bundle out to ~/Applications and writes the
-# plist. NDM_SOURCE_BUNDLE overrides its built-in default, which points at the
-# original author's worktree and does not exist here.
+# plist. NDM_SOURCE_BUNDLE is explicit here because the installed script's own
+# default (a recorded path, then its checkout's dist/) cannot know this build yet.
 NDM_SOURCE_BUNDLE="$BUNDLE" "$SERVICE_DST" install
 
 # --- 6. verify -------------------------------------------------------------

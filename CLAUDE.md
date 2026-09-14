@@ -168,9 +168,10 @@ comment that is wrong about why is as expensive as code that is wrong.
   (050e905) already contains the reconciled `dns-resolution-monitor` head (02c40dd),
   but not the optimizer pass or the App Store work. The other worktrees under
   `.claude/worktrees/` and the `docs/scripts-manual` branch are older and are not what
-  should run. `scripts/net-dns-monitor-service` still defaults `SOURCE_BUNDLE` to the
-  old `dns-resolution-monitor` worktree; `scripts/install.sh` overrides it with
-  `NDM_SOURCE_BUNDLE`. Reports predating the reconcile were produced by an older tree,
+  should run. `scripts/net-dns-monitor-service` resolves `SOURCE_BUNDLE` from
+  `NDM_SOURCE_BUNDLE`, then the path its last install or update recorded in
+  `~/Library/Application Support/net-dns-monitor/source-bundle`, then its own checkout's
+  `dist/`; `scripts/install.sh` passes `NDM_SOURCE_BUNDLE`. Reports predating the reconcile were produced by an older tree,
   so check the report's date before concluding the current code behaves the way it
   suggests.
 - **Two router implementations exist, and which one is canonical is an owner

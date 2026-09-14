@@ -14,7 +14,8 @@ answers at all) and two from the peer (`external_reachable`, `dns_ok`) resolve i
       Nothing on the LAN answers, including a machine that was answering
       minutes ago, and our external check fails too. Our own link is the
       thing that changed. If we can still get out, silent peers say nothing
-      about our link, and the DNS layer decides instead.
+      about our link, and the DNS layer decides instead. Resting on a single
+      silent peer, this is only medium confidence: that peer may be asleep.
 
   peer fine, we can't get out       -> LOCAL_MACHINE
       The LAN works, the peer's internet works, ours doesn't. Route, firewall,
@@ -136,15 +137,28 @@ def localize(
         # the "our connectivity" half: when addresses are reachable, or the check
         # was not probed, silent peers are not evidence against the link, and
         # the DNS layer below decides with no peer state to lean on.
-        return _verdict(
-            LOCAL_MACHINE,
-            "high",
+        reason = (
             f"None of the {len(silent)} known peer(s) answered. A peer on the same "
             "network is reachable without leaving the LAN, so losing all of them "
             "at once points at this machine's own link rather than anything "
-            "beyond the router.",
-            evidence,
+            "beyond the router."
         )
+        # One silence cannot tell "our link died" from "that machine went to
+        # sleep". A peer stays in the `current` window for minutes after its lid
+        # closes, so during an ISP outage a lone sleeping laptop would otherwise
+        # yield "this machine" at high confidence -- sending someone to reboot the
+        # wrong thing. Two or more peers going quiet at the same moment is far
+        # less likely to be coincidental sleep, so they keep high confidence.
+        if len(silent) < 2:
+            return _verdict(
+                LOCAL_MACHINE,
+                "medium",
+                reason + " This rests on a single silent peer, though, and a single "
+                "peer may simply be asleep or switched off, so an outage beyond the "
+                "router is not ruled out.",
+                evidence,
+            )
+        return _verdict(LOCAL_MACHINE, "high", reason, evidence)
 
     peer_external = _consensus(informative, "external_reachable")
     peer_dns = _consensus(informative, "dns_ok")

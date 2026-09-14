@@ -214,3 +214,52 @@ def test_a_release_build_requires_a_real_https_privacy_policy_url():
 
 def test_an_adhoc_build_does_not_need_a_privacy_policy_url():
     assert build.privacy_policy_problem("", "adhoc") is None
+
+
+OTOOL_L_SAMPLE = """Load command 12
+          cmd LC_RPATH
+      cmdsize 32
+         path /opt/homebrew/lib (offset 12)
+Load command 13
+          cmd LC_RPATH
+      cmdsize 40
+         path @loader_path/../Frameworks (offset 12)
+Load command 14
+          cmd LC_LOAD_DYLIB
+      cmdsize 56
+         name /usr/lib/libSystem.B.dylib (offset 24)
+"""
+
+
+def test_rpaths_are_parsed_in_load_command_order():
+    assert build.parse_rpaths(OTOOL_L_SAMPLE) == ["/opt/homebrew/lib", "@loader_path/../Frameworks"]
+
+
+def test_an_absolute_rpath_is_external_and_a_bundle_relative_one_is_not():
+    rpaths = ["/opt/homebrew/lib", "@loader_path/../lib", "@executable_path/../Frameworks"]
+    assert build.external_rpaths(rpaths) == ["/opt/homebrew/lib"]
+
+
+def test_an_rpath_library_resolves_only_to_a_file_inside_the_bundle(tmp_path):
+    app = tmp_path / "X.app"
+    binary = app / "Contents" / "Resources" / "lib" / "_ssl.so"
+    lib = app / "Contents" / "Frameworks" / "libssl.3.dylib"
+    lib.parent.mkdir(parents=True)
+    lib.write_bytes(b"x")
+    binary.parent.mkdir(parents=True)
+    rpaths = ["@loader_path/../../Frameworks"]
+    found = build.resolve_rpath_library(binary, "@rpath/libssl.3.dylib", rpaths, app)
+    assert found == lib
+    assert build.resolve_rpath_library(binary, "@rpath/libffi.8.dylib", rpaths, app) is None
+    # An absolute rpath never counts, even if the file exists on this Mac.
+    outside = ["/opt/homebrew/lib"]
+    assert build.resolve_rpath_library(binary, "@rpath/libssl.3.dylib", outside, app) is None
+
+
+def test_an_rpath_that_climbs_out_of_the_bundle_does_not_resolve(tmp_path):
+    app = tmp_path / "X.app"
+    binary = app / "Contents" / "MacOS" / "python"
+    (tmp_path / "libevil.dylib").write_bytes(b"x")
+    binary.parent.mkdir(parents=True)
+    rpaths = ["@loader_path/../../.."]
+    assert build.resolve_rpath_library(binary, "@rpath/libevil.dylib", rpaths, app) is None
