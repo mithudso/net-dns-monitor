@@ -161,7 +161,12 @@ def localize(
         return _verdict(LOCAL_MACHINE, "high", reason, evidence)
 
     peer_external = _consensus(informative, "external_reachable")
-    peer_dns = _consensus(informative, "dns_ok")
+    # A peer that cannot get out cannot vouch for or against a resolver: its DNS
+    # failure is a symptom of its own outage, the same rule the network layer
+    # below applies to this machine. Counting it would turn one peer behind a
+    # blocked VPN into a high-confidence "the shared resolver is down".
+    dns_witnesses = [p for p in informative if p.get("external_reachable") is not False]
+    peer_dns = _consensus(dns_witnesses, "dns_ok")
     evidence["peer_external_reachable"] = peer_external
     evidence["peer_dns_ok"] = peer_dns
 

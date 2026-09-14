@@ -153,8 +153,9 @@ def test_settings_in_force_are_shown_so_behaviour_is_explicable():
 
 
 def test_an_empty_domains_list_is_called_out_not_left_blank():
-    """An empty `domains` list is the documented foot-gun that latches a
-    permanent false incident, so the window must not render it as whitespace.
+    """With no domains to show, the row says so rather than rendering
+    whitespace. (The app passes the probed list, which includes the control
+    domain; see the next test.)
     """
     rows = flat(
         dashboard_sections(
@@ -510,3 +511,22 @@ def test_output_pane_accumulates_rather_than_replacing():
     assert "first" in body
     assert "second" in body
     assert body.index("first") < body.index("second")
+
+
+def test_the_domains_row_shows_what_the_prober_resolves_when_given():
+    rows = flat(
+        dashboard_sections(
+            ping_stats=HEALTHY,
+            flap_state="healthy",
+            config={**CONFIG, "domains": []},
+            dns_domains=["api.anthropic.com"],
+        )
+    )
+    assert rows["Domains checked for DNS"] == "api.anthropic.com"
+
+
+def test_the_results_pane_keeps_only_the_newest_text():
+    from netdnsmonitor.dashboard import capped_output
+
+    assert capped_output("abc", "def", limit=4) == "cdef"
+    assert capped_output("", "short", limit=100) == "short"

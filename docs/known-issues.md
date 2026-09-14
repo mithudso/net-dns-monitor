@@ -148,8 +148,11 @@ Measured, reproducible, and currently unfixed.
 - **`state_machine.tick()` still runs on the `rumps` run loop.** `app.tick()`
   calls it from the `poll_interval_seconds` timer. On an incident edge that tick
   also runs the ladder commands (5s timeout each), `log show` (10s timeout) and
-  the escalation call. The escalation call alone can freeze the menu bar for up
-  to its 30s timeout (`anthropic_escalator.DEFAULT_TIMEOUT_SECONDS`).
+  the escalation call. The escalation call alone can freeze the menu bar for its
+  30s request timeout (`anthropic_escalator.DEFAULT_TIMEOUT_SECONDS`) plus the
+  name lookup of `api.anthropic.com`, which no timeout bounds: the HTTP client
+  resolves the name before it applies the timeout. On a DNS incident that lookup
+  goes through the broken resolver.
   `default_client()` now sets `max_retries=0`, so SDK retries no longer multiply
   that wait. Moving the pipeline to a worker changes the order of report, alert
   and failback, so it waits for the owner.
@@ -193,6 +196,17 @@ Measured, reproducible, and currently unfixed.
   start with a backup. If a third service (neither preferred nor a backup) led
   that record, failback puts that service back at the head. The outcome still
   reads `ok: ... (failed back to preferred '<preferred>')`.
+- **Automatic failback can return to a dead ISP link when probe targets are
+  gateways.** If `failover_probe_targets` point at each link's own gateway, a
+  preferred-link probe that succeeds proves only that the LAN answers. During an
+  ISP outage the gateway still answers. After a manual switch to a backup, three
+  good gateway probes and the cooldown make failback move the machine back onto
+  the dead link. The next incident's failover step then refuses with "the outage
+  is not specific to this path", which is false, and the failback cleared the
+  record, so nothing moves again. Options for the owner: give the preferred link
+  a separate target set that lies beyond its gateway; disable automatic failback
+  after a manual switch; or at least reword the refusal reason. Found by the
+  blind re-audit on 2026-09-14.
 
 ## Gaps
 

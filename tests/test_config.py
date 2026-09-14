@@ -529,3 +529,36 @@ def test_a_disabled_router_does_not_block_startup_on_a_stale_value(tmp_path):
         _write(tmp_path, 'router_enabled: false\nwan_interface: "Thunderbolt Bridge"\n')
     )
     assert cfg["wan_interface"] == "Thunderbolt Bridge"
+
+
+def test_a_non_string_list_item_is_refused_naming_the_key(tmp_path):
+    """An unquoted `-1009` loads as an int, and an int noise pattern raises inside
+    the log filter, so the dashboard never opens."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("log_view_noise_patterns:\n  - -1009\n")
+    with pytest.raises(ConfigError) as caught:
+        load_config(str(config_path))
+    assert caught.value.key == "log_view_noise_patterns"
+
+
+def test_a_numeric_sensitive_string_is_still_accepted(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("sensitive_strings:\n  - 8443\n")
+    assert load_config(str(config_path))["sensitive_strings"] == [8443]
+
+
+def test_a_numeric_log_window_is_read_as_seconds_text(tmp_path):
+    """`log show --last 300` means 300 seconds; an int in the argv would raise."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("log_lookback: 300\nlog_view_poll_window: 60\n")
+    cfg = load_config(str(config_path))
+    assert cfg["log_lookback"] == "300"
+    assert cfg["log_view_poll_window"] == "60"
+
+
+def test_a_blank_log_window_is_refused_naming_the_key(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("log_view_backfill_window: ''\n")
+    with pytest.raises(ConfigError) as caught:
+        load_config(str(config_path))
+    assert caught.value.key == "log_view_backfill_window"

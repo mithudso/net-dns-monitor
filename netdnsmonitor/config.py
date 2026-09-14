@@ -410,8 +410,20 @@ def target_problem(entry) -> Optional[str]:
     return None
 
 
+# `log show --last` windows. YAML reads `300` as an int, and an int in a
+# subprocess argv raises TypeError inside the log reader -- which the incident
+# pipeline turns into an empty excerpt list that reads as "nothing matched".
+# A bare number is valid `--last` syntax (seconds), so the int has one safe
+# reading: its text.
+LOG_WINDOW_KEYS = ("log_lookback", "log_view_poll_window", "log_view_backfill_window")
+
+
 def normalize_config(config: dict) -> None:
     """Replace a null that has exactly one safe reading with that reading, in place."""
+    for key in LOG_WINDOW_KEYS:
+        value = config.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            config[key] = str(value)
     for key in EMPTY_WHEN_NULL:
         if key in config and config[key] is None:
             config[key] = []
@@ -448,6 +460,29 @@ def validate_config(config: dict) -> None:
                 f"single string {config[key]!r} -- wrap it in a list, e.g. "
                 f"[{config[key]!r}]. A bare string is iterated "
                 f"character-by-character by the code that consumes it.",
+            )
+
+    # Items must be strings too. YAML reads an unquoted `-1009` as an int, and
+    # an int in log_view_noise_patterns raises TypeError on `in` inside the log
+    # filter, so the dashboard never opens and log announcements are lost.
+    # sensitive_strings is exempt: redact() already reads each item with str().
+    for key in LIST_KEYS:
+        if key == "sensitive_strings" or not isinstance(config.get(key), (list, tuple)):
+            continue
+        for item in config[key]:
+            if not isinstance(item, str):
+                raise ConfigError(
+                    key,
+                    f"config key '{key}' must be a list of strings; {item!r} is not a "
+                    f"string -- quote it",
+                )
+
+    for key in LOG_WINDOW_KEYS:
+        if key in config and not (isinstance(config[key], str) and config[key].strip()):
+            raise ConfigError(
+                key,
+                f"config key '{key}' must be a `log show --last` window such as "
+                f"'5m' or '300', got {config[key]!r}",
             )
 
     for key in TARGET_KEYS:

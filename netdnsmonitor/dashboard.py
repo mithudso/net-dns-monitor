@@ -84,6 +84,18 @@ def _yes_no(value: Optional[bool]) -> str:
     return "yes" if value else "no"
 
 
+# The results pane is appended to on most log polls whether or not the window
+# is visible. Each append copies the whole pane across the bridge and re-lays it
+# out on the main thread, so after weeks of LaunchAgent uptime an uncapped pane
+# turns every append into a multi-megabyte stall of the run loop the tick,
+# ping and UI timers share. The newest text is what anyone reads.
+OUTPUT_MAX_CHARS = 200_000
+
+
+def capped_output(current: str, text: str, limit: int = OUTPUT_MAX_CHARS) -> str:
+    return (current + text)[-limit:]
+
+
 def dashboard_sections(
     *,
     ping_stats: dict,
@@ -97,6 +109,7 @@ def dashboard_sections(
     episode_started_at: Optional[str] = None,
     peers: Optional[dict] = None,
     fault_verdict: Optional[dict] = None,
+    dns_domains: Optional[list] = None,
     log_entries: int = 0,
     log_errors: int = 0,
     new_log_errors: int = 0,
@@ -153,7 +166,14 @@ def dashboard_sections(
             f"{config.get('success_threshold', '?')} successes",
         ),
         ("Resolution batch every", f"{config.get('resolution_interval_seconds', '?')}s"),
-        ("Domains checked for DNS", ", ".join(config.get("domains") or []) or "none configured"),
+        # dns_domains is what the prober actually resolves (domains plus the
+        # control domain); config["domains"] alone said "none configured"
+        # while api.anthropic.com was checked on every tick.
+        (
+            "Domains checked for DNS",
+            ", ".join(dns_domains if dns_domains is not None else config.get("domains") or [])
+            or "none configured",
+        ),
     ]
 
     sections = [
@@ -611,7 +631,7 @@ class DashboardWindow:
 
     def append_output(self, text: str):
         current = self.output_view.string() or ""
-        self.output_view.setString_(current + text)
+        self.output_view.setString_(capped_output(current, text))
         self.output_view.scrollRangeToVisible_((len(self.output_view.string() or ""), 0))
 
     # --- the log column ----------------------------------------------------

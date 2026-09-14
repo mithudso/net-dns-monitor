@@ -2063,6 +2063,7 @@ class NetDnsMonitorApp(rumps.App):
                 if self.config["peer_discovery_enabled"]
                 else None,
                 fault_verdict=self.fault_verdict,
+                dns_domains=anchor_domains(self.config),
                 log_entries=len(self.log_buffer.entries()),
                 log_errors=self.log_buffer.error_count(),
                 new_log_errors=self.new_log_errors,

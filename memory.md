@@ -30,7 +30,7 @@ Correction to v1:
 - The installer edit v1 describes never reached the repository. On 2026-09-14 neither the tracked `router/scripts/install_persistent_nat.sh` nor the main checkout's copy contained `StartInterval` or the `/var/log` paths. The installed daemon had them. Branch `feat/appstore-prep` restores both in the installer.
 
 What was done (branch `feat/appstore-prep`, worktree `.claude/worktrees/appstore-prep`):
-- **Deep code optimizer.** Ran 16 audit bundles and applied fixes in two waves with disjoint file ownership. The suite went from 1098 to 1527+ tests (see TESTING.md for the final count). Blocked findings are recorded in `docs/known-issues.md`.
+- **Deep code optimizer.** Three audit-and-fix iterations plus two blind re-audit gates. The suite went from 1098 to 1855 tests. The second blind gate still reported 1 High and 4 Medium; those were fixed afterwards but not re-audited by a third blind pass (cdo status BLIND-AUDIT-DISSENT). Owner decisions are recorded in `docs/known-issues.md`.
 - **Security fixes:**
   - The router no longer runs a root script from `/tmp`.
   - The NAT LaunchDaemon installer now copies the script to a root-owned path.
@@ -50,4 +50,6 @@ Security action still needed on this machine (it cannot be fixed from the repo):
 Remaining steps:
 - Decide which router stack is canonical: `router.py` (bootpd) or `router/` (dnsmasq/unbound).
 - Run the release build with real Apple certificates and submit (see `docs/APP_STORE_SUBMISSION.md`).
-- Launch the sandboxed GUI build by hand once. Automation cannot do this.
+- Launch the sandboxed GUI build by hand once, and press Cmd-V in Credentials > Set Anthropic API key. Automation cannot do either.
+- Merging this branch to master changes the live resolver: /opt/homebrew/etc/unbound/unbound.conf and dnsmasq.conf are symlinks into the main checkout, so the narrowed unbound access list and `username: "nobody"` apply at the next unbound restart.
+- Inspect the older `/etc/sudoers.d/net-dns-monitor` (2026-08-19) with `sudo cat`; it predates the current grant code.

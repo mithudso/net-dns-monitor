@@ -64,6 +64,7 @@ notarization (§10). Both can coexist.
 **Not verified here:**
 - **Release mode was never run.** This Mac has no Apple Distribution or Mac Installer Distribution certificate, so release signing, provisioning-profile embedding and `productbuild` signing have not been run. Ad-hoc mode was run end to end.
 - **The GUI app itself was not launched sandboxed.** Launching it cannot be automated (see CLAUDE.md). Only the probe executable was run.
+- **Two helpers still shell out in the store build.** "Open forensic logs folder" runs `/usr/bin/open`, and the alert's notification fallback runs `osascript`. Neither has run sandboxed. Reports themselves now open through NSWorkspace. Click both once in the ad-hoc build.
 - **Pasting into the credentials dialog needs a manual check.** The app now installs a standard Edit menu, so ⌘V should paste into Credentials → Set Anthropic API key…. No automated test can send a real keystroke. Try it once in the ad-hoc build before submitting.
 
 ## 3. One-time Apple setup

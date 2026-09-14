@@ -351,3 +351,18 @@ def test_two_silent_peers_keep_the_high_confidence_verdict():
     assert result["verdict"] == LOCAL_MACHINE
     assert result["confidence"] == "high"
     assert "asleep or switched off" not in result["reason"]
+
+
+@pytest.mark.parametrize("our_external", [True, None])
+def test_a_peer_that_cannot_get_out_is_not_dns_evidence(our_external):
+    """A peer with its own egress blocked also fails DNS. That failure says
+    nothing about the resolver this machine uses, so it must not produce a
+    shared-resolver verdict."""
+    result = localize(our_external, False, [peer(external=False, dns=False)])
+    assert result["verdict"] != DNS_OUTAGE
+    assert result["confidence"] != "high"
+
+
+def test_a_peer_that_can_get_out_still_counts_as_dns_evidence():
+    result = localize(True, False, [peer(external=True, dns=False)])
+    assert result["verdict"] == DNS_OUTAGE

@@ -832,3 +832,13 @@ def test_a_status_change_repaints_the_dock_tile_immediately(tmp_path, monkeypatc
 
     assert len(calls) > before
     assert calls[-1][0] == "incident"
+
+
+def test_the_control_domain_is_listed_as_checked(tmp_path):
+    """The prober resolves the control domain every tick, so the window must not
+    say no domains are checked."""
+    app = make_app(tmp_path)
+    app.config["domains"] = []
+    app.config["control_domain"] = "api.anthropic.com"
+    app.open_dashboard()
+    assert "api.anthropic.com" in app._dashboard.stats_view.string()
