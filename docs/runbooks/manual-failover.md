@@ -46,9 +46,12 @@ python3 -m netdnsmonitor.cli failover status
 
 ```
 Active service : <head of the order> (on the backup | on the preferred link | on neither the preferred link nor a backup)
-Automatic      : yes | no (manual only)
+Automatic      : yes | yes (failback paused after a manual switch; `netdns failover preferred` ends it) | no (manual only)
 <table: SERVICE, DEVICE, SVC, REACHABLE, Mbps for the preferred service and each backup>
 ```
+
+The `paused` form appears only with automatic switching on and a backup at the
+head of the order. See [Automatic failback after a manual switch](#automatic-failback-after-a-manual-switch).
 
 `REACHABLE` is `reachable`, `unreachable`, or `not probed`. `not probed` means
 the interface is absent or has no device. It does not mean the link is dead.
@@ -59,7 +62,7 @@ An unplugged adapter at the head still shows as active.
 In the menu bar, the three rows at the top show the same state:
 
 ```
-Active: <service> — failover is automatic | manual only
+Active: <service> — failover is automatic | automatic, failback paused after a manual switch | manual only
 ● Preferred: <name> (<device>) — reachable | unreachable | not probed
 ○ Backup: <name> (<device>) — ...
 ```
@@ -90,7 +93,7 @@ python3 -m netdnsmonitor.cli failover preferred                 # back to the re
 ### From the menu bar
 
 - **Switch to backup now** switches to the best-ranked backup. It takes no service
-  name.
+  name. Like `failover backup`, it pauses automatic failback (see below).
 - **Switch back to preferred now** restores the recorded order.
 
 Both run on the menu bar's run loop. The menu does not respond until the switch
@@ -101,6 +104,43 @@ says
 
 The switch lock is per process. Do not switch from the terminal and the menu at
 the same time.
+
+### Automatic failback after a manual switch
+
+A manual switch to a backup, from the menu or with `failover backup`, pauses
+automatic failback. The machine stays on the backup until you switch back, even
+when the preferred link's probes answer again.
+
+Why: if `failover_probe_targets` point at each link's gateway, a preferred probe
+that answers proves only that the local network is up. The ISP link behind the
+gateway can still be dead, and an automatic failback would move traffic back onto
+it.
+
+- The app records the pause as `"failback_paused": true` in `failover.json` before
+  it writes the new order. The running app, the CLI and a restarted app all read
+  it from there.
+- While the pause is set, the failback check on each healthy tick lists nothing
+  and probes nothing.
+- `failover status` and the first menu row say `failback paused after a manual
+  switch` while a backup heads the order and automatic switching is on.
+
+The pause ends when one of these happens:
+
+- A switch back to preferred (`failover preferred` or **Switch back to preferred
+  now**) is confirmed by the read-back. If that switch is refused or cannot be
+  confirmed, the pause stays and nothing moves on its own.
+- A request for preferred finds the preferred service already at the head of the
+  order, for example after you reordered by hand. The outcome is
+  `no switch: already on the preferred network`.
+- The incident failover step finds the preferred service at the head of the order.
+- An automatic failover happens. It sets no pause, so its failback runs as before.
+
+A `failover backup` request that finds the machine already on a backup writes
+nothing, so it does not pause the failback of an automatic failover.
+
+**Limit:** after an automatic failover, failback still acts on the probe targets.
+With gateway targets it can still return to a dead ISP link. See
+[known-issues.md](../known-issues.md), "Decided".
 
 ### How a backup is chosen
 
@@ -158,11 +198,14 @@ to another keeps the existing record. The record lives in
   "original_order": ["USB 10/100/1G/2.5G LAN", "Wi-Fi", "Thunderbolt Bridge"],
   "enabled_by_us": null,
   "last_switch_at": 1757860000.0,
-  "switch_times": [1757860000.0]
+  "switch_times": [1757860000.0],
+  "failback_paused": true
 }
 ```
 
 The app writes the file atomically with mode `0600`. The app and the CLI share it.
+`failback_paused` is `true` after a manual switch to a backup and `false` after an
+automatic one. A file written before the key existed loads as `false`.
 
 ### Normal path
 
@@ -177,7 +220,8 @@ Or click **Switch back to preferred now**. The failback restores
 - The first recorded name is not a configured backup.
 
 Otherwise it promotes the preferred service and says why. After a successful
-failback it clears `original_order` and disables any service it had enabled.
+failback it clears `original_order` and `failback_paused`, and disables any
+service it had enabled.
 
 ### By hand
 
@@ -211,10 +255,11 @@ rm ~/Library/Application\ Support/net-dns-monitor/failover.json
 ```
 
 Removing the file also clears the switch timestamps that the automatic cooldown
-and hourly cap use.
+and hourly cap use, and the failback pause.
 
 ## Roll back
 
-- To undo a switch to a backup, switch to preferred.
+- To undo a switch to a backup, switch to preferred. A confirmed switch also ends
+  the failback pause.
 - To undo a failback, switch to the backup again. The app records a new
   `original_order` first.

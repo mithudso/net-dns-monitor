@@ -1,11 +1,12 @@
 # Known issues
 
-Six lists. "By design" is behaviour that looks like a bug and is not: changing
-it would make the app claim more than it knows. "Unproven" is code that has never
-been observed working against the real system. "Confirmed limitations" are
-measured and currently unfixed. "Blocked on an owner decision" has a known fix
-direction that changes intended behaviour, so it waits for the owner. "Gaps" is
-what is missing. "No longer issues" records entries that earlier revisions
+Seven lists, then the repo dossier's findings. "By design" is behaviour that looks
+like a bug and is not: changing it would make the app claim more than it knows.
+"Unproven" is code that has never been observed working against the real system.
+"Confirmed limitations" are measured and currently unfixed. "Blocked on an owner
+decision" has a known fix direction that changes intended behaviour, so it waits
+for the owner. "Decided" records owner decisions that are now implemented. "Gaps"
+is what is missing. "No longer issues" records entries that earlier revisions
 listed.
 
 Last reviewed 2026-09-14, after the optimizer commit `b07eee5`.
@@ -179,11 +180,6 @@ Measured, reproducible, and currently unfixed.
   text now lists this machine's route, firewall or VPN, the router and the ISP as
   still possible. Whether the verdict should be `inconclusive` instead waits for
   the owner.
-- **Which router stack is canonical.** The app's router mode (`router.py`,
-  `bootpd` on `192.168.10.0/24`) and the `router/` stack (`dnsmasq` and `unbound`
-  on `192.168.4.0/24`) conflict. `Router` refuses to start or stop while
-  `/Library/LaunchDaemons/com.custom.router.nat.plist` exists. Neither stack is
-  deleted. See `docs/ARCHITECTURE.md` → Router.
 - **The dashboard window content does not reflow on small screens.**
   `dashboard.py` lays out fixed-size content (`WINDOW_HEIGHT = 950`) in a
   resizable window with no autoresizing, so on a small display the bottom of the
@@ -196,17 +192,33 @@ Measured, reproducible, and currently unfixed.
   start with a backup. If a third service (neither preferred nor a backup) led
   that record, failback puts that service back at the head. The outcome still
   reads `ok: ... (failed back to preferred '<preferred>')`.
-- **Automatic failback can return to a dead ISP link when probe targets are
-  gateways.** If `failover_probe_targets` point at each link's own gateway, a
-  preferred-link probe that succeeds proves only that the LAN answers. During an
-  ISP outage the gateway still answers. After a manual switch to a backup, three
-  good gateway probes and the cooldown make failback move the machine back onto
-  the dead link. The next incident's failover step then refuses with "the outage
-  is not specific to this path", which is false, and the failback cleared the
-  record, so nothing moves again. Options for the owner: give the preferred link
-  a separate target set that lies beyond its gateway; disable automatic failback
-  after a manual switch; or at least reword the refusal reason. Found by the
-  blind re-audit on 2026-09-14.
+
+## Decided
+
+Owner decisions that are now implemented, with what they leave open.
+
+- **Both router stacks are kept (2026-09-14).** The app's router mode (`router.py`,
+  `bootpd` on `192.168.10.0/24`) and the `router/` stack (`dnsmasq` and `unbound`
+  on `192.168.4.0/24`) are both supported. They conflict when both run, so
+  `Router` refuses to start or stop while
+  `/Library/LaunchDaemons/com.custom.router.nat.plist` exists. See
+  `docs/ARCHITECTURE.md` → Router.
+
+- **A manual switch to a backup pauses automatic failback.** With gateway
+  `failover_probe_targets`, a good preferred probe proves only the LAN, so after a
+  manual switch the failback moved the machine back onto a dead ISP link (blind
+  re-audit, 2026-09-14). Implemented after `dae8e98`: a manual switch to a backup
+  sets `failback_paused` in `failover.json`, and while it is set
+  `attempt_failback` spends no subprocess and no probe. A confirmed manual switch
+  back to preferred ends it, as does finding the preferred service already at the
+  head of the order on a manual request or the incident path. An automatic
+  failover sets no pause, and an old file without the key loads unpaused. The
+  menu row and `netdns failover status` name the pause. The refusal that said
+  "the outage is not specific to this path" now says the preferred probe targets
+  still answer, which with gateway targets proves only the local network.
+  Still open: failback after an *automatic* failover still trusts gateway probes.
+  A separate target set beyond the preferred link's gateway remains a possible
+  future improvement. See `docs/runbooks/manual-failover.md`.
 
 ## Gaps
 

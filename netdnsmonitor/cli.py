@@ -145,9 +145,16 @@ def render_failover_status(snapshot: Optional[dict]) -> str:
         # not a configured backup. Calling a Thunderbolt Bridge or a VPN
         # service "the preferred link" tells the reader a switch-back happened.
         where = "on neither the preferred link nor a backup"
+    automatic = "yes" if snapshot["auto_enabled"] else "no (manual only)"
+    if snapshot["auto_enabled"] and snapshot.get("failback_paused"):
+        # Names the way out as well as the state: while the machine stays on
+        # the backup, only a switch back to preferred ends the pause.
+        automatic = (
+            "yes (failback paused after a manual switch; `netdns failover preferred` ends it)"
+        )
     lines = [
         f"Active service : {snapshot['active_service']} ({where})",
-        f"Automatic      : {'yes' if snapshot['auto_enabled'] else 'no (manual only)'}",
+        f"Automatic      : {automatic}",
         "",
         render_interfaces([snapshot["preferred"]] + list(snapshot.get("backups") or [])),
     ]

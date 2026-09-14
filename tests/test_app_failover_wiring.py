@@ -15,6 +15,7 @@ from netdnsmonitor.app import (
 )
 from netdnsmonitor.classifier import Classification
 from netdnsmonitor.config import DEFAULT_CONFIG
+from netdnsmonitor.failover import FailoverStore, NetworkFailover
 from netdnsmonitor.ladder import ladder_for
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report import build_report
@@ -376,6 +377,75 @@ def test_menu_rows_show_active_preferred_and_backup(tmp_path):
     assert "AX88179B" in titles[1] and "en6" in titles[1] and "unreachable" in titles[1]
     assert "Wi-Fi" in titles[2] and "en0" in titles[2] and "reachable" in titles[2]
     assert titles[1].startswith("○") and titles[2].startswith("●")
+
+
+def test_the_menu_shows_a_paused_failback_in_its_three_rows(tmp_path):
+    """The menu has exactly three rows, so a fourth line saying why the machine
+    stays on the backup would be dropped without a trace.
+    """
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "none.yaml"))
+    app.failover = FakeFailoverForMenu(dict(MENU_SNAPSHOT, failback_paused=True))
+    app._refresh_failover_menu()
+    assert "failback paused after a manual switch" in app.failover_rows[0].title
+
+
+class OrderRunner:
+    """networksetup's list and reorder calls over a two-service order."""
+
+    DEVICES = {"AX88179B": "en6", "Wi-Fi": "en0"}
+
+    def __init__(self):
+        self.order = ["AX88179B", "Wi-Fi"]
+        self.calls = []
+
+    def __call__(self, args):
+        self.calls.append(args)
+        if args[:2] == ["networksetup", "-listnetworkserviceorder"]:
+            lines = []
+            for position, name in enumerate(self.order, 1):
+                device = self.DEVICES[name]
+                lines += [f"({position}) {name}", f"(Hardware Port: {name}, Device: {device})", ""]
+            return SimpleNamespace(returncode=0, stdout="\n".join(lines), stderr="")
+        if args[:2] == ["networksetup", "-ordernetworkservices"]:
+            self.order = list(args[2:])
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="unexpected")
+
+
+def test_switch_to_backup_from_the_menu_holds_off_the_tick_failback(tmp_path):
+    """The whole path: the menu button pauses, and the healthy ticks that used
+    to fail back on good gateway probes spend nothing and move nothing.
+    """
+    now = [1_000_000.0]
+    runner = OrderRunner()
+    failover = NetworkFailover(
+        preferred_service="AX88179B",
+        backup_service="Wi-Fi",
+        store=FailoverStore(str(tmp_path / "failover.json")),
+        interface_prober=lambda dev: True,
+        run_fn=runner,
+        cooldown_seconds=300.0,
+        time_fn=lambda: now[0],
+    )
+    app = make_app(tmp_path, failover, QuietStateMachine())
+    import netdnsmonitor.app as app_module
+
+    real_notification = app_module.rumps.notification
+    app_module.rumps.notification = lambda *a, **k: None
+    try:
+        app.switch_to_backup(None)
+    finally:
+        app_module.rumps.notification = real_notification
+    assert runner.order[0] == "Wi-Fi"
+    assert "failback paused" in app.failover_rows[0].title
+
+    now[0] += 301
+    runner.calls.clear()
+    for _ in range(5):
+        app.tick()
+        now[0] += 30
+    assert runner.calls == []
+    assert runner.order[0] == "Wi-Fi"
 
 
 def test_unconfigured_failover_leaves_no_blank_rows(tmp_path):

@@ -165,12 +165,13 @@ first: two copies alert and fail over independently.
   --version 1.0 --build-number 1 \
   --copyright "2026 <Your Name>" \
   --privacy-policy-url "https://<where you host PRIVACY_POLICY.md>" \
+  --declare-exempt-encryption \
   --app-identity "Apple Distribution: <Your Name> (<TEAMID>)" \
   --installer-identity "3rd Party Mac Developer Installer: <Your Name> (<TEAMID>)" \
   --profile ~/Downloads/<profile>.provisionprofile
 ```
 
-- Add `--declare-exempt-encryption` only after you have answered §6.5.
+- `--declare-exempt-encryption` is included because encryption is declared exempt (§6.5).
 - Increase `--build-number` on every upload. App Store Connect rejects a reused build number for the same version.
 
 The build refuses to continue if:
@@ -256,10 +257,16 @@ period. Apple counts data as "collected" when it leaves the device and is
 kept "longer than what is necessary to service the transmitted request in
 real time" ([definition](https://developer.apple.com/app-store/app-privacy-details/)).
 
-**Decision for you.** Two defensible answers:
+**Decided (2026-09-14): the conservative answer.** In App Store Connect → App Privacy, answer **Yes, we collect data**, then declare:
 
-1. **Conservative (recommended).** Data Types → **Diagnostics → Other Diagnostic Data** and **Other Data → Other Data Types**. For each: **Not linked** to the user's identity, **not used for tracking**, purpose **App Functionality**.
-2. **Data Not Collected.** Defensible because nothing reaches the publisher, and the only destinations that receive incident content are services the user configures (Anthropic, Slack, email). It is weaker if a reviewer treats Anthropic as a third-party partner of the app. Note that the default connectivity checks (1.1.1.1, 8.8.8.8, a DNS lookup of api.anthropic.com) and the on-by-default LAN peer announcement run without configuration; they carry no incident content, and the privacy policy discloses both.
+| Data type | Linked to the user | Used for tracking | Purpose |
+|---|---|---|---|
+| Diagnostics → Other Diagnostic Data | No | No | App Functionality |
+| Other Data → Other Data Types | No | No | App Functionality |
+
+The alternative that was not chosen, for the record:
+
+- **Data Not Collected.** Defensible because nothing reaches the publisher, and the only destinations that receive incident content are services the user configures (Anthropic, Slack, email). It is weaker if a reviewer treats Anthropic as a third-party partner of the app. Note that the default connectivity checks (1.1.1.1, 8.8.8.8, a DNS lookup of api.anthropic.com) and the on-by-default LAN peer announcement run without configuration; they carry no incident content, and the privacy policy discloses both.
 
 Slack and email alerts go to destinations the user controls. They are
 disclosed in the privacy policy either way.
@@ -328,12 +335,14 @@ exempt. Standard algorithms in a bundled library are a separate question you
 must answer ([Apple](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations),
 [overview](https://developer.apple.com/help/app-store-connect/manage-app-information/overview-of-export-compliance)).
 
-**Decision for you.** Answer App Store Connect's encryption questions for
-standard TLS used only to protect data in transit. If your answer is
-"exempt", rebuild with `--declare-exempt-encryption`. That writes
-`ITSAppUsesNonExemptEncryption = NO` so later uploads skip the question.
-Until then the key is deliberately absent, and App Store Connect asks on
-each upload.
+**Decided (2026-09-14): exempt.** Making the app available in App Store
+territories outside the United States counts as an export, even though you
+ship nothing yourself. The app's only encryption is standard TLS protecting
+data in transit, which is the exempt case. Build with
+`--declare-exempt-encryption`, which writes
+`ITSAppUsesNonExemptEncryption = NO`, so App Store Connect does not ask on
+each upload. If App Store Connect still asks, answer that the app uses
+encryption only through standard HTTPS/TLS and qualifies for the exemption.
 
 ### 6.6 App Review Information
 

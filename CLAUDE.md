@@ -77,7 +77,7 @@ report, because someone will act on it.
 ## Before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 1855 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 1878 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -174,8 +174,8 @@ comment that is wrong about why is as expensive as code that is wrong.
   `dist/`; `scripts/install.sh` passes `NDM_SOURCE_BUNDLE`. Reports predating the reconcile were produced by an older tree,
   so check the report's date before concluding the current code behaves the way it
   suggests.
-- **Two router implementations exist, and which one is canonical is an owner
-  decision.** Do not delete either. `netdnsmonitor/router.py` is the app's router: bootpd
+- **Two router implementations exist, and the owner keeps both (decided
+  2026-09-14).** Do not delete either, and never let both run at once. `netdnsmonitor/router.py` is the app's router: bootpd
   DHCP on 192.168.10.x and pf NAT in the `com.apple/netdnsmonitor_nat` anchor, off by
   default (`router_enabled: false`). The app never starts it at launch; only
   **Router → Start** and the router window start it, behind the macOS admin dialog. The

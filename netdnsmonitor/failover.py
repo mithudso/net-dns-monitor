@@ -181,10 +181,10 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
 
 class FailoverStore:
     """Persists only what cannot be re-derived from the live system: the order
-    that was in place before the first failover, and the switch timestamps the
-    rate brakes need. Deliberately not persisted: which side is active (read
-    from the system) and the healthy streak (reset on restart so a failback has
-    to re-earn its evidence).
+    that was in place before the first failover, the switch timestamps the
+    rate brakes need, and whether a person chose the backup. Deliberately not
+    persisted: which side is active (read from the system) and the healthy
+    streak (reset on restart so a failback has to re-earn its evidence).
     """
 
     def __init__(self, path: str):
@@ -194,6 +194,11 @@ class FailoverStore:
         self.enabled_by_us: Optional[str] = None
         self.last_switch_at: Optional[float] = None
         self.switch_times: list[float] = []
+        # Set by a manual switch to a backup, and it holds automatic failback
+        # off. Persisted because a restart must not turn "the user chose the
+        # backup" into a failback, and because `netdns failover backup` runs
+        # in another process from the app whose failback it has to stop.
+        self.failback_paused: bool = False
         # Identity of the file as last loaded. The CLI and the console build
         # their own store on the same path, so a record one process writes has
         # to reach the others -- see refresh().
@@ -244,6 +249,10 @@ class FailoverStore:
         self.switch_times = (
             [float(t) for t in times if _is_finite_number(t)] if isinstance(times, list) else []
         )
+        # Only a literal true pauses. A file written before the field existed
+        # has no key and must keep failing back as it did, and a reload of such
+        # a file must not leave an earlier pause standing in memory.
+        self.failback_paused = data.get("failback_paused") is True
 
     def save(self) -> None:
         try:
@@ -258,6 +267,7 @@ class FailoverStore:
                         "enabled_by_us": self.enabled_by_us,
                         "last_switch_at": self.last_switch_at,
                         "switch_times": self.switch_times[-32:],
+                        "failback_paused": self.failback_paused,
                     },
                     indent=2,
                 ),
@@ -532,7 +542,8 @@ class NetworkFailover:
         is still read back before anything is claimed.
 
         The switch is recorded, so an automatic switch cannot immediately
-        follow a manual one.
+        follow a manual one. A switch to a backup also pauses automatic
+        failback; attempt_failback says why and what ends the pause.
         """
         if not self._lock.acquire(blocking=False):
             return _BUSY
@@ -569,10 +580,11 @@ class NetworkFailover:
         if target == PREFERRED and active_side == PREFERRED:
             if services[0].name != self.preferred_service:
                 return _neither_side(services[0].name)
+            self._end_stale_pause(services)
             return "no switch: already on the preferred network"
 
         outcome = (
-            self._do_failover(services, allow_unverified=True, prefer_name=service)
+            self._do_failover(services, allow_unverified=True, prefer_name=service, manual=True)
             if target == BACKUP
             else self._do_failback(services)
         )
@@ -624,9 +636,10 @@ class NetworkFailover:
             }
 
         backups = [describe(name) for name in self.backup_services]
+        active_side = self._active_side(services)
         return {
             "error": None,
-            "active_side": self._active_side(services),
+            "active_side": active_side,
             "active_service": services[0].name,
             "preferred": describe(self.preferred_service),
             # The single `backup` key stays for callers that only show one; the
@@ -644,6 +657,12 @@ class NetworkFailover:
             "backups": backups,
             "chosen_backup": self.chosen_backup,
             "auto_enabled": self.auto_enabled,
+            # Only while a backup heads the order. A pause left on the preferred
+            # side holds no failback back, so reporting it there would explain
+            # a wait that is not happening. Read, not cleared: this also serves
+            # `netdns failover status`, which must not write the store.
+            "failback_paused": bool(self.store is not None and self.store.failback_paused)
+            and active_side == BACKUP,
             "last_event": self.last_event,
         }
 
@@ -662,6 +681,15 @@ class NetworkFailover:
         failure (a misspelt preferred service, an unreadable order) would
         otherwise come back every tick, and each return makes the app re-list
         and re-probe for its menu.
+
+        Also gated on the manual-switch pause. When `failover_probe_targets`
+        are each link's gateway, a preferred probe that answers proves only
+        that the LAN is up, so a run of good probes after the user chose the
+        backup moved the machine back onto a dead ISP link. The pause ends when
+        a manual switch back to preferred succeeds, when a manual request for
+        preferred or the incident path finds the preferred service already at
+        the head of the live order, or when an automatic failover replaces the
+        switch that set it.
         """
         if not self.auto_enabled:
             return None
@@ -669,8 +697,11 @@ class NetworkFailover:
             # A switch is running on another thread; this tick has nothing to add.
             return None
         try:
+            # The refresh comes first so a pause set by `netdns failover backup`
+            # in another process is seen here. The pause check comes before any
+            # listing, so a paused tick costs the same one stat as an idle one.
             self.store.refresh()
-            if self.store.original_order is None:
+            if self.store.original_order is None or self.store.failback_paused:
                 return None
             self._wrote = False
             outcome = self._attempt(classification="healthy", allow=FAILBACK)
@@ -702,6 +733,10 @@ class NetworkFailover:
             )
 
         active_side = self._active_side(services)
+        # attempt_failback never reaches this while paused, so on the tick path
+        # this does nothing. On the incident path it ends a pause the user left
+        # behind by reordering back to preferred by hand.
+        self._end_stale_pause(services)
         # Decide which side we are on before probing anything. Probing costs up
         # to a probe timeout for the preferred link, and another for the backups
         # when they are evaluated, on the UI thread; the wrong-direction request
@@ -808,6 +843,7 @@ class NetworkFailover:
         winner: Optional[Candidate] = None,
         allow_unverified: bool = False,
         prefer_name: Optional[str] = None,
+        manual: bool = False,
     ) -> str:
         note_unverified = ""
         if winner is None:
@@ -862,7 +898,13 @@ class NetworkFailover:
         # "original", and failback would restore it and call that preferred.
         if self.store.original_order is None or self._active_side(services) == PREFERRED:
             self.store.original_order = [s.name for s in services]
-            self.store.save()
+        # The pause follows whoever made this switch: a manual one holds
+        # automatic failback off, an automatic one replaces any pause an
+        # earlier manual switch left. Saved before the write for the same
+        # reason as the order above: a write that lands but cannot be read back
+        # has still put the machine on the backup the user chose.
+        self.store.failback_paused = manual
+        self.store.save()
 
         # Enable before promoting. A disabled service sits in the order and is
         # skipped, so promoting one on its own is a change that looks like a
@@ -936,8 +978,26 @@ class NetworkFailover:
 
         undone = self._undo_enable(head=new_order[0])
         self.store.original_order = None
+        # Cleared only here, after the read-back confirmed the switch. A failed
+        # switch back leaves the machine on the backup the user chose, and
+        # automatic failback must not pick up where the user's attempt failed.
+        self.store.failback_paused = False
         self.store.save()
         return f"{outcome} (failed back to preferred '{self.preferred_service}'{undone}){note}"
+
+    def _end_stale_pause(self, services) -> None:
+        """End the manual-switch pause once the live order starts with the
+        preferred service again, for example after the user reordered by hand.
+        The backup the user chose no longer heads the service order, so the
+        pause has nothing left to hold.
+
+        Called only where the order has already been listed for another
+        reason. attempt_failback cannot list it while paused without spending
+        the subprocess the pause exists to save.
+        """
+        if self.store.failback_paused and services and services[0].name == self.preferred_service:
+            self.store.failback_paused = False
+            self.store.save()
 
 
 # --- construction from config -------------------------------------------------

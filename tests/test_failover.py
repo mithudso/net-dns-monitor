@@ -1277,15 +1277,17 @@ def test_a_failback_that_never_reached_a_write_stays_silent(store):
 
 
 def test_a_failover_made_by_another_process_is_failed_back(tmp_path):
-    """The CLI and the app each hold a store on the same file. A record the CLI
-    wrote has to reach the running app, or the app never fails back.
+    """Every process holds its own store on the same file. A record another
+    process wrote has to reach the running app, or the app never fails back.
+    The other process fails over automatically here: a manual switch pauses
+    failback, which the pause tests below cover.
     """
     path = str(tmp_path / "failover.json")
     runner = FakeRunner()
     app = build(FailoverStore(path), runner, prober=lambda dev: True)
-    cli = build(FailoverStore(path), runner)
+    other = build(FailoverStore(path), runner)
 
-    assert cli.switch_now("backup").startswith("ok:")
+    assert other.attempt_failover("network").startswith("ok:")
     outcomes = [app.attempt_failback() for _ in range(3)]
     assert outcomes[-1] is not None and outcomes[-1].startswith("ok:")
     assert runner.order[0] == "AX88179B"
@@ -1354,3 +1356,237 @@ def test_default_run_turns_a_decode_error_into_a_failed_result(monkeypatch):
 
     assert result.returncode == 1
     assert result.stdout == ""
+
+
+# --- a manual switch to a backup pauses automatic failback ------------------
+#
+# With `failover_probe_targets` aimed at each link's gateway, a preferred probe
+# that answers proves only that the LAN is up. Failing back on that evidence
+# after a person chose the backup moved the machine onto a dead ISP link.
+
+
+def on_backup_by_hand(store, now, probes, **kwargs):
+    """A manual switch to the backup, then a clock past its cooldown and every
+    probe answering: the evidence that used to trigger the failback.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        prober=lambda dev: probes.append(dev) or True,
+        cooldown_seconds=300.0,
+        time_fn=lambda: now[0],
+        **kwargs,
+    )
+    assert failover.switch_now("backup").startswith("ok:")
+    now[0] += 301
+    return runner, failover
+
+
+def test_a_manual_switch_to_a_backup_pauses_automatic_failback(store):
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    assert store.failback_paused is True
+    runner.calls.clear()
+    probes.clear()
+
+    for _ in range(5):
+        assert failover.attempt_failback() is None
+        now[0] += 30
+    assert runner.calls == [], "a paused tick spends no subprocess"
+    assert probes == [], "a paused tick spends no probe"
+    assert runner.order[0] == "Wi-Fi"
+    assert store.original_order == ORDER, "the restore point is kept for the switch back"
+
+
+def test_switching_back_to_preferred_by_hand_ends_the_pause(tmp_path):
+    path = str(tmp_path / "failover.json")
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(FailoverStore(path), now, probes)
+
+    assert failover.switch_now("preferred").startswith("ok:")
+    assert runner.order == ORDER
+    assert failover.store.failback_paused is False
+    assert FailoverStore(path).failback_paused is False, "the end of the pause is saved"
+
+
+def test_a_refused_switch_back_keeps_the_pause(store):
+    """The machine is still on the backup the user chose, so a failed attempt
+    to leave it must not hand it to automatic failback.
+    """
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    runner.apply_result = SimpleNamespace(
+        returncode=1, stdout="", stderr="You must be running as root to use this command."
+    )
+    assert failover.switch_now("preferred").startswith("NEEDS_PRIVILEGE:")
+    assert store.failback_paused is True
+    now[0] += 301
+    runner.calls.clear()
+    assert failover.attempt_failback() is None
+    assert runner.calls == []
+
+
+def test_an_automatic_failover_still_fails_back(store):
+    now = [1_000_000.0]
+    runner = FakeRunner()
+    failover = build(store, runner, cooldown_seconds=300.0, time_fn=lambda: now[0])
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.failback_paused is False
+
+    failover.interface_prober = lambda dev: True
+    now[0] += 301
+    outcomes = [failover.attempt_failback() for _ in range(3)]
+    assert outcomes[:2] == [None, None]
+    assert outcomes[2].startswith("ok:")
+    assert runner.order == ORDER
+
+
+def test_an_automatic_failover_replaces_a_pause_left_behind(store):
+    """The pause belongs to the switch that set it. An automatic failover is a
+    new switch made on the app's own evidence, so its failback is not held.
+    A third service heads the order here, so the preferred-at-head self-heal
+    cannot be what clears the pause.
+    """
+    store.failback_paused = True
+    order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
+    runner = FakeRunner(order=order)
+    failover = build(store, runner)
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.failback_paused is False
+
+    failover.interface_prober = lambda dev: True
+    outcomes = [failover.attempt_failback() for _ in range(3)]
+    assert outcomes[2].startswith("ok:")
+    assert runner.order == order
+
+
+def test_a_request_that_finds_the_machine_already_on_a_backup_sets_no_pause(store):
+    """Nothing was switched, so an automatic failover stays automatic."""
+    runner = failed_over(store)
+    failover = build(store, runner)
+    assert failover.switch_now("backup") == "no switch: already on the backup network"
+    assert store.failback_paused is False
+
+
+def test_the_pause_survives_a_restart(tmp_path):
+    path = str(tmp_path / "failover.json")
+    now, probes = [1_000_000.0], []
+    runner, _ = on_backup_by_hand(FailoverStore(path), now, probes)
+
+    reloaded = FailoverStore(path)
+    assert reloaded.failback_paused is True
+    restarted = build(reloaded, runner, prober=lambda dev: probes.append(dev) or True)
+    runner.calls.clear()
+    probes.clear()
+    for _ in range(3):
+        assert restarted.attempt_failback() is None
+    assert runner.calls == [] and probes == []
+    assert runner.order[0] == "Wi-Fi"
+
+
+def test_a_pause_set_from_the_cli_reaches_the_running_app(tmp_path):
+    """`netdns failover backup` runs in its own process. The app sees the pause
+    through the store refresh its tick already does, and sees the switch back
+    end it the same way.
+    """
+    path = str(tmp_path / "failover.json")
+    runner = FakeRunner()
+    app = build(FailoverStore(path), runner, prober=lambda dev: True)
+    cli = build(FailoverStore(path), runner)
+
+    assert cli.switch_now("backup").startswith("ok:")
+    runner.calls.clear()
+    for _ in range(3):
+        assert app.attempt_failback() is None
+    assert runner.calls == []
+    assert app.store.failback_paused is True
+
+    assert cli.switch_now("preferred").startswith("ok:")
+    assert app.attempt_failback() is None
+    assert app.store.failback_paused is False
+
+
+def test_a_state_file_without_the_pause_field_loads_unpaused(tmp_path):
+    """Files written before the pause existed have no such key, and must keep
+    failing back as they did.
+    """
+    path = tmp_path / "failover.json"
+    path.write_text(
+        json.dumps(
+            {
+                "original_order": ORDER,
+                "enabled_by_us": None,
+                "last_switch_at": 1.0,
+                "switch_times": [1.0],
+            }
+        )
+    )
+    store = FailoverStore(str(path))
+    assert store.failback_paused is False
+
+    runner = FakeRunner(order=["Wi-Fi"] + [n for n in ORDER if n != "Wi-Fi"])
+    failover = build(store, runner, prober=lambda dev: True)
+    outcomes = [failover.attempt_failback() for _ in range(3)]
+    assert outcomes[2].startswith("ok:")
+    assert runner.order == ORDER
+
+
+def test_only_a_literal_true_pauses(tmp_path):
+    """A hand-edited "yes" or 1 is not the flag this app writes."""
+    path = tmp_path / "failover.json"
+    for value in ("yes", 1, None, [True]):
+        path.write_text(json.dumps({"failback_paused": value}))
+        assert FailoverStore(str(path)).failback_paused is False
+
+
+def test_a_reload_without_the_field_does_not_keep_an_old_pause(tmp_path):
+    """refresh() reloads a file another process wrote. A copy of the app that
+    predates the pause writes no such key, and must not leave this process
+    holding a pause the file no longer records.
+    """
+    path = tmp_path / "failover.json"
+    path.write_text(json.dumps({"failback_paused": True}))
+    store = FailoverStore(str(path))
+    assert store.failback_paused is True
+    path.write_text(json.dumps({"original_order": ORDER, "switch_times": []}))
+    store.load()
+    assert store.failback_paused is False
+
+
+def test_the_pause_ends_when_the_order_is_back_on_preferred(store):
+    """The user reordered by hand. Asking for the preferred link then finds the
+    machine already there, and the pause has nothing left to hold.
+    """
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    runner.order = list(ORDER)
+    assert failover.switch_now("preferred") == "no switch: already on the preferred network"
+    assert store.failback_paused is False
+
+
+def test_the_incident_path_ends_a_pause_left_on_the_preferred_side(store):
+    """Even when the failover step then refuses: the pause must not outlive the
+    backup the user chose.
+    """
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    runner.order = list(ORDER)
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("no switch:"), "every probe answers, so the step refuses"
+    assert store.failback_paused is False
+
+
+def test_snapshot_reports_the_pause_only_while_on_a_backup(store):
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    assert failover.snapshot()["failback_paused"] is True
+
+    runner.order = list(ORDER)
+    assert failover.snapshot()["failback_paused"] is False
+    assert store.failback_paused is True, "snapshot is a read; it clears nothing"
+
+
+def test_an_automatic_failover_snapshot_is_not_paused(store):
+    runner = failed_over(store)
+    assert build(store, runner).snapshot()["failback_paused"] is False

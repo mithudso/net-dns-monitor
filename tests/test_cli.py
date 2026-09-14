@@ -323,6 +323,31 @@ def test_the_preferred_and_backup_sides_are_still_named():
     assert "on the backup" in render_failover_status(on_backup)
 
 
+def test_failover_status_says_failback_is_paused_and_how_to_end_it():
+    """`netdns failover status` is where a user looks to learn why the machine
+    stays on the backup after the preferred link came back.
+    """
+    snap = failover_snapshot(active_side="backup", active_service="Wi-Fi", failback_paused=True)
+    automatic = next(
+        line for line in render_failover_status(snap).splitlines() if "Automatic" in line
+    )
+    assert "yes" in automatic
+    assert "failback paused after a manual switch" in automatic
+    assert "failover preferred" in automatic
+
+
+def test_failover_status_mentions_no_pause_without_one():
+    """Snapshots from before the pause existed carry no such key."""
+    on_backup = failover_snapshot(active_side="backup", active_service="Wi-Fi")
+    assert "paused" not in render_failover_status(on_backup)
+    manual_only = failover_snapshot(
+        active_side="backup", active_service="Wi-Fi", auto_enabled=False, failback_paused=True
+    )
+    text = render_failover_status(manual_only)
+    assert "no (manual only)" in text
+    assert "paused" not in text
+
+
 # --- status -----------------------------------------------------------------
 
 

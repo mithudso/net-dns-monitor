@@ -86,7 +86,19 @@ def test_no_failover_when_backup_was_never_probed():
 def test_no_failover_when_preferred_answers_on_its_own_interface():
     decision = failover_case(preferred_ok=True)
     assert decision.action == NONE
-    assert "not specific to this path" in decision.reason
+    assert "probe targets still answer" in decision.reason
+
+
+def test_the_preferred_answers_refusal_does_not_blame_another_path():
+    """With `failover_probe_targets` aimed at each link's gateway, a preferred
+    probe that answers proves only the local network. The old reason said the
+    outage "is not specific to this path", which during an ISP outage is false
+    and points the reader away from the dead link.
+    """
+    reason = failover_case(preferred_ok=True).reason
+    assert "not specific to this path" not in reason
+    assert "gateway" in reason
+    assert "only the local network, not the internet link" in reason
 
 
 def test_unprobed_preferred_still_allows_failover():

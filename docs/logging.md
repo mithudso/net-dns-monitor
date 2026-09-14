@@ -37,7 +37,7 @@ State files, written with `report_storage._atomic_write` (temp file, then
 |---|---|---|
 | `peers.json` (`peer_record_path`) | `peers.save_record` | Known LAN peers. Saved on each `peer_tick` and at most every 30 s from the UI tick. |
 | `learned_domains.json` (`learned_domains_path`) | `LearnedDomainStore` | At most `max_learned_domains` (20) names. |
-| `failover.json` (`failover_state_path`) | `FailoverStore.save` | The pre-failover service order, switch times, the service this app enabled. |
+| `failover.json` (`failover_state_path`) | `FailoverStore.save` | The pre-failover service order, switch times, the service this app enabled, and whether automatic failback is paused by a manual switch. |
 | `ai-consent.json` | `ai_consent.ConsentStore` | Consent record. Only the store build constructs the store. |
 | `<config path>.bak-<epoch>` | `settings_window.save_config` | A copy of `config.yaml` taken before the Settings window writes it. |
 

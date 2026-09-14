@@ -188,7 +188,7 @@ Mitigations in the code:
 | STRIDE | Threat | Mitigation now | Residual |
 |---|---|---|---|
 | Tampering | A malformed order removes a network service. | `is_order_intact`; re-list before the write. | One subprocess of window remains between the re-list and the write. |
-| Tampering | A user process edits `failover.json`. | Set-equality check in `_do_failback`. | The process can choose which existing service leads after a failback. |
+| Tampering | A user process edits `failover.json`. | Set-equality check in `_do_failback`. | The process can choose which existing service leads after a failback, and can set `failback_paused` to hold automatic failback off. |
 | Denial of service | Automatic switching flaps. | Cooldown, hourly cap and failback threshold in `failover_policy.decide`. | None known. |
 
 ### 5. Shell console (`console.py`)

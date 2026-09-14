@@ -30,7 +30,7 @@ Correction to v1:
 - The installer edit v1 describes never reached the repository. On 2026-09-14 neither the tracked `router/scripts/install_persistent_nat.sh` nor the main checkout's copy contained `StartInterval` or the `/var/log` paths. The installed daemon had them. Branch `feat/appstore-prep` restores both in the installer.
 
 What was done (branch `feat/appstore-prep`, worktree `.claude/worktrees/appstore-prep`):
-- **Deep code optimizer.** Three audit-and-fix iterations plus two blind re-audit gates. The suite went from 1098 to 1855 tests. The second blind gate still reported 1 High and 4 Medium; those were fixed afterwards but not re-audited by a third blind pass (cdo status BLIND-AUDIT-DISSENT). Owner decisions are recorded in `docs/known-issues.md`.
+- **Deep code optimizer.** Three audit-and-fix iterations plus two blind re-audit gates. The suite went from 1098 to 1878 tests. The second blind gate still reported 1 High and 4 Medium; those were fixed afterwards but not re-audited by a third blind pass (cdo status BLIND-AUDIT-DISSENT). Owner decisions are recorded in `docs/known-issues.md`.
 - **Security fixes:**
   - The router no longer runs a root script from `/tmp`.
   - The NAT LaunchDaemon installer now copies the script to a root-owned path.
@@ -53,3 +53,18 @@ Remaining steps:
 - Launch the sandboxed GUI build by hand once, and press Cmd-V in Credentials > Set Anthropic API key. Automation cannot do either.
 - Merging this branch to master changes the live resolver: /opt/homebrew/etc/unbound/unbound.conf and dnsmasq.conf are symlinks into the main checkout, so the narrowed unbound access list and `username: "nobody"` apply at the next unbound restart.
 - Inspect the older `/etc/sudoers.d/net-dns-monitor` (2026-08-19) with `sudo cat`; it predates the current grant code.
+
+## v3 - 2026-09-14 - Owner decisions applied
+
+Delta: 1
+
+Owner answers to the seven open questions, and what was done:
+- **Reinstall the NAT LaunchDaemon: yes.** It needs the owner's sudo password, so the owner runs `sudo router/scripts/install_persistent_nat.sh` from the merged master checkout.
+- **Merge `feat/appstore-prep` into master: yes.** The background session is not allowed to merge. The owner fast-forwards master after moving 17 untracked stub files out of the way. The branch tracks newer versions of all of them.
+- **Router stacks: keep both.** Recorded under "Decided" in `docs/known-issues.md`. The app's router still refuses to run while the `router/` LaunchDaemon is installed.
+- **App Privacy label: conservative.** Diagnostics → Other Diagnostic Data and Other Data → Other Data Types, not linked, no tracking, App Functionality.
+- **Export compliance: exempt.** The release command now always passes `--declare-exempt-encryption`.
+- **Gateway failback: fixed.** A manual switch to a backup pauses automatic failback (persisted `failback_paused` in `failover.json`) until a manual switch back or the order returns to preferred. The misleading refusal reason is reworded.
+- **Old sudoers file: inspect.** Also needs the owner's sudo password (`sudo cat /etc/sudoers.d/net-dns-monitor`).
+
+Test count: 1878.

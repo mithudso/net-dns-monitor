@@ -697,8 +697,9 @@ name took 5.01s against a 2.0 setting. The batch deadline is the real ceiling.
 ## Router stack
 
 This repository holds two separate router implementations. They conflict: both serve
-DHCP on UDP 67 and both set `net.inet.ip.forwarding`. Which one is canonical is an
-open decision for the owner, so neither has been removed.
+DHCP on UDP 67 and both set `net.inet.ip.forwarding`. Both are kept and supported
+(owner decision, 2026-09-14), but only one may run at a time: the app's router refuses
+to start while the `router/` LaunchDaemon is installed.
 
 | | App router (`netdnsmonitor/router.py`) | `router/` stack |
 |---|---|---|

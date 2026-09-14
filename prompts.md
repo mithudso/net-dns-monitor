@@ -17,3 +17,11 @@ Delta: 1
 Prompt:
 
 > Run the deep code optimizer on this repo and the repo bootstrapper, and then prepare the repo for becoming an appstore app and give me all of the information necessary to submit it to the store.
+
+## v3 - 2026-09-14 - Answers to the open questions
+
+Delta: 1
+
+Prompt:
+
+> 1. yes. 2. yes 3. both 4. conservative 5. I don't export anything. 6. gateway fallback 7. yes inspect.

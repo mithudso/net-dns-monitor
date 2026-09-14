@@ -209,8 +209,9 @@ admin call.
 ## Router
 
 The repository holds two router implementations. They conflict: both want UDP
-port 67, and both set `net.inet.ip.forwarding`. Which one is canonical is an open
-owner decision; see `docs/known-issues.md`.
+port 67, and both set `net.inet.ip.forwarding`. The owner keeps both (decided
+2026-09-14). They must not run at the same time, which is why `Router` refuses to
+start while the `router/` LaunchDaemon is installed.
 
 | | App router mode | `router/` stack |
 |---|---|---|

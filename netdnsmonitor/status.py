@@ -224,6 +224,12 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
         return [f"Failover: {snapshot['error']}"]
 
     mode = "automatic" if snapshot.get("auto_enabled") else "manual only"
+    if snapshot.get("auto_enabled") and snapshot.get("failback_paused"):
+        # Without this, "automatic" beside a preferred link that answers again
+        # gives no reason for the machine to stay on the backup. It goes in
+        # this row, not a new one: the menu has exactly three rows, and app.py
+        # cuts this row at its " — " in a build that cannot write the order.
+        mode = "automatic, failback paused after a manual switch"
     active_service = snapshot.get("active_service")
 
     # Show the backup that is actually carrying traffic, not simply the first

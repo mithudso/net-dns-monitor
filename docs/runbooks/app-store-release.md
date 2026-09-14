@@ -45,8 +45,8 @@ Every upload of a new build to App Store Connect.
    [§1](../APP_STORE_SUBMISSION.md#1-read-this-first-what-the-store-build-can-and-cannot-do)
    is hidden or reports that it is unavailable. No automation can launch the app.
 5. **Build for release** with `build_appstore.py release` and the chosen
-   `--version` and `--build-number`. Add `--declare-exempt-encryption` only after
-   answering export compliance
+   `--version` and `--build-number`. Always pass `--declare-exempt-encryption`,
+   because encryption is declared exempt
    ([§4.2](../APP_STORE_SUBMISSION.md#42-release-build),
    [§6.5](../APP_STORE_SUBMISSION.md#65-export-compliance)).
 6. **Validate** the `.pkg` with `xcrun altool --validate-app`
