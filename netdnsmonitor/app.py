@@ -40,11 +40,23 @@ import time
 import traceback
 import uuid
 import webbrowser
+from collections.abc import Mapping
 from typing import Callable, Optional
 
 import rumps
 
-from netdnsmonitor import alert, console, forensic_log, peer_net, privileges, system_log
+from netdnsmonitor import (
+    ai_consent,
+    alert,
+    console,
+    credentials,
+    credentials_prompt,
+    distribution,
+    forensic_log,
+    peer_net,
+    privileges,
+    system_log,
+)
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.classifier import classify
 from netdnsmonitor.config import ConfigError, load_config
@@ -55,6 +67,7 @@ from netdnsmonitor.dashboard import (
     install_main_menu,
     render_dashboard_text,
 )
+from netdnsmonitor.distribution import Capabilities
 from netdnsmonitor.dock_icon import set_dock_icon
 from netdnsmonitor.domain_learner import (
     LearnedDomainStore,
@@ -75,7 +88,7 @@ from netdnsmonitor.forensic_log import ForensicRecorder
 from netdnsmonitor.history import SampleHistory
 from netdnsmonitor.ladder import ladder_for, step_by_name
 from netdnsmonitor.localize import localize
-from netdnsmonitor.log_watcher import make_log_watcher
+from netdnsmonitor.log_watcher import NO_EVIDENCE_PREFIX, make_log_watcher
 from netdnsmonitor.mini_window import MiniWindow, mini_text
 from netdnsmonitor.net_stats import ThroughputMeter, read_interface_counters
 from netdnsmonitor.notifications import (
@@ -148,6 +161,138 @@ NO_PING_YET = {
     "down": False,
 }
 
+# Dashboard buttons that exist in every build but act only where the feature does.
+# The action grid is the same in both builds; in one without the feature, the click
+# prints the unavailable text instead of acting. (action id -> (capability, what))
+GATED_DASHBOARD_ACTIONS = {
+    "open_console": ("shell_console", "the console"),
+    "open_router_window": ("router", "the router console"),
+    "grant_privileges": ("privileged_repairs", "granting elevated permissions"),
+    "revoke_privileges": ("privileged_repairs", "revoking elevated permissions"),
+    # Prewarming reads its names out of `log show`, so it goes with the log.
+    "prewarm_dns": ("unified_log", "prewarming DNS from the system log's query history"),
+    "log_refresh": ("unified_log", "reading the system log"),
+    "log_toggle_level": ("unified_log", "reading the system log"),
+    "log_clear_buffer": ("unified_log", "reading the system log"),
+}
+
+# The Info.plist key setup.py writes for the store build (Guideline 5.1.1(i)
+# wants the privacy policy reachable from inside the app, not only in App Store
+# Connect).
+PRIVACY_POLICY_URL_KEY = "NDMPrivacyPolicyURL"
+
+CREDENTIALS_MENU = "Credentials"
+REMOVE_CREDENTIALS_ITEM = "Remove saved credentials"
+CONSENT_ITEM = "Allow Claude diagnosis…"
+WITHDRAW_CONSENT_ITEM = "Withdraw Claude permission"
+PRIVACY_POLICY_ITEM = "Privacy Policy"
+
+# (menu title, credential name, what the dialog says). The dialog also says the
+# environment wins, before anything is typed: a key saved here while the same
+# variable is exported is saved but not used.
+CREDENTIAL_ITEMS = (
+    (
+        "Set Anthropic API key…",
+        "ANTHROPIC_API_KEY",
+        "Used for Claude diagnosis when the troubleshooting ladder cannot resolve an incident.",
+    ),
+    (
+        "Set Slack webhook URL…",
+        "SLACK_WEBHOOK_URL",
+        "The incoming-webhook URL Slack alerts are posted to. The URL is itself a credential.",
+    ),
+    (
+        "Set SMTP password…",
+        "SMTP_PASSWORD",
+        "The password for smtp_username on smtp_host, used for email alerts.",
+    ),
+)
+CREDENTIAL_STORAGE_NOTE = (
+    "It is saved in your macOS Keychain. If the same name is set as an environment "
+    "variable, that value is used instead."
+)
+
+
+def default_credential_store() -> credentials.CredentialStore:
+    """Environment first, then this app's Keychain items.
+
+    The factory is looked up on the module at call time. CredentialStore's own
+    default argument was bound when credentials.py was imported, so it cannot be
+    replaced from outside, and tests/conftest.py relies on this lookup to keep the
+    suite away from the real Keychain.
+    """
+    return credentials.CredentialStore(backend_factory=credentials.make_keychain_backend)
+
+
+def bundled_privacy_policy_url() -> Optional[str]:
+    """The policy URL from this bundle's Info.plist, or None.
+
+    None from a source run, which has no such key. None as well for anything that
+    is not an http(s) URL: NSWorkspace opens files and launches apps just as
+    readily as it opens web pages.
+    """
+    try:
+        from Foundation import NSBundle
+
+        value = NSBundle.mainBundle().objectForInfoDictionaryKey_(PRIVACY_POLICY_URL_KEY)
+    except Exception:  # noqa: BLE001 - no bundle means no URL, never a crash
+        return None
+    text = str(value or "").strip()
+    return text if text.lower().startswith(("https://", "http://")) else None
+
+
+def open_url_with_workspace(url: str) -> bool:
+    """NSWorkspace rather than `webbrowser`. On macOS `webbrowser` pipes an
+    AppleScript into /usr/bin/osascript, and sending Apple Events to another app
+    needs an entitlement the store build does not carry.
+    """
+    from AppKit import NSWorkspace
+    from Foundation import NSURL
+
+    ns_url = NSURL.URLWithString_(url)
+    if ns_url is None:
+        return False
+    return bool(NSWorkspace.sharedWorkspace().openURL_(ns_url))
+
+
+def missing_key_text(capabilities: Capabilities) -> str:
+    if capabilities.is_app_store:
+        # A sandboxed app launched from Finder never sees a shell's exports, so the
+        # Keychain is the only place a key can come from in this build.
+        return (
+            "ANTHROPIC_API_KEY not set; skipped LLM escalation (save a key in the Keychain "
+            f"from the menu: {CREDENTIALS_MENU} > {CREDENTIAL_ITEMS[0][0]})"
+        )
+    return "ANTHROPIC_API_KEY not set; skipped LLM escalation"
+
+
+def build_escalator(
+    capabilities: Capabilities,
+    credential_store: credentials.CredentialStore,
+    consent: Optional[ai_consent.ConsentStore] = None,
+) -> Callable[[dict], dict]:
+    """The state machine's escalator, from the key the credential store finds now.
+
+    Separate from build_state_machine so the Credentials menu can rebuild it in
+    place: a key saved from the menu then applies to the next incident, without a
+    restart.
+    """
+    key = credential_store.get("ANTHROPIC_API_KEY")
+    if key:
+        escalator = make_escalator(client=default_client(api_key=key))
+    else:
+        message = missing_key_text(capabilities)
+
+        def escalator(bundle: dict) -> dict:
+            return {"error": message}
+
+    if capabilities.requires_ai_consent:
+        # Wrapped outside the key check. Whether a key exists says nothing about
+        # whether this person agreed to send incident data to Anthropic.
+        consent = ai_consent.ConsentStore() if consent is None else consent
+        escalator = ai_consent.gate_escalator(escalator, consent.granted)
+    return escalator
+
 
 def set_app_display_name(name: str) -> None:
     """Without a real .app bundle, macOS shows the bare interpreter's
@@ -168,11 +313,14 @@ def set_app_display_name(name: str) -> None:
         pass
 
 
-def build_notifier(config: dict, env: dict = None):
+def build_notifier(config: dict, env: Optional[Mapping[str, str]] = None):
     """Slack and email are opt-in by presence of their credential in the
     environment, mirroring the ANTHROPIC_API_KEY branch: no webhook URL and no
     SMTP recipients means no channels and a notifier that is a cheap no-op,
     never a crash and never a silent half-configured send.
+
+    The app passes `CredentialStore.as_env()`, so "the environment" here also
+    covers a value saved in the Keychain. Only `.get` is called on it.
     """
     env = os.environ if env is None else env
     channels = []
@@ -223,15 +371,25 @@ def anchor_domains(config: dict) -> list[str]:
     return anchors
 
 
-def build_domains_source(config: dict, log_watcher, spawn=None):
+def build_domains_source(
+    config: dict,
+    log_watcher,
+    spawn=None,
+    capabilities: Optional[Capabilities] = None,
+):
     """Returns (domains_source, store). domains_source is what the prober asks
     each tick; store is None when log learning is turned off.
 
     `spawn` runs the learner's log scan. None keeps the learner's own daemon
     thread; a test passes a synchronous one to observe the scan's result.
+
+    A build that cannot read the unified log gets no learner whatever the config
+    says: its watcher only ever returns the "unavailable" line, so there is nothing
+    to learn from, and nothing should parse that sentence as log evidence.
     """
+    capabilities = distribution.detect() if capabilities is None else capabilities
     anchors = anchor_domains(config)
-    if not config.get("learn_domains_from_logs"):
+    if not config.get("learn_domains_from_logs") or not capabilities.unified_log:
         return anchors, None
     store = LearnedDomainStore(
         path=config["learned_domains_path"],
@@ -275,21 +433,53 @@ def dhcp_lease_granted(interface: str) -> bool:
     )
 
 
-def build_state_machine(config: dict, failover=None) -> StateMachine:
+def unified_log_unavailable_watcher() -> Callable[[], list[str]]:
+    """The log watcher for a build that may not read the unified log.
+
+    One line, not `[]`. An empty excerpt list reads as "nothing was logged", which
+    is a statement about the network; this line says the log was never read. The
+    prefix is log_watcher's own "no evidence" marker, the one domain_learner
+    already skips.
+    """
+    line = f"{NO_EVIDENCE_PREFIX} " + distribution.unavailable(
+        "unified_log", "reading the system log"
+    )
+
+    def watcher() -> list[str]:
+        return [line]
+
+    return watcher
+
+
+def build_state_machine(
+    config: dict,
+    failover=None,
+    capabilities: Optional[Capabilities] = None,
+    credential_store: Optional[credentials.CredentialStore] = None,
+    consent: Optional[ai_consent.ConsentStore] = None,
+) -> StateMachine:
     """`failover` is passed in by the app so the ladder step and the tick-path
     failback share one instance and therefore one set of counters. It is
     derived from the config when omitted, so that a caller who forgets gets a
     state machine that matches the config rather than one that silently drops
     the switch step.
+
+    `capabilities` is detected from the environment when omitted, for the same
+    reason: a caller who forgets must not get a sandboxed state machine that
+    tries to rewrite the service order or read the unified log.
     """
+    capabilities = distribution.detect() if capabilities is None else capabilities
     if failover is None:
         failover = build_failover(config)
 
     external_targets = [tuple(t) for t in config["external_targets"]]
     internal_targets = [tuple(t) for t in config["internal_targets"]]
 
-    log_watcher = make_log_watcher(lookback=config["log_lookback"])
-    domains_source, store = build_domains_source(config, log_watcher)
+    if capabilities.unified_log:
+        log_watcher = make_log_watcher(lookback=config["log_lookback"])
+    else:
+        log_watcher = unified_log_unavailable_watcher()
+    domains_source, store = build_domains_source(config, log_watcher, capabilities=capabilities)
 
     base_prober = make_prober(
         external_targets=external_targets,
@@ -321,19 +511,39 @@ def build_state_machine(config: dict, failover=None) -> StateMachine:
     # run_fn keeps describing an ungranted machine and runs no extra subprocesses.
     # `log_watcher` is already built above -- build_domains_source needs it to
     # feed the learner, so this no longer makes a second one.
-    repair_executor = make_repair_executor(
-        is_granted_fn=privileges.is_granted,
-        primary_interface_fn=privileges.primary_interface,
-        failover_fn=failover.attempt_failover if failover else None,
-        dhcp_granted_fn=dhcp_lease_granted,
-    )
-
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        escalator = make_escalator(client=default_client())
-    else:
-        escalator = lambda bundle: {  # noqa: E731 - trivial fallback, no client configured
-            "error": "ANTHROPIC_API_KEY not set; skipped LLM escalation"
+    if capabilities.privileged_repairs:
+        privilege_options = {
+            "is_granted_fn": privileges.is_granted,
+            "primary_interface_fn": privileges.primary_interface,
+            "dhcp_granted_fn": dhcp_lease_granted,
         }
+    else:
+        # A constant "no" instead of the real probes, which run `sudo -n -l` and
+        # `route`: a build that may never use root has no question to ask them.
+        # unavailable_fn makes the two root steps say why they did nothing.
+        privilege_options = {
+            "is_granted_fn": lambda: False,
+            "unavailable_fn": lambda what: distribution.unavailable("privileged_repairs", what),
+        }
+
+    if capabilities.network_order_write:
+        failover_fn = failover.attempt_failover if failover else None
+    else:
+        # Set whether or not failover is configured. The write is impossible in
+        # this build either way, and "not configured" would send someone to
+        # config.yaml to fix something that no setting can fix.
+        def failover_fn(_classification: str) -> str:
+            return distribution.unavailable(
+                "network_order_write", "switching to the backup network"
+            )
+
+    repair_executor = make_repair_executor(failover_fn=failover_fn, **privilege_options)
+
+    escalator = build_escalator(
+        capabilities,
+        default_credential_store() if credential_store is None else credential_store,
+        consent,
+    )
 
     return StateMachine(
         prober=prober,
@@ -482,13 +692,42 @@ class NetDnsMonitorApp(rumps.App):
         self,
         config_path: str = DEFAULT_CONFIG_PATH,
         router_factory: Callable[..., object] = Router,
+        capabilities: Optional[Capabilities] = None,
+        credential_store: Optional[credentials.CredentialStore] = None,
+        consent_store: Optional[ai_consent.ConsentStore] = None,
+        secret_prompt: Callable[[str, str], Optional[str]] = credentials_prompt.prompt_for_secret,
+        choice_prompt: Callable[[str, str, str, str], bool] = credentials_prompt.confirm,
+        url_opener: Callable[[str], bool] = open_url_with_workspace,
+        privacy_policy_url_fn: Callable[[], Optional[str]] = bundled_privacy_policy_url,
     ):
         set_app_display_name(DISPLAY_NAME)
         super().__init__(name=DISPLAY_NAME, title=f"{STATS_UNKNOWN} Net/DNS: starting...")
+        # Decided once, here, and never re-read: what this build may do does not
+        # change while it runs, and every gate below reads this one object.
+        self.capabilities = distribution.detect() if capabilities is None else capabilities
+        self.credentials = (
+            default_credential_store() if credential_store is None else credential_store
+        )
+        # Only the store build asks. The direct build's opt-in is setting a key.
+        self.consent: Optional[ai_consent.ConsentStore] = None
+        if self.capabilities.requires_ai_consent:
+            self.consent = ai_consent.ConsentStore() if consent_store is None else consent_store
+        # Both dialogs are modal and wait for a person, so they come in as
+        # parameters: the suite passes fakes and never opens one.
+        self.secret_prompt = secret_prompt
+        self.choice_prompt = choice_prompt
+        self.url_opener = url_opener
+        self.privacy_policy_url_fn = privacy_policy_url_fn
         self.config = load_config(config_path)
         self.failover = build_failover(self.config)
-        self.state_machine = build_state_machine(self.config, self.failover)
-        self.notifier = build_notifier(self.config)
+        self.state_machine = build_state_machine(
+            self.config,
+            self.failover,
+            capabilities=self.capabilities,
+            credential_store=self.credentials,
+            consent=self.consent,
+        )
+        self.notifier = build_notifier(self.config, env=self.credentials.as_env())
         self.last_notification_results = None
         self._notification_thread: Optional[threading.Thread] = None
         # Set by the tick guard below. Initialised here because `tick` only
@@ -578,7 +817,12 @@ class NetDnsMonitorApp(rumps.App):
         # Runtime state, seeded from config: the button above the pane flips this,
         # and it decides both the predicate and what the pane shows.
         self.log_errors_only = self.config["log_view_errors_only"]
-        self.log_error: Optional[str] = None
+        # Seeded with the reason in a build that may not read the log, so the pane,
+        # its status line and the Monitor row all say why they are empty instead of
+        # "nothing captured yet", which reads as a quiet network.
+        self.log_error: Optional[str] = (
+            None if self.capabilities.unified_log else self._log_unavailable_text()
+        )
         self.new_log_errors = 0
         # Last text pushed to each view, so the 1s refresh only calls setString_
         # when something changed -- it resets the scroll position, which at 1s
@@ -631,32 +875,8 @@ class NetDnsMonitorApp(rumps.App):
         # Indicator rows carry no callback, which is what greys them out: they
         # are readouts, not actions. Titles are set by _refresh_failover_menu.
         self.failover_rows = [rumps.MenuItem(f"failover-row-{i}") for i in range(3)]
-        self.menu = [
-            # Readouts first: they carry no callback, so they read as a status
-            # header rather than as choices.
-            *self.failover_rows,
-            None,
-            # Plain strings, so the @rumps.clicked handlers below own them. The
-            # failover line's own "Open console…" item is gone: this line's
-            # console is the arbitrary-shell one, reachable from here and from
-            # the dashboard button, and both go through the single controller.
-            "Open dashboard",
-            "Open console",
-            "Toggle mini window",
-            "Open last report",
-            None,
-            rumps.MenuItem("Router"),
-            "Start at Login",
-            "Test network alert",
-            None,
-            # Below the everyday items, and behind a separator, because two of
-            # these rewrite the system's network service order. The dashboard
-            # stays the first thing that can be clicked -- the status item is
-            # easy to miss on a notched menu bar, which is why it leads.
-            rumps.MenuItem("Switch to backup now", callback=self.switch_to_backup),
-            rumps.MenuItem("Switch back to preferred now", callback=self.switch_to_preferred),
-            rumps.MenuItem("Refresh network status", callback=self.refresh_failover),
-        ]
+        self.menu = self._menu_layout()
+        self._refresh_consent_menu()
         self._refresh_failover_menu()
         self.timer = rumps.Timer(self.tick, self.config["poll_interval_seconds"])
         self.timer.start()
@@ -674,7 +894,7 @@ class NetDnsMonitorApp(rumps.App):
         # which measured 1.4s for a 1-minute window. Nothing about the network
         # display depends on it, so it is the one timer that can afford to be late.
         self.log_timer: Optional[rumps.Timer] = None
-        if self.config["log_view_enabled"]:
+        if self._log_view_enabled():
             self.log_timer = rumps.Timer(self.log_tick, self.config["log_view_poll_seconds"])
             self.log_timer.start()
         # Runs once, then stops itself. Everything in it needs a live
@@ -684,14 +904,15 @@ class NetDnsMonitorApp(rumps.App):
         self.launch_timer.start()
         set_dock_icon("healthy")
 
-        self.menu["Start at Login"].state = login_item_installed()
+        if self.capabilities.launch_agent_login_item:
+            self.menu["Start at Login"].state = login_item_installed()
 
         # Built but never started here. Starting runs a root script behind the
         # macOS admin dialog, and __init__ runs on every launch and login: the
         # dialog appeared unasked, and the app waited on it before any timer ran.
         # The menu's Start item and the router window are the only ways to start it.
         self.router = None
-        if self.config["router_enabled"]:
+        if self.config["router_enabled"] and self.capabilities.router:
             self.router = router_factory(
                 wan_if=self.config["wan_interface"],
                 lan_if=self.config["lan_interface"],
@@ -902,7 +1123,10 @@ class NetDnsMonitorApp(rumps.App):
             # An incident may have run the failover ladder step, so the
             # indicator is stale.
             self._refresh_failover_menu()
-        elif self.failover is not None:
+        elif self.failover is not None and self.capabilities.network_order_write:
+            # Never in a build that cannot write the service order: a failback is
+            # a write, and the read ahead of it would be wasted.
+            #
             # Failback rides the probe path for the same reason dead-domain
             # pruning does: recovery produces no report, so the healthy ticks
             # when the preferred link should be reclaimed are exactly the ticks
@@ -1267,7 +1491,7 @@ class NetDnsMonitorApp(rumps.App):
         `_append_output` no-ops into a window that does not exist. History, not
         news.
         """
-        if not self.config["log_view_enabled"]:
+        if not self._log_view_enabled():
             return False
         if self._log_thread is not None and self._log_thread.is_alive():
             return False
@@ -1403,6 +1627,8 @@ class NetDnsMonitorApp(rumps.App):
         matched nothing", "the viewer is switched off", and "the read failed" --
         and only some of those say anything about the network.
         """
+        if not self.capabilities.unified_log:
+            return self._log_unavailable_text() + "\n"
         if not self.config["log_view_enabled"]:
             return "The system log viewer is switched off (log_view_enabled).\n"
         if self.log_error:
@@ -1426,6 +1652,17 @@ class NetDnsMonitorApp(rumps.App):
             )
         return "No network entries captured from the system log yet.\n"
 
+    def _log_view_enabled(self) -> bool:
+        """The config switch, and whether this build may read the log at all.
+
+        Both, every time: the config value can say True in a build whose sandbox
+        refuses `log show`, and that refusal is not a network fault to report.
+        """
+        return bool(self.config["log_view_enabled"]) and self.capabilities.unified_log
+
+    def _log_unavailable_text(self) -> str:
+        return distribution.unavailable("unified_log", "reading the system log")
+
     def _log_level_title(self) -> str:
         return "Errors only" if self.log_errors_only else "All levels"
 
@@ -1433,6 +1670,8 @@ class NetDnsMonitorApp(rumps.App):
         """Why `_start_log_read` declined, in words, so a control never claims work
         it did not do.
         """
+        if not self.capabilities.unified_log:
+            return self._log_unavailable_text() + "\n"
         if not self.config["log_view_enabled"]:
             return "The system log viewer is switched off (log_view_enabled).\n"
         return "A read is already in flight; this one was skipped.\n"
@@ -1483,6 +1722,10 @@ class NetDnsMonitorApp(rumps.App):
         without this app being involved at all, and a status cached from launch would
         keep claiming it for the rest of the session.
         """
+        if not self.capabilities.privileged_repairs:
+            # A build that may never use root has nothing to find out, and the
+            # probe itself runs `sudo -n -l`.
+            return
         if self._privilege_status_thread is not None and self._privilege_status_thread.is_alive():
             return
         if self._privilege_thread is not None and self._privilege_thread.is_alive():
@@ -1810,13 +2053,7 @@ class NetDnsMonitorApp(rumps.App):
                 log_errors=self.log_buffer.error_count(),
                 new_log_errors=self.new_log_errors,
                 log_error=self.log_error,
-                permissions=privileges.status_rows(
-                    granted=self.privileges_granted,
-                    # What the grant covers, not what the machine has.
-                    interfaces=self.granted_interfaces,
-                    primary=self.primary_dhcp_interface,
-                    file_rule_listed=self.privileges_file_rule_listed,
-                ),
+                permissions=self._permission_rows(),
             )
         )
         # Only push when something changed: setString_ resets the pane's scroll
@@ -1830,6 +2067,30 @@ class NetDnsMonitorApp(rumps.App):
                 {field: self.history.series(field) for field in ("rtt_ms", "down_bps", "up_bps")}
             )
 
+    def _permission_rows(self) -> list:
+        if not self.capabilities.privileged_repairs:
+            # One row saying why, rather than the usual rows reading "not granted"
+            # beside a hint to press Grant, which this build cannot honour.
+            return [
+                (
+                    "Elevated permissions",
+                    distribution.unavailable("privileged_repairs", "elevated permissions"),
+                )
+            ]
+        return privileges.status_rows(
+            granted=self.privileges_granted,
+            # What the grant covers, not what the machine has.
+            interfaces=self.granted_interfaces,
+            primary=self.primary_dhcp_interface,
+            file_rule_listed=self.privileges_file_rule_listed,
+        )
+
+    def _unavailable_text(self, feature: str, what: str) -> Optional[str]:
+        """None when this build has `feature`; otherwise the text saying it does not."""
+        if getattr(self.capabilities, feature):
+            return None
+        return distribution.unavailable(feature, what)
+
     def handle_dashboard_action(self, action_id: str):
         """A button was clicked. Main thread.
 
@@ -1838,6 +2099,14 @@ class NetDnsMonitorApp(rumps.App):
         window and all four timers for up to half a minute -- the same reason the
         ping does not run here.
         """
+        gate = GATED_DASHBOARD_ACTIONS.get(action_id)
+        if gate is not None:
+            text = self._unavailable_text(*gate)
+            if text is not None:
+                # Before any branch below, so no worker starts and no window or
+                # subprocess is attempted for a feature this build lacks.
+                self._append_output(f"\n>>> {action_id}\n{text}\n")
+                return
         if action_id == "open_router_window":
             try:
                 self._open_router_window()
@@ -2116,6 +2385,238 @@ class NetDnsMonitorApp(rumps.App):
 
     # --- menu --------------------------------------------------------------
 
+    def _menu_layout(self) -> list:
+        """The status-item menu for this build.
+
+        An item for a feature this build lacks is left out rather than greyed
+        out. Each such item is built here with an explicit callback, not with
+        `@rumps.clicked`: that decorator registers on the class, and `App.run`
+        adds every path it names that the menu lacks. A decorated "Open console"
+        would come back the moment the store build ran, whatever this list says.
+        """
+        caps = self.capabilities
+        items: list = [
+            # Readouts first: they carry no callback, so they read as a status
+            # header rather than as choices.
+            *self.failover_rows,
+            None,
+            # The dashboard stays the first thing that can be clicked -- the status
+            # item is easy to miss on a notched menu bar, which is why it leads.
+            "Open dashboard",
+        ]
+        if caps.shell_console:
+            # The failover line's own "Open console…" item is gone: this line's
+            # console is the arbitrary-shell one, reachable from here and from the
+            # dashboard button, and both go through the single controller.
+            items.append(rumps.MenuItem("Open console", callback=self.open_console))
+        items += ["Toggle mini window", "Open last report", None]
+        if caps.router:
+            items.append(self._router_menu())
+        if caps.launch_agent_login_item:
+            items.append(rumps.MenuItem("Start at Login", callback=self.toggle_login))
+        items += ["Test network alert", self._credentials_menu()]
+        if caps.requires_ai_consent:
+            items += [
+                rumps.MenuItem(CONSENT_ITEM, callback=self.allow_claude_diagnosis),
+                rumps.MenuItem(WITHDRAW_CONSENT_ITEM, callback=self.withdraw_claude_permission),
+            ]
+        if caps.is_app_store:
+            items.append(rumps.MenuItem(PRIVACY_POLICY_ITEM, callback=self.open_privacy_policy))
+        items.append(None)
+        if caps.network_order_write:
+            # Below the everyday items, and behind a separator, because these two
+            # rewrite the system's network service order.
+            items += [
+                rumps.MenuItem("Switch to backup now", callback=self.switch_to_backup),
+                rumps.MenuItem("Switch back to preferred now", callback=self.switch_to_preferred),
+            ]
+        # Kept in every build: listing the service order is a read, and the
+        # sandbox allows it.
+        items.append(rumps.MenuItem("Refresh network status", callback=self.refresh_failover))
+        return items
+
+    def _router_menu(self) -> rumps.MenuItem:
+        router_menu = rumps.MenuItem("Router")
+        router_menu.update(
+            [
+                rumps.MenuItem("Management Console", callback=self.open_router_window),
+                rumps.MenuItem("Configure...", callback=self.configure_router),
+                rumps.MenuItem("Start", callback=self.start_router),
+                rumps.MenuItem("Stop", callback=self.stop_router),
+                rumps.MenuItem("List Interfaces", callback=self.list_interfaces),
+                rumps.MenuItem("Troubleshoot", callback=self.troubleshoot_router),
+            ]
+        )
+        return router_menu
+
+    def _credentials_menu(self) -> rumps.MenuItem:
+        credentials_menu = rumps.MenuItem(CREDENTIALS_MENU)
+        items: list = [
+            rumps.MenuItem(title, callback=lambda _sender, name=name: self.set_credential(name))
+            for title, name, _message in CREDENTIAL_ITEMS
+        ]
+        items += [None, rumps.MenuItem(REMOVE_CREDENTIALS_ITEM, callback=self.remove_credentials)]
+        credentials_menu.update(items)
+        return credentials_menu
+
+    # --- credentials ---------------------------------------------------------
+
+    def set_credential(self, name: str) -> str:
+        """Ask for one credential, save it to the Keychain, and apply it now.
+
+        The value goes from the dialog to CredentialStore.set and nowhere else.
+        What is shown afterwards is the store's outcome text, which names the
+        credential and never contains the value.
+        """
+        title, message = next(
+            (title, message) for title, item_name, message in CREDENTIAL_ITEMS if item_name == name
+        )
+        try:
+            value = self.secret_prompt(title.rstrip("…"), f"{message}\n\n{CREDENTIAL_STORAGE_NOTE}")
+        except Exception as exc:  # noqa: BLE001 - a dialog failure must not cost the menu
+            outcome = f"failed: the dialog could not be shown ({type(exc).__name__})"
+            self._notify(CREDENTIALS_MENU, outcome)
+            return outcome
+        if value is None:
+            # Cancelled: nothing to save and nothing to announce.
+            return "cancelled: nothing was changed"
+        try:
+            outcome = self.credentials.set(name, value)
+        except Exception as exc:  # noqa: BLE001 - class name only, never the message
+            outcome = f"failed: the Keychain write raised {type(exc).__name__}"
+        if outcome.startswith("ok:"):
+            problem = self._apply_credentials()
+            if problem is not None:
+                outcome += f"; not applied to the running app ({problem}), restart to use it"
+            elif self._credential_source(name) == "environment":
+                # Saved, but not what the app reads: the environment wins.
+                outcome += (
+                    f"; not in use, because {name} is also set in the environment, "
+                    "which takes precedence"
+                )
+            else:
+                outcome += "; in use now"
+        self._notify(CREDENTIALS_MENU, outcome)
+        return outcome
+
+    def remove_credentials(self, _sender=None) -> str:
+        """Delete all three of this app's Keychain items, after asking."""
+        try:
+            confirmed = self.choice_prompt(
+                "Remove saved credentials?",
+                "This deletes the Anthropic API key, Slack webhook URL and SMTP password that "
+                "this app saved in your Keychain. Values set as environment variables are "
+                "not affected.",
+                "Remove",
+                "Cancel",
+            )
+        except Exception as exc:  # noqa: BLE001 - a dialog failure must not cost the menu
+            outcome = f"failed: the dialog could not be shown ({type(exc).__name__})"
+            self._notify(CREDENTIALS_MENU, outcome)
+            return outcome
+        if not confirmed:
+            return "cancelled: nothing was changed"
+        outcomes = []
+        for name in credentials.NAMES:
+            try:
+                outcomes.append(self.credentials.delete(name))
+            except Exception as exc:  # noqa: BLE001 - one failure must not skip the others
+                outcomes.append(f"failed: removing {name} raised {type(exc).__name__}")
+        problem = self._apply_credentials()
+        if problem is not None:
+            outcomes.append(f"not applied to the running app ({problem}), restart to use it")
+        still_set = [n for n in credentials.NAMES if self._credential_source(n) == "environment"]
+        if still_set:
+            outcomes.append(
+                f"still set in the environment, and still in use: {', '.join(still_set)}"
+            )
+        outcome = "\n".join(outcomes)
+        self._notify(CREDENTIALS_MENU, outcome)
+        return outcome
+
+    def _credential_source(self, name: str) -> Optional[str]:
+        try:
+            return self.credentials.source(name)
+        except Exception:  # noqa: BLE001 - only decides whether to add a note
+            return None
+
+    def _apply_credentials(self) -> Optional[str]:
+        """Rebuild what reads credentials, in place. None, or the failure's class name.
+
+        Both are attribute rebinds. A notification already being delivered, or an
+        escalation already under way, finishes with what it started with; the
+        next one uses the new value.
+        """
+        try:
+            self.notifier = build_notifier(self.config, env=self.credentials.as_env())
+            self.state_machine.escalator = build_escalator(
+                self.capabilities, self.credentials, self.consent
+            )
+        except Exception as exc:  # noqa: BLE001 - the Keychain change already happened
+            return type(exc).__name__
+        return None
+
+    # --- Claude permission (store build) -------------------------------------
+
+    def _refresh_consent_menu(self):
+        if self.consent is None:
+            return
+        self.menu[CONSENT_ITEM].state = self.consent.granted()
+
+    def allow_claude_diagnosis(self, _sender=None) -> str:
+        """Show what would be sent, and record the answer.
+
+        "Don't Allow" withdraws an earlier grant. Someone who opens this dialog,
+        reads the list and declines has answered the question, and a grant left in
+        place would keep sending incident data they just refused.
+        """
+        if self.consent is None:
+            return "disabled: this build does not ask; setting ANTHROPIC_API_KEY is the opt-in"
+        try:
+            allowed = self.choice_prompt(
+                "Allow Claude diagnosis?", ai_consent.DISCLOSURE, "Allow", "Don't Allow"
+            )
+        except Exception as exc:  # noqa: BLE001 - no dialog means no answer, so no change
+            outcome = f"failed: the dialog could not be shown ({type(exc).__name__})"
+            self._notify("Claude diagnosis", outcome)
+            return outcome
+        if allowed:
+            outcome = self.consent.grant()
+        elif self.consent.granted():
+            outcome = self.consent.revoke()
+        else:
+            return "cancelled: nothing was changed"
+        self._refresh_consent_menu()
+        self._notify("Claude diagnosis", outcome)
+        return outcome
+
+    def withdraw_claude_permission(self, _sender=None) -> str:
+        if self.consent is None:
+            return "disabled: this build does not ask; unset ANTHROPIC_API_KEY to opt out"
+        outcome = self.consent.revoke()
+        self._refresh_consent_menu()
+        self._notify("Claude diagnosis", outcome)
+        return outcome
+
+    def open_privacy_policy(self, _sender=None) -> str:
+        url = self.privacy_policy_url_fn()
+        if not url:
+            outcome = (
+                "No privacy policy URL is bundled with this copy of the app "
+                f"({PRIVACY_POLICY_URL_KEY} is not set in its Info.plist)."
+            )
+            self._notify(PRIVACY_POLICY_ITEM, outcome)
+            return outcome
+        try:
+            opened = bool(self.url_opener(url))
+        except Exception:  # noqa: BLE001 - report it, never crash the menu
+            opened = False
+        if not opened:
+            outcome = f"failed: could not open {url}"
+            self._notify(PRIVACY_POLICY_ITEM, outcome)
+            return outcome
+        return f"ok: opened {url}"
+
     @rumps.clicked("Open dashboard")
     def open_dashboard_clicked(self, sender):
         self.open_dashboard(sender)
@@ -2166,7 +2667,6 @@ class NetDnsMonitorApp(rumps.App):
             domains=anchor_domains(self.config),
         )
 
-    @rumps.clicked("Open console")
     def open_console(self, _sender=None):
         """Open the console, building it on first use.
 
@@ -2183,6 +2683,10 @@ class NetDnsMonitorApp(rumps.App):
         itself imports AppKit inside its methods rather than at module scope, so
         the import at the top of this file is safe; it is `show()` that can raise.
         """
+        text = self._unavailable_text("shell_console", "the console")
+        if text is not None:
+            self._notify("Console", text)
+            return
         try:
             if self.console is None:
                 self.console = ConsoleWindowController(status=self.status_snapshot)
@@ -2212,11 +2716,19 @@ class NetDnsMonitorApp(rumps.App):
             lines = build_failover_lines(snapshot)
         except Exception as exc:  # noqa: BLE001 - an indicator is not worth a crash
             lines = [f"Failover: status unavailable ({type(exc).__name__})"]
+        if not self.capabilities.network_order_write and lines and lines[0].startswith("Active: "):
+            # "failover is automatic" would be false here: nothing can switch.
+            lines[0] = lines[0].split(" — ")[0] + " — read-only in this build"
         for row, text in zip(self.failover_rows, lines + [""] * len(self.failover_rows)):
             # An empty title would leave a clickable-looking blank row.
             row.title = text or " "
 
     def _manual_switch(self, target: str, label: str):
+        text = self._unavailable_text("network_order_write", f"switching to the {label} network")
+        if text is not None:
+            # Ahead of the configuration check: no config can make this work here.
+            self._notify("Network failover", text)
+            return
         if self.failover is None:
             rumps.notification(
                 "Net/DNS Monitor",
@@ -2240,9 +2752,11 @@ class NetDnsMonitorApp(rumps.App):
 
     def refresh_failover(self, _sender):
         self._refresh_failover_menu()
-        rumps.notification(
-            "Net/DNS Monitor", "Network failover", failover_status_text(self.failover)
-        )
+        text = failover_status_text(self.failover)
+        unavailable = self._unavailable_text("network_order_write", "switching networks")
+        if self.failover is not None and unavailable is not None:
+            text = f"{text} {unavailable}"
+        rumps.notification("Net/DNS Monitor", "Network failover", text)
 
     def open_last_report(self, _sender):
         if self.last_report_path:
@@ -2272,8 +2786,22 @@ class NetDnsMonitorApp(rumps.App):
         except Exception:  # noqa: BLE001 - a lost banner must not cost the click
             traceback.print_exc()
 
+    def _router_unavailable(self) -> bool:
+        """True, after announcing it, in a build without the router.
+
+        The store build's menu has no Router submenu, so this only matters to a
+        caller that reaches these handlers some other way.
+        """
+        text = self._unavailable_text("router", "the router")
+        if text is None:
+            return False
+        self._notify("Router", text)
+        return True
+
     def _open_router_window(self):
         """Raises on failure; each caller reports it where its user is looking."""
+        if self._router_unavailable():
+            return
         try:
             if self.router_window is None:
                 # A getter and the path, not a copy of the dict: the window writes
@@ -2290,7 +2818,6 @@ class NetDnsMonitorApp(rumps.App):
             self.router_window = None
             raise
 
-    @rumps.clicked("Router", "Management Console")
     def open_router_window(self, _sender=None):
         try:
             self._open_router_window()
@@ -2300,13 +2827,14 @@ class NetDnsMonitorApp(rumps.App):
                 f"Could not open the router console window ({type(exc).__name__}).",
             )
 
-    @rumps.clicked("Router", "Configure...")
     def configure_router(self, _sender=None):
         """Open the config file this app actually loaded, creating it if absent.
 
         `open -t` on a missing file exits non-zero and shows nothing, and the
         path used to be hardcoded rather than the one passed to the app.
         """
+        if self._router_unavailable():
+            return
         path = self.config_path
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -2322,6 +2850,8 @@ class NetDnsMonitorApp(rumps.App):
             self._notify("Router", f"Could not open {path} (open exited {code}).")
 
     def _router_or_notify(self):
+        if self._router_unavailable():
+            return None
         if self.router is None:
             self._notify("Router", "Router disabled (set router_enabled)")
         return self.router
@@ -2382,13 +2912,11 @@ class NetDnsMonitorApp(rumps.App):
             first = text.strip().splitlines()[0] if text.strip() else "(no output)"
             self._notify("Router", f"{label}: {first[:200]}")
 
-    @rumps.clicked("Router", "Start")
     def start_router(self, _sender=None):
         router = self._router_or_notify()
         if router is not None:
             self._start_router_worker("_router_thread", "Start router", router.start)
 
-    @rumps.clicked("Router", "Stop")
     def stop_router(self, _sender=None):
         router = self._router_or_notify()
         if router is not None:
@@ -2400,8 +2928,9 @@ class NetDnsMonitorApp(rumps.App):
             return router.wan_if, router.lan_if
         return self.config["wan_interface"], self.config["lan_interface"]
 
-    @rumps.clicked("Router", "List Interfaces")
     def list_interfaces(self, _sender=None):
+        if self._router_unavailable():
+            return
         run_fn = self.router_run_fn
 
         def work() -> str:
@@ -2412,8 +2941,9 @@ class NetDnsMonitorApp(rumps.App):
 
         self._start_router_worker("_router_info_thread", "Network interfaces", work, reveal=True)
 
-    @rumps.clicked("Router", "Troubleshoot")
     def troubleshoot_router(self, _sender=None):
+        if self._router_unavailable():
+            return
         run_fn = self.router_run_fn
         wan, lan = self._router_interfaces()
 
@@ -2426,7 +2956,6 @@ class NetDnsMonitorApp(rumps.App):
 
     # --- login item ----------------------------------------------------------
 
-    @rumps.clicked("Start at Login")
     def toggle_login(self, sender):
         """Install or remove this item's LaunchAgent, then show what is on disk.
 
@@ -2436,6 +2965,11 @@ class NetDnsMonitorApp(rumps.App):
         removed here -- it carries the supervision flag, and
         `net-dns-monitor-service uninstall` is what takes it out.
         """
+        text = self._unavailable_text("launch_agent_login_item", "Start at Login")
+        if text is not None:
+            # The reason already names the replacement: System Settings' Login Items.
+            self._notify("Start at Login", text)
+            return
         own = login_agent_path(LOGIN_AGENT_LABEL)
         service = login_agent_path(SERVICE_AGENT_LABEL)
         try:

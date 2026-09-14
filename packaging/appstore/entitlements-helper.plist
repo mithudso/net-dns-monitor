@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for secondary executables inside Contents/MacOS, such as the
+  embedded `python` launcher py2app copies there. App Store validation requires
+  every executable in the bundle to be sandboxed. `inherit` makes a helper take
+  the parent app's sandbox instead of defining its own, which is what Apple
+  requires for helpers launched by a sandboxed app.
+
+  Exactly these two keys: a helper with `inherit` plus any other entitlement is
+  rejected at launch.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.inherit</key>
+	<true/>
+</dict>
+</plist>

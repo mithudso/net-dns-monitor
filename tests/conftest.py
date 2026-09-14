@@ -47,6 +47,62 @@ def no_real_dock_icon(monkeypatch):
     monkeypatch.setattr("netdnsmonitor.app.set_dock_icon", lambda *a, **k: None)
 
 
+class _MemoryKeychain:
+    """An empty Keychain that lives for one test. Same status codes as the real one."""
+
+    def __init__(self):
+        self.items: dict = {}
+
+    def read(self, account):
+        from netdnsmonitor.credentials import ERR_SEC_ITEM_NOT_FOUND
+
+        if account not in self.items:
+            return ERR_SEC_ITEM_NOT_FOUND, None
+        return 0, self.items[account]
+
+    def add(self, account, value):
+        from netdnsmonitor.credentials import ERR_SEC_DUPLICATE_ITEM
+
+        if account in self.items:
+            return ERR_SEC_DUPLICATE_ITEM
+        self.items[account] = value
+        return 0
+
+    def update(self, account, value):
+        self.items[account] = value
+        return 0
+
+    def delete(self, account):
+        from netdnsmonitor.credentials import ERR_SEC_ITEM_NOT_FOUND
+
+        if self.items.pop(account, None) is None:
+            return ERR_SEC_ITEM_NOT_FOUND
+        return 0
+
+
+@pytest.fixture(autouse=True)
+def no_real_keychain_or_distribution(monkeypatch):
+    """Keep the suite off the developer's Keychain, and on the direct build.
+
+    The app builds a CredentialStore at construction and reads all three
+    credentials from it, so without this every constructed app would query the
+    real login Keychain, and a key saved there would change what a test sees.
+    `app.default_credential_store` looks `make_keychain_backend` up on the
+    credentials module at call time, which is the seam patched here. A test that
+    wants a populated Keychain passes its own CredentialStore instead.
+
+    The two variables that select the Mac App Store build are removed for the
+    same reason: exported in a developer's shell, they would switch every
+    direct-build test onto the gated paths. Tests of the store build pass
+    `capabilities=` explicitly.
+    """
+    monkeypatch.setattr(
+        "netdnsmonitor.credentials.make_keychain_backend", lambda *a, **k: _MemoryKeychain()
+    )
+    monkeypatch.delenv("APP_SANDBOX_CONTAINER_ID", raising=False)
+    monkeypatch.delenv("NETDNS_DISTRIBUTION", raising=False)
+
+
 def _empty_log_reader(window: str = "1m", errors_only: bool = True) -> dict:
     return {"entries": [], "error": None}
 
