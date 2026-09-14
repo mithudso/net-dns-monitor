@@ -10,9 +10,11 @@ of both.
 Three signals from us (`external_reachable`, `dns_ok`, and whether any peer
 answers at all) and two from the peer (`external_reachable`, `dns_ok`) resolve it:
 
-  peer unreachable                  -> LOCAL_MACHINE
+  peer unreachable, we can't get out -> LOCAL_MACHINE
       Nothing on the LAN answers, including a machine that was answering
-      minutes ago. Our own link is the thing that changed.
+      minutes ago, and our external check fails too. Our own link is the
+      thing that changed. If we can still get out, silent peers say nothing
+      about our link, and the DNS layer decides instead.
 
   peer fine, we can't get out       -> LOCAL_MACHINE
       The LAN works, the peer's internet works, ours doesn't. Route, firewall,
@@ -90,14 +92,19 @@ def localize(
         "peers_reporting_state": len(informative),
     }
 
-    # Nothing wrong that we can see. Say so rather than inventing a cause.
+    # Nothing wrong that we can see. Say so rather than inventing a cause -- and
+    # say what "see" rests on, because (None, None) is "not probed yet", not
+    # "probed and healthy".
     if our_external_reachable is not False and our_dns_ok is not False:
-        return _verdict(
-            INCONCLUSIVE,
-            "low",
-            "Nothing is currently failing on this machine, so there is nothing to locate.",
-            evidence,
-        )
+        if our_external_reachable is None and our_dns_ok is None:
+            reason = "This machine has not been probed yet, so there is nothing to compare."
+        else:
+            reason = (
+                "This machine's most recent probe "
+                f"(external_reachable={our_external_reachable}, dns_ok={our_dns_ok}) "
+                "showed no failure, so there is nothing to locate."
+            )
+        return _verdict(INCONCLUSIVE, "low", reason, evidence)
 
     if not peers:
         return _verdict(
@@ -123,9 +130,12 @@ def localize(
             evidence,
         )
 
-    if not reachable:
+    if not reachable and our_external_reachable is False:
         # Every known peer went silent at the same time as our connectivity. The
-        # shared element is our own link.
+        # shared element is our own link. Only a failed external check supplies
+        # the "our connectivity" half: when addresses are reachable, or the check
+        # was not probed, silent peers are not evidence against the link, and
+        # the DNS layer below decides with no peer state to lean on.
         return _verdict(
             LOCAL_MACHINE,
             "high",
@@ -162,19 +172,56 @@ def localize(
                 "puts the fault upstream of both -- router, modem or ISP.",
                 evidence,
             )
-        # The peer answered, so the LAN is intact, but it did not say whether it
-        # can get out. That still rules out this machine's link.
+        # A peer answered, so the LAN is reachable from here, but no usable peer
+        # report says whether the internet is (none reported, or they disagree).
+        # That does not rule out this machine's route, firewall or VPN, so the
+        # reason lists every cause that is still possible.
         return _verdict(
             LOCAL_NETWORK,
             "medium",
-            "A peer on this network answered, so this machine's link and the LAN "
-            "are working -- but the peer did not report whether it can reach the "
-            "internet, so this cannot distinguish a router problem from an ISP "
-            "one. Upgrade the peer to report its state for a sharper answer.",
+            "A peer on this network answered, so the LAN is reachable from this "
+            "machine. The peers gave no single answer about whether they can reach "
+            "the internet (none reported it, or they disagree), so the fault could "
+            "still be this machine's route, firewall or VPN, the router, or the ISP. "
+            "Upgrade the peers to report their state for a sharper answer.",
             evidence,
         )
 
     # --- the DNS layer -----------------------------------------------------
+    # Only True or None reach here. None means external reachability was not
+    # probed, so no reason below may claim this machine reaches addresses, and
+    # no verdict that would rest on that claim may be high confidence.
+    if our_external_reachable is None:
+        if peer_dns is True:
+            return _verdict(
+                LOCAL_DNS,
+                "medium",
+                "This machine cannot resolve names, while a peer on the same "
+                "network resolves them fine. External reachability was not probed "
+                "here, so a wider connectivity fault is not ruled out, but the "
+                "likeliest cause is this machine's resolver configuration, its "
+                "cache, or an /etc/resolver override.",
+                evidence,
+            )
+        if peer_dns is False:
+            return _verdict(
+                DNS_OUTAGE,
+                "medium",
+                "Neither this machine nor a peer can resolve names. External "
+                "reachability was not probed here, so a wider outage is not ruled "
+                "out, but the likeliest fault is the resolver they share -- usually "
+                "whatever DHCP handed out, often the router itself.",
+                evidence,
+            )
+        return _verdict(
+            LOCAL_DNS,
+            "medium",
+            "This machine cannot resolve names, external reachability was not "
+            "probed, and no peer reported its own DNS state. A resolver problem on "
+            "this machine is possible, but so is a wider connectivity fault.",
+            evidence,
+        )
+
     if peer_dns is True:
         return _verdict(
             LOCAL_DNS,

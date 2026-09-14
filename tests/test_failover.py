@@ -4,11 +4,18 @@ actually rewrites, so the read-back verification is exercised for real.
 """
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
 
-from netdnsmonitor.failover import FailoverStore, NetworkFailover
+from netdnsmonitor.failover import (
+    FailoverStore,
+    NetworkFailover,
+    apply_service_order,
+    default_run,
+)
+from netdnsmonitor.service_order import parse_service_order
 
 ORDER = [
     "AX88179B",
@@ -43,8 +50,13 @@ class FakeRunner:
         list_fails_after_apply=False,
         enable_result=None,
         obey_enable=True,
+        list_fails_after_enable=False,
     ):
         self.order = list(order or ORDER)
+        # The enable exits 0, then the very next listing fails: the enable may
+        # have landed and nothing can confirm it either way.
+        self.list_fails_after_enable = list_fails_after_enable
+        self._fail_next_list = False
         self.disabled = set(DISABLED)
         self.enable_result = enable_result
         self.obey_enable = obey_enable  # False = exit 0 but stay disabled
@@ -60,6 +72,9 @@ class FakeRunner:
     def __call__(self, args):
         self.calls.append(args)
         if args[:2] == ["networksetup", "-listnetworkserviceorder"]:
+            if self._fail_next_list:
+                self._fail_next_list = False
+                return SimpleNamespace(returncode=1, stdout="", stderr="boom")
             if self.list_fails or (self.list_fails_after_apply and self.applied):
                 return SimpleNamespace(returncode=1, stdout="", stderr="boom")
             return SimpleNamespace(returncode=0, stdout=self._listing(), stderr="")
@@ -73,6 +88,7 @@ class FakeRunner:
         if args[:2] == ["networksetup", "-setnetworkserviceenabled"]:
             if self.enable_result is not None:
                 return self.enable_result
+            self._fail_next_list = self.list_fails_after_enable
             if self.obey_enable:
                 name, state = args[2], args[3]
                 self.disabled.discard(name) if state == "on" else self.disabled.add(name)
@@ -902,3 +918,308 @@ def test_a_named_backup_absent_from_the_order_is_reported_as_such(store):
     assert outcome.startswith("failed:")
     assert "not in the service order" in outcome
     assert runner.applied_orders == []
+
+
+# --- a backup-to-backup switch keeps the true restore point ------------------
+
+
+def test_a_backup_to_backup_switch_keeps_the_true_restore_point(store):
+    """Recording the order on the second switch would make the first backup the
+    "original", and a later failback would restore it and call that preferred.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+        prober=lambda dev: dev in {"en0", "en11"},
+    )
+    assert failover.switch_now("backup", service="Wi-Fi").startswith("ok:")
+    assert failover.switch_now("backup", service="iPhone USB").startswith("ok:")
+    assert store.original_order == ORDER
+
+    outcome = failover.switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert runner.order[0] == "AX88179B"
+    assert runner.order == ORDER
+
+
+def test_a_restore_point_that_starts_on_a_backup_is_not_restored_verbatim(store):
+    """Restoring it exactly would leave the machine on a backup while the
+    outcome says it failed back to the preferred link.
+    """
+    order = ["Wi-Fi"] + [n for n in ORDER if n != "Wi-Fi"]
+    runner = FakeRunner(order=order)
+    store.original_order = list(order)
+    outcome = build(store, runner).switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert runner.order[0] == "AX88179B"
+    assert "promoted" in outcome
+
+
+# --- concurrent entry points ------------------------------------------------
+
+
+def test_a_failback_tick_cannot_interleave_with_a_switch_in_progress(store):
+    """The dashboard worker runs the ladder while the timer tick runs failback.
+    Before the write lands the order still shows the preferred link, so an
+    interleaved failback would self-heal the record away mid-switch.
+    """
+    runner = FakeRunner()
+    during = []
+
+    def run_fn(args):
+        if args[:2] == ["networksetup", "-ordernetworkservices"]:
+            during.append((failover.attempt_failback(), failover.switch_now("preferred")))
+        return runner(args)
+
+    failover = build(store, run_fn)
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert during == [(None, "no switch: another switch attempt is in progress")]
+    assert store.original_order == ORDER
+    assert runner.order[0] == "Wi-Fi"
+
+
+def test_the_switch_lock_is_released_after_each_attempt(store):
+    runner = FakeRunner()
+    failover = build(store, runner)
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert failover.switch_now("preferred").startswith("ok:")
+    assert failover.switch_now("backup").startswith("ok:")
+
+
+# --- the failback gate closes on a refused switch from any order ------------
+
+
+def test_a_refused_switch_from_a_third_service_order_does_not_hold_the_gate_open(store):
+    """A third adapter at the head also reads as "not on a backup". If the write
+    was refused, the live order still equals the record, and the record has to
+    clear or every tick spends a networksetup subprocess forever.
+    """
+    order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
+    runner = FakeRunner(
+        order=order,
+        apply_result=SimpleNamespace(
+            returncode=1, stdout="", stderr="You must be running as root to use this command."
+        ),
+    )
+    failover = build(store, runner)
+    assert failover.attempt_failover("network").startswith("NEEDS_PRIVILEGE:")
+    assert store.original_order == order
+
+    assert failover.attempt_failback() is None
+    assert store.original_order is None
+
+    runner.calls.clear()
+    assert failover.attempt_failback() is None
+    assert runner.calls == []
+
+
+# --- the order is re-read right before the write ----------------------------
+
+
+def test_a_service_added_during_the_probes_stops_the_write(store):
+    """The order was listed seconds before the write. A service added in that
+    window is missing from the argv, and -ordernetworkservices would drop it.
+    """
+    runner = FakeRunner()
+
+    def prober(dev):
+        if "Bluetooth PAN" not in runner.order:
+            runner.order.append("Bluetooth PAN")
+        return {"en6": False, "en0": True}.get(dev)
+
+    outcome = build(store, runner, prober=prober).attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "changed" in outcome
+    assert runner.applied_orders == []
+    assert "Bluetooth PAN" in runner.order
+
+
+def test_an_unreadable_order_right_before_the_write_stops_it():
+    runner = FakeRunner()
+    services = parse_service_order(runner._listing())
+    runner.list_fails = True
+    new_order = ["Wi-Fi"] + [n for n in ORDER if n != "Wi-Fi"]
+    outcome = apply_service_order(runner, services, new_order)
+    assert outcome.startswith("failed:")
+    assert "nothing was applied" in outcome
+    assert runner.applied_orders == []
+
+
+# --- enabling is only claimed, and only undone, on evidence -----------------
+
+
+M3100_ONLY = dict(preferred_service="AX88179B", backup_services=["M3100"], backup_service=None)
+
+
+def test_an_enable_that_cannot_be_read_back_is_not_claimed(store):
+    runner = FakeRunner(obey_enable=False, list_fails_after_enable=True)
+    failover = build(store, runner, prober=lambda dev: dev == "en12", **M3100_ONLY)
+    outcome = failover.attempt_failover("network")
+    assert not outcome.startswith("ok:")
+    assert "confirm" in outcome
+    assert runner.applied_orders == []
+    assert store.enabled_by_us == "M3100", "the enable may have landed, so it stays undoable"
+
+
+def test_an_enable_left_behind_by_a_failed_reorder_is_disclosed_and_undone(store):
+    runner = FakeRunner(obey=False)
+    failover = build(store, runner, prober=lambda dev: dev == "en12", **M3100_ONLY)
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "'M3100' was enabled first and is still on" in outcome
+    assert "M3100" not in runner.disabled
+
+    # Still on the preferred link, so the next failback tick self-heals -- and
+    # has to take the enable with it rather than leave it for a later failback.
+    failover.interface_prober = lambda dev: True
+    failover.attempt_failback()
+    assert "M3100" in runner.disabled
+    assert store.enabled_by_us is None
+    assert store.original_order is None
+
+
+def test_a_re_disable_that_did_not_land_is_not_claimed(store):
+    runner = FakeRunner()
+    failover = build(store, runner, prober=lambda dev: dev == "en12", **M3100_ONLY)
+    assert failover.attempt_failover("network").startswith("ok:")
+    runner.obey_enable = False
+    outcome = failover.switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert "disabled 'M3100' again" not in outcome
+    assert "could not confirm" in outcome
+
+
+def test_a_second_enabled_backup_does_not_erase_the_first_from_the_record(store):
+    """One slot records the service this app turned on. Overwriting it on a
+    switch between two disabled backups would leave the first on forever.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100", "USB 10/100/1G/2.5G LAN"],
+        backup_service=None,
+        prober=lambda dev: dev in {"en12", "en9"},
+    )
+    assert failover.switch_now("backup", service="M3100").startswith("ok:")
+    outcome = failover.switch_now("backup", service="USB 10/100/1G/2.5G LAN")
+    assert outcome.startswith("ok:")
+    assert store.enabled_by_us == "M3100"
+    assert "stay on" in outcome
+
+
+# --- manual switch wording --------------------------------------------------
+
+
+def test_a_named_manual_target_that_did_not_answer_carries_the_warning(store):
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+        prober=lambda dev: {"en0": True, "en11": False}.get(dev),
+    )
+    outcome = failover.switch_now("backup", service="iPhone USB")
+    assert outcome.startswith("ok:")
+    assert "WARNING" in outcome
+    assert runner.order[0] == "iPhone USB"
+
+
+def test_a_named_manual_target_that_answered_carries_no_warning(store):
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+        prober=lambda dev: True,
+    )
+    assert "WARNING" not in failover.switch_now("backup", service="iPhone USB")
+
+
+def test_switch_now_to_preferred_names_a_third_service_at_the_head(store):
+    order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
+    runner = FakeRunner(order=order)
+    outcome = build(store, runner).switch_now("preferred")
+    assert outcome.startswith("no switch:")
+    assert "neither" in outcome and "Thunderbolt Bridge" in outcome
+    assert runner.applied_orders == []
+
+
+def test_a_named_backup_with_no_device_is_not_called_absent(store, monkeypatch):
+    """A VPN-style service sits in the order with no device. Calling it absent
+    sends someone looking for a service that is right there.
+    """
+    monkeypatch.setitem(DEVICES, "iPhone USB", "")
+    runner = FakeRunner()
+    failover = build(store, runner, backup_services=["Wi-Fi", "iPhone USB"], backup_service=None)
+    outcome = failover.switch_now("backup", service="iPhone USB")
+    assert outcome.startswith("failed:")
+    assert "not in the service order" not in outcome
+    assert "no device" in outcome
+    assert runner.applied_orders == []
+
+
+# --- only a real write surfaces from the tick -------------------------------
+
+
+def test_a_failback_that_never_reached_a_write_stays_silent(store):
+    """A pre-write failure (here a misspelt preferred service) returned on
+    every tick would make the app re-list and re-probe for its menu each time.
+    """
+    runner = FakeRunner()
+    store.original_order = list(ORDER)
+    failover = build(store, runner, preferred_service="typo", prober=lambda dev: True)
+    assert failover.attempt_failback() is None
+    assert failover.attempt_failback() is None
+
+
+# --- the state file is shared with the CLI ----------------------------------
+
+
+def test_a_failover_made_by_another_process_is_failed_back(tmp_path):
+    """The CLI and the app each hold a store on the same file. A record the CLI
+    wrote has to reach the running app, or the app never fails back.
+    """
+    path = str(tmp_path / "failover.json")
+    runner = FakeRunner()
+    app = build(FailoverStore(path), runner, prober=lambda dev: True)
+    cli = build(FailoverStore(path), runner)
+
+    assert cli.switch_now("backup").startswith("ok:")
+    outcomes = [app.attempt_failback() for _ in range(3)]
+    assert outcomes[-1] is not None and outcomes[-1].startswith("ok:")
+    assert runner.order[0] == "AX88179B"
+    assert FailoverStore(path).original_order is None
+
+
+def test_a_failed_save_leaves_the_previous_record_loadable(tmp_path, monkeypatch):
+    """A save that fails must not truncate the record it replaces. `os.replace`
+    is the last step of the write, so this fails with every new byte already
+    written -- and the old record must still load.
+    """
+    path = str(tmp_path / "failover.json")
+    first = FailoverStore(path)
+    first.original_order = list(ORDER)
+    first.save()
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    first.original_order = ["Wi-Fi"]
+    first.save()  # must not raise
+    monkeypatch.undo()
+
+    assert FailoverStore(path).original_order == ORDER
+    assert list(tmp_path.glob("*.tmp")) == [], "no temp file left behind"
+
+
+def test_default_run_takes_a_timeout_and_fails_as_data():
+    result = default_run(["/nonexistent/networksetup-does-not-exist"], timeout=1)
+    assert result.returncode == 1

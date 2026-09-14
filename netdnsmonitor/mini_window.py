@@ -35,16 +35,34 @@ FRAME_AUTOSAVE_NAME = "NetDnsMonitorMiniWindow"
 DOT = {"healthy": "\U0001f7e2", "flaky": "\U0001f7e1", "incident": "\U0001f534"}
 
 
-def mini_text(state: str, rtt_ms: Optional[float] = None, loss_pct: Optional[float] = None) -> str:
+# "ping" and "network" mean nothing is getting through, so "DOWN" is true. None
+# is here only so a caller that passes no reason keeps the old wording. Anything
+# else is named: "DOWN" for a DNS incident with pings answering sends someone to
+# the cable instead of the resolver, and for "unclassified" it turns a probe that
+# never ran into a failed one.
+DOWN_REASONS = (None, "ping", "network")
+
+
+def mini_text(
+    state: str,
+    rtt_ms: Optional[float] = None,
+    loss_pct: Optional[float] = None,
+    reason: Optional[str] = None,
+) -> str:
     """The one line the panel shows. Pure, so the wording is testable.
 
     Deliberately not the menu bar's title: at this size there is room for the
     state and one number, and "DOWN" spelled out beats a dash someone has to
     interpret while walking past.
+
+    `reason` is read only during an incident: "ping" for unanswered pings,
+    otherwise the incident's classification. None keeps the old "DOWN".
     """
     dot = DOT.get(state, DOT["healthy"])
     if state == "incident":
-        return f"{dot}  DOWN"
+        if reason in DOWN_REASONS:
+            return f"{dot}  DOWN"
+        return f"{dot}  {str(reason).upper()}"
     if rtt_ms is None:
         return f"{dot}  --"
     text = f"{dot}  {rtt_ms:.0f}ms"

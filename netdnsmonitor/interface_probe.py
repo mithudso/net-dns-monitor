@@ -85,7 +85,8 @@ def make_interface_prober(
 
     True if any target answered through that interface, False if none did,
     None if the question could not be asked at all (no device configured, the
-    device is absent, or there is nothing to probe against).
+    device is absent, there is nothing to probe against, or the timeout left
+    no budget to try even one target).
     """
 
     def probe(device: Optional[str]) -> Optional[bool]:
@@ -108,16 +109,21 @@ def make_interface_prober(
         # interface by construction.
         #
         # A target that answers does so in milliseconds, so the slice only ever
-        # binds the ones that were going to fail anyway, and unspent time stays
-        # available to whatever comes next.
+        # binds the ones that were going to fail anyway. Each slice is the
+        # remaining budget over the targets still to try, so time a fast
+        # failure (ENETUNREACH) leaves unspent goes to the targets after it; a
+        # fixed timeout / N stranded it.
         deadline = time.monotonic() + timeout
-        share = timeout / len(targets)
-        for host, port in targets:
+        attempted = False
+        for i, (host, port) in enumerate(targets):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            if connect_fn(device, host, port, min(remaining, share)):
+            attempted = True
+            if connect_fn(device, host, port, remaining / (len(targets) - i)):
                 return True
-        return False
+        # No budget for even the first target is no reading at all, and False
+        # would tell the report and the failover policy the link is dead.
+        return False if attempted else None
 
     return probe

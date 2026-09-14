@@ -158,6 +158,50 @@ def test_renewing_a_lease_with_no_default_route_does_not_shell_out():
     )
     assert "cannot renew" in outcome
     assert calls == []
+    # primary_interface only returns en* names, so None also covers a full
+    # tunnel VPN that holds the default route on utun. The old text said no
+    # interface carried the route, which is false in that case.
+    assert "no interface currently carries" not in outcome
+    assert "tunnel" in outcome
+
+
+def test_renewal_is_refused_when_the_grant_does_not_cover_this_interface():
+    """The grant lists `ipconfig set <name> DHCP` per interface. A machine that
+    now routes over an interface added after the grant has the mDNSResponder
+    rule but not this one, and `sudo -n` would fail with a password prompt.
+    """
+    run_fn, calls = fake_run_factory(returncode=0)
+    asked = []
+
+    def dhcp_granted_fn(interface):
+        asked.append(interface)
+        return False
+
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en7",
+        dhcp_granted_fn=dhcp_granted_fn,
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("NEEDS_PRIVILEGE")
+    assert asked == ["en7"]
+    assert calls == []
+
+
+def test_renewal_runs_when_the_grant_covers_this_interface():
+    run_fn, calls = fake_run_factory(returncode=0)
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        # The mDNSResponder rule is irrelevant to a DHCP renewal once the
+        # per-interface answer is available.
+        is_granted_fn=lambda: False,
+        primary_interface_fn=lambda: "en7",
+        dhcp_granted_fn=lambda interface: interface == "en7",
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("ok")
+    assert calls == [["/usr/bin/sudo", "-n", "/usr/sbin/ipconfig", "set", "en7", "DHCP"]]
 
 
 def test_a_failed_renewal_reports_the_command_and_the_error():
@@ -216,8 +260,9 @@ def test_check_configured_dns_servers_shells_out_to_scutil_dns():
 
 def test_check_resolver_overrides_reports_failure_instead_of_raising(tmp_path):
     """os.listdir can raise PermissionError, or FileNotFoundError via a TOCTOU
-    race with the isdir check. state_machine has no per-step guard, so an
-    escape aborts the incident and no report is written at all.
+    race with the isdir check. state_machine's per-step guard would keep the
+    incident alive, but it can only say the step raised; handling it here keeps
+    the path in the outcome.
     """
 
     def boom(path):
@@ -262,6 +307,30 @@ def test_resolve_against_public_resolver_reflects_query_result():
         LadderStep("resolve_against_public_resolver", "check", needs_privilege=False)
     )
     assert "resolved" in outcome.lower()
+
+
+def test_resolve_against_public_resolver_reports_a_real_negative_answer():
+    run_fn, _ = fake_run_factory()
+    executor = make_repair_executor(run_fn=run_fn, query_fn=lambda domain: False)
+    outcome = executor(
+        LadderStep("resolve_against_public_resolver", "check", needs_privilege=False)
+    )
+    assert "did NOT resolve" in outcome
+
+
+def test_an_unreachable_public_resolver_is_not_reported_as_a_failed_name():
+    """None means the query got no reply. Reporting it as "did NOT resolve"
+    tells someone the name is broken everywhere when nothing was learned.
+    """
+    run_fn, _ = fake_run_factory()
+    executor = make_repair_executor(run_fn=run_fn, query_fn=lambda domain: None)
+    outcome = executor(
+        LadderStep("resolve_against_public_resolver", "check", needs_privilege=False)
+    )
+    assert "did NOT resolve" not in outcome
+    assert "resolved via" not in outcome
+    assert outcome.startswith("could not reach the public resolver")
+    assert "example.com" in outcome
 
 
 def test_unknown_step_name_returns_a_clear_message_instead_of_raising():
@@ -316,3 +385,26 @@ def test_unicode_decode_error_is_reported_not_raised():
     executor = make_repair_executor(run_fn=bad_decode)
     outcome = executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
     assert outcome.startswith("failed")
+
+
+def test_a_build_without_privileged_repairs_runs_nothing_and_says_why():
+    from netdnsmonitor.distribution import is_unavailable, unavailable
+    from netdnsmonitor.ladder import LadderStep
+
+    calls = []
+
+    def run_fn(args, **kwargs):
+        calls.append(args)
+        raise AssertionError("no subprocess may run for an unavailable repair")
+
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en0",
+        unavailable_fn=lambda what: unavailable("privileged_repairs", what),
+    )
+    for name in ("flush_dns_cache", "renew_dhcp_lease"):
+        outcome = executor(LadderStep(name, "repair", True))
+        assert is_unavailable(outcome)
+        assert "Nothing was changed." in outcome
+    assert calls == []

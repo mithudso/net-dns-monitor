@@ -2,6 +2,7 @@
 and the failback call on the tick path. No rumps event loop is started.
 """
 
+import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -483,7 +484,59 @@ def test_the_built_failover_probes_the_configured_targets(monkeypatch):
         captured["targets"] = targets
         return lambda device: True
 
-    monkeypatch.setattr("netdnsmonitor.app.make_interface_prober", fake_make_interface_prober)
+    # build_failover lives in failover.py, so the prober factory is looked up there.
+    monkeypatch.setattr("netdnsmonitor.failover.make_interface_prober", fake_make_interface_prober)
     build_failover(enabled_config(failover_probe_targets=[["192.168.68.1", 53]]))
 
     assert captured["targets"] == [("192.168.68.1", 53)]
+
+
+def test_the_measurement_deadline_is_the_configured_speedtest_timeout():
+    """measure_all stops waiting at `measure_timeout`. Left at NetworkFailover's
+    5s default, a longer configured speedtest timeout was cut short there.
+    """
+    failover = build_failover(enabled_config(failover_speedtest_timeout_seconds=12))
+    assert failover.measure_timeout == 12.0
+
+
+def test_the_app_re_exports_the_failover_builders_it_used_to_define():
+    from netdnsmonitor import app, failover
+
+    for name in (
+        "build_failover",
+        "failover_backup_names",
+        "failover_probe_targets",
+        "failover_probe_timeout",
+        "failover_trigger_classifications",
+    ):
+        assert getattr(app, name) is getattr(failover, name)
+
+
+def test_the_cli_builds_its_failover_without_importing_the_menu_bar_app(tmp_path):
+    """The CLI runs in a terminal, where rumps and AppKit are dead weight and a
+    GUI import can fail outright. A fresh interpreter, because this process has
+    already imported rumps. build_context on the default config constructs the
+    probers and meter but calls none of them, and builds no failover.
+    """
+    import os
+    import subprocess
+
+    code = (
+        "import sys\n"
+        "from netdnsmonitor import cli\n"
+        "from netdnsmonitor.config import DEFAULT_CONFIG\n"
+        "context = cli.build_context(dict(DEFAULT_CONFIG))\n"
+        "assert context[2] is None, context\n"
+        "print('rumps' in sys.modules, 'netdnsmonitor.app' in sys.modules)\n"
+    )
+    env = dict(os.environ, HOME=str(tmp_path))
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["False", "False"]

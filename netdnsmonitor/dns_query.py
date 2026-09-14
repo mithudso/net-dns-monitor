@@ -40,19 +40,29 @@ def query_public_dns(
     port: int = 53,
     timeout: float = 2.0,
     send_recv_fn: Optional[SendRecvFn] = None,
-) -> bool:
+) -> Optional[bool]:
+    """True if the resolver answered with RCODE 0, False for any other answer.
+
+    None if no reply arrived (timeout, no route, UDP port 53 blocked): the
+    name was never tested, and reporting that as False would present an
+    unknown as a failed lookup.
+    """
     send_recv_fn = send_recv_fn or _default_send_recv
     transaction_id = random.randint(0, 65535)
     try:
-        # _encode_query is inside the guard because it can raise on input it
-        # cannot represent: a non-ASCII domain gives UnicodeEncodeError, and a
-        # label over 255 bytes gives struct.error. `domain` is a caller default
+        # _encode_query is guarded because it can raise on input it cannot
+        # represent: a non-ASCII domain gives UnicodeEncodeError, and a label
+        # over 255 bytes gives struct.error. `domain` is a caller default
         # (repair_executor.make_repair_executor), not a constant, so those are
-        # one config change from reachable.
+        # one config change from reachable. Such a name has no DNS wire form,
+        # so False stays the answer for it.
         packet = _encode_query(domain, transaction_id)
-        response = send_recv_fn(packet, server, port, timeout)
-    except (OSError, UnicodeError, struct.error):
+    except (UnicodeError, struct.error):
         return False
+    try:
+        response = send_recv_fn(packet, server, port, timeout)
+    except OSError:
+        return None
 
     # Validate the datagram is actually a reply to the query we just sent.
     # Without this, any stray or spoofed packet -- including an all-zero

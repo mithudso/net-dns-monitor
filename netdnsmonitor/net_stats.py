@@ -50,9 +50,15 @@ MIN_LINK_ROW_FIELDS = 10
 def parse_interface_counters(
     netstat_output: str,
     prefixes: tuple[str, ...] = INTERFACE_PREFIXES,
-) -> tuple[int, int]:
-    """Total (bytes in, bytes out) across the physical interfaces."""
+) -> Optional[tuple[int, int]]:
+    """Total (bytes in, bytes out) across the physical interfaces.
+
+    None when no matching link row parsed. Summing nothing to (0, 0) would
+    reach ThroughputMeter as a real reading, so a netstat format change or a
+    sandbox that hides interfaces would render "measured, idle" on every tick.
+    """
     total_in = total_out = 0
+    matched = False
     for line in (netstat_output or "").splitlines():
         fields = line.split()
         if len(fields) < MIN_LINK_ROW_FIELDS:
@@ -73,12 +79,14 @@ def parse_interface_counters(
             # One unexpected line must not take down a heartbeat that runs
             # every 5 seconds for the life of the process.
             continue
-    return total_in, total_out
+        matched = True
+    return (total_in, total_out) if matched else None
 
 
 def read_interface_counters(run_fn: RunFn = subprocess.run) -> Optional[tuple[int, int]]:
-    """Run netstat and parse it. None on any failure -- the caller renders a
-    blank throughput reading rather than dying, since this is display data.
+    """Run netstat and parse it. None on any failure, including output with no
+    matching interface row -- the caller renders a blank throughput reading
+    rather than dying, since this is display data.
     """
     try:
         result = run_fn(

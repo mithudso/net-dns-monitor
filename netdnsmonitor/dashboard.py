@@ -31,9 +31,11 @@ adding a framework to `packages` in setup.py, and this project's bundling has
 already cost several commits.
 """
 
+import sys
+import traceback
 from typing import Callable, Optional
 
-from netdnsmonitor.status import format_rate
+from netdnsmonitor.graphs import format_bits
 
 WINDOW_TITLE = "Net-DNS-Monitor"
 
@@ -231,7 +233,7 @@ def _rtt_text(rtt: Optional[float]) -> str:
 def _rate_text(bps: Optional[float]) -> str:
     if bps is None:
         return "not measured yet"
-    return f"{format_rate(bps)}bps"
+    return f"{format_bits(bps)}bps"
 
 
 def _repeat_text(seconds) -> str:
@@ -569,8 +571,16 @@ class DashboardWindow:
 
     def _handle(self, sender):
         identifier = sender.identifier()
-        if identifier:
+        if not identifier:
+            return
+        try:
             self.on_action(str(identifier))
+        except Exception as exc:  # noqa: BLE001 - never raise into AppKit
+            # Escaping here unwinds through PyObjC into AppKit and the click looks
+            # like it did nothing at all. Class name only, for the reason in
+            # _report_action_failure.
+            _report_action_failure(str(identifier), exc)
+            self.append_output(f"{identifier} raised {type(exc).__name__}; see the app log.\n")
 
     # --- what App calls ----------------------------------------------------
 
@@ -644,6 +654,18 @@ class DashboardWindow:
         button = self.log_control_buttons.get("log_toggle_level")
         if button is not None:
             button.setTitle_(title)
+
+
+def _report_action_failure(action_id: str, exc: BaseException) -> None:
+    """Log where a click handler failed without logging what it said.
+
+    Not `traceback.print_exc()`: the message of a network or auth failure can
+    carry a credential -- urllib's error text embeds the full request URL, and
+    the Slack webhook URL is one. The frames say where it broke; the class name
+    says what kind of failure it was.
+    """
+    print(f"{action_id} raised {type(exc).__name__}", file=sys.stderr)
+    traceback.print_tb(exc.__traceback__, file=sys.stderr)
 
 
 def _label(AppKit, frame, text: str, point_size: float):
@@ -749,7 +771,15 @@ def install_main_menu(on_action: Callable[[str], None]):
     """
     import AppKit
 
-    target = _make_button_target(lambda sender: on_action(str(sender.identifier() or "")))
+    def dispatch(sender):
+        action_id = str(sender.identifier() or "")
+        try:
+            on_action(action_id)
+        except Exception as exc:  # noqa: BLE001 - never raise into AppKit
+            # No window to report into from a menu item; the log is all there is.
+            _report_action_failure(action_id, exc)
+
+    target = _make_button_target(dispatch)
 
     app_menu = AppKit.NSMenu.alloc().init()
     for title, action_id, key in APP_MENU_ITEMS:

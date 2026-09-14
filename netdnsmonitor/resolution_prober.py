@@ -52,8 +52,12 @@ ResolveFn = Callable[[str, float], tuple]
 
 
 def default_resolve(domain: str, timeout: float) -> tuple:
+    # `timeout` is deliberately not applied. The only knob for it,
+    # `socket.setdefaulttimeout()`, does not bound getaddrinfo (see the module
+    # docstring), and it is process-wide: called from a pool worker it silently
+    # changed the default timeout of every socket created afterwards anywhere
+    # in the process. The batch deadline is the real bound.
     try:
-        socket.setdefaulttimeout(timeout)
         socket.getaddrinfo(domain, None)
         return True, None
     except OSError as exc:

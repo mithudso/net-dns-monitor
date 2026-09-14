@@ -1,3 +1,7 @@
+import time
+
+import pytest
+
 from netdnsmonitor.prober import make_prober
 
 
@@ -154,3 +158,103 @@ def test_a_slow_domain_does_not_hide_the_fast_ones():
     )
     results = prober()["domain_results"]
     assert results == {"fast.example.com": True, "slow.example.com": False}
+
+
+def test_non_positive_timeout_is_refused_at_construction():
+    """A 0 timeout makes every connect fail instantly, so every tick would
+    classify as a NETWORK incident about a link nobody measured; a negative one
+    raises ValueError out of socket code that only catches OSError. Neither is a
+    reading, so the prober refuses to be built rather than report one.
+    """
+    for timeout in (0, -1.0, float("nan")):
+        with pytest.raises(ValueError):
+            make_prober(
+                external_targets=[("1.1.1.1", 443)],
+                internal_targets=[],
+                domains=["example.com"],
+                timeout=timeout,
+                connect_fn=lambda *a: True,
+                resolve_fn=lambda d, t: True,
+            )
+
+
+def test_connects_and_lookups_share_one_deadline_instead_of_adding_up():
+    """Regression guard: connects ran one after another at the full timeout
+    each, then DNS got its own timeout on top -- 2 external targets at 2s plus
+    DNS was a 6s menu-bar freeze on every failing tick. Every probe now runs
+    against one deadline, so blackholing everything costs about one timeout.
+    """
+
+    def blackhole_connect(host, port, timeout):
+        time.sleep(timeout * 3)
+        return True  # too late to count
+
+    def blackhole_resolve(domain, timeout):
+        time.sleep(timeout * 3)
+        return True
+
+    prober = make_prober(
+        external_targets=[("1.1.1.1", 443), ("8.8.8.8", 443), ("9.9.9.9", 443)],
+        internal_targets=[("10.0.0.1", 22), ("10.0.0.2", 22)],
+        domains=["a.example.com", "b.example.com"],
+        timeout=0.2,
+        connect_fn=blackhole_connect,
+        resolve_fn=blackhole_resolve,
+    )
+    started = time.monotonic()
+    result = prober()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2 * 2
+    assert result["external_reachable"] is False
+    assert result["internal_reachable"] is False
+    assert result["dns_ok"] is False
+
+
+def test_one_answering_target_ends_the_wait_without_the_blackholes():
+    """The first True settles "reachable"; waiting out the targets that are
+    going to time out anyway would put their whole timeout on the UI thread.
+    """
+
+    def connect_fn(host, port, timeout):
+        if host == "1.1.1.1":
+            return True
+        time.sleep(timeout)
+        return False
+
+    prober = make_prober(
+        external_targets=[("10.0.0.1", 443), ("10.0.0.2", 443), ("1.1.1.1", 443)],
+        internal_targets=[],
+        domains=[],
+        timeout=1.0,
+        connect_fn=connect_fn,
+        resolve_fn=lambda d, t: True,
+    )
+    started = time.monotonic()
+    result = prober()
+    elapsed = time.monotonic() - started
+
+    assert result["external_reachable"] is True
+    assert elapsed < 0.5
+
+
+def test_a_connect_fn_that_raises_is_not_reported_as_unreachable():
+    """Moving connects onto worker threads must not turn a bug into a reading:
+    a swallowed exception would surface as external_reachable False, which
+    classify() turns into a confident NETWORK diagnosis. It still reaches the
+    caller, where the tick guard records it.
+    """
+
+    def broken(host, port, timeout):
+        raise RuntimeError("bug in connect_fn")
+
+    prober = make_prober(
+        external_targets=[("1.1.1.1", 443)],
+        internal_targets=[],
+        domains=[],
+        timeout=0.5,
+        connect_fn=broken,
+        resolve_fn=lambda d, t: True,
+    )
+    with pytest.raises(RuntimeError):
+        prober()

@@ -42,7 +42,18 @@ def make_query_log_reader(
     def reader() -> list[str]:
         try:
             result = run_fn(
-                ["log", "show", "--style", "compact", "--last", lookback, "--predicate", predicate],
+                # Absolute path, as in system_log.py: a frozen .app launched via
+                # `open` does not inherit the shell's PATH.
+                [
+                    "/usr/bin/log",
+                    "show",
+                    "--style",
+                    "compact",
+                    "--last",
+                    lookback,
+                    "--predicate",
+                    predicate,
+                ],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

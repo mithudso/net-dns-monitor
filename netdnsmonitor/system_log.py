@@ -398,8 +398,23 @@ class LogBuffer:
         The return value is what makes automatic reporting possible: the caller
         announces new error lines without having to diff the buffer itself.
         """
+        batch = list(entries)
+        # The timestamps are local wall-clock time, so the clock can step back: at
+        # the end of daylight saving the 01:00 hour repeats, and every new line
+        # compares below the mark from the first pass. A poll window runs up to
+        # "now", so while the clock runs forward a batch holding any line older
+        # than the mark also holds the line at the mark. A whole batch strictly
+        # below the mark therefore means the clock stepped back, and the mark no
+        # longer means "already seen". `_seen` still de-duplicates what the
+        # buffer holds.
+        if (
+            batch
+            and self._evicted_through
+            and max(entry.get("timestamp", "") for entry in batch) < self._evicted_through
+        ):
+            self._evicted_through = ""
         added = []
-        for entry in entries:
+        for entry in batch:
             if self._evicted_through and entry.get("timestamp", "") <= self._evicted_through:
                 continue
             key = self._key(entry)

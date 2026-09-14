@@ -20,7 +20,10 @@
 # Both jobs pin the same ruff and pytest versions the repo pins, via
 # requirements-dev.txt, so a green local run and a green CI run mean the same
 # thing. A floating `pip install ruff` would drift and start failing this gate on
-# rules nobody chose to adopt.
+# rules nobody chose to adopt. The test job also installs through
+# constraints.txt, which pins every transitive dependency to the versions the
+# app is built with; without it, httpx, pydantic and pyobjc-core resolve fresh
+# on each run.
 name: CI
 
 on:
@@ -43,9 +46,10 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          # 3.13 matches the interpreter the app is developed and frozen against.
-          # ruff itself reads target-version = "py39" from ruff.toml, so it keeps
-          # checking against the floor the code actually claims to support.
+          # 3.13 is the supported floor (CLAUDE.md), the interpreter the app is
+          # frozen against, and the one constraints.txt was generated from.
+          # scripts/start.sh and scripts/install.sh refuse anything older. ruff
+          # takes its target version from ruff.toml, not from this setting.
           python-version: "3.13"
 
       # Just ruff, at the pinned version -- installing the full dev requirements
@@ -75,13 +79,18 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            constraints.txt
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install -r requirements-dev.txt -c constraints.txt
 
-      # tests/conftest.py redirects HOME to a per-test tmp dir and stubs the Dock
-      # icon call, so the suite never touches real user data or a real Dock. No
-      # test shells out to `log`, `osascript`, `sudo`, or /etc/sudoers.d -- every
-      # such call site takes an injected run_fn.
+      # tests/conftest.py redirects HOME to a per-test tmp dir, stubs the Dock
+      # icon call, and stubs the calls the app makes without an injected runner:
+      # the privilege probe (`sudo -n -k -l`, `ifconfig -l`, `route get default`)
+      # and the `log show` readers. Other modules take an injected run_fn, so the
+      # suite does not run those tools or touch /etc/sudoers.d. It does start
+      # local processes on purpose: test_console.py runs /bin/sh children to test
+      # timeouts and process-group kills, and test_peer_net.py sends UDP over
+      # loopback.
       - name: pytest
         run: python -m pytest -q

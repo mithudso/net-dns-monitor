@@ -1,5 +1,6 @@
 import http.client
 import smtplib
+import ssl
 import urllib.error
 
 from netdnsmonitor.notifications import (
@@ -39,6 +40,44 @@ def test_format_notification_omits_raw_probe_results_and_log_excerpts():
 def test_format_notification_without_a_report_path():
     text = format_notification({"classification": "network", "summary": "s"})
     assert "Full report" not in text
+
+
+def test_format_notification_does_not_claim_a_repair_it_cannot_know_happened():
+    """`resolved` is only bool(recheck_ok). An UNCLASSIFIED incident runs no
+    ladder at all, and a blip that clears while every repair returned
+    NEEDS_PRIVILEGE is also "resolved" -- neither was fixed by a local repair.
+    """
+    text = format_notification({"classification": "unclassified", "resolved": True})
+    assert "by local repair" not in text
+    assert "Healthy on recheck: True" in text
+
+
+def test_format_notification_labels_the_claude_analysis_as_unverified():
+    """The analysis is model output derived from local log lines that any
+    process can write, so a reader must not take it as a verified diagnosis.
+    """
+    text = format_notification(REPORT)
+    assert "Claude analysis (unverified, derived from local logs): Resolver is down." in text
+
+
+def test_slack_notifier_escapes_slack_control_sequences():
+    """Slack parses <!channel> and <url|label> in `text`; the Claude analysis
+    flows into this text and is derived from untrusted log lines.
+    """
+    calls = []
+
+    def post_fn(url, payload, timeout):
+        calls.append(payload)
+        return 200, "ok"
+
+    make_slack_notifier("https://hooks.slack.test/x", post_fn=post_fn)(
+        "<!channel> see <https://evil.test|report> & more"
+    )
+    payload = calls[0].decode("utf-8")
+    assert "<!channel>" not in payload
+    assert "&lt;!channel&gt;" in payload
+    assert "&lt;https://evil.test|report&gt;" in payload
+    assert "&amp; more" in payload
 
 
 def test_slack_notifier_reports_delivered_only_on_200_and_body_ok():
@@ -99,15 +138,18 @@ class FakeSMTP:
         self.logged_in = None
         self.sent = []
         self.quit_called = False
+        self.tls_context = None
 
-    def starttls(self):
+    def starttls(self, *, context=None):
         self.started_tls = True
+        self.tls_context = context
 
     def login(self, username, password):
         self.logged_in = (username, password)
 
     def send_message(self, message):
         self.sent.append(message)
+        return {}
 
     def quit(self):
         self.quit_called = True
@@ -140,6 +182,97 @@ def test_email_notifier_sends_with_starttls_login_and_timeout():
     assert client.quit_called is True
     assert client.sent[0]["To"] == "it@example.com"
     assert "incident text" in client.sent[0].get_content()
+
+
+def test_email_notifier_starttls_verifies_the_server_certificate():
+    """smtplib.starttls() with no context uses an unverified context, so a
+    rogue Wi-Fi MITM could accept the login and read SMTP_PASSWORD.
+    """
+    created = []
+
+    def factory(host, port, timeout=None):
+        client = FakeSMTP(host, port, timeout)
+        created.append(client)
+        return client
+
+    make_email_notifier(
+        host="smtp.test",
+        port=587,
+        recipients=["it@example.com"],
+        sender="mon@example.com",
+        username="mon",
+        password="pw",
+        smtp_factory=factory,
+    )("text")
+    context = created[0].tls_context
+    assert context is not None
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
+def test_email_notifier_refuses_to_log_in_without_tls():
+    created = []
+
+    def factory(host, port, timeout=None):
+        client = FakeSMTP(host, port, timeout)
+        created.append(client)
+        return client
+
+    result = make_email_notifier(
+        host="smtp.test",
+        port=25,
+        recipients=["it@example.com"],
+        sender="mon@example.com",
+        username="mon",
+        password="supersecretpw",
+        use_starttls=False,
+        smtp_factory=factory,
+    )("text")
+    assert result == {"channel": "email", "error": "refusing SMTP login without TLS"}
+    assert all(client.logged_in is None for client in created)
+    assert all(not client.sent for client in created)
+
+
+def test_email_notifier_sends_without_tls_when_no_credentials_are_configured():
+    created = []
+
+    def factory(host, port, timeout=None):
+        client = FakeSMTP(host, port, timeout)
+        created.append(client)
+        return client
+
+    result = make_email_notifier(
+        host="smtp.test",
+        port=25,
+        recipients=["it@example.com"],
+        sender="mon@example.com",
+        use_starttls=False,
+        smtp_factory=factory,
+    )("text")
+    assert result["delivered"] is True
+    assert created[0].started_tls is False
+
+
+def test_email_notifier_reports_recipients_the_server_refused():
+    """send_message returns the refused recipients instead of raising when at
+    least one was accepted; ignoring that reported a refused address delivered.
+    """
+
+    class PartialRefusalSMTP(FakeSMTP):
+        def send_message(self, message):
+            self.sent.append(message)
+            return {"b@example.com": (550, b"no such user")}
+
+    result = make_email_notifier(
+        host="smtp.test",
+        port=587,
+        recipients=["a@example.com", "b@example.com"],
+        sender="mon@example.com",
+        smtp_factory=lambda h, p, timeout=None: PartialRefusalSMTP(h, p, timeout),
+    )("text")
+    assert result["delivered"] is True
+    assert result["recipients"] == ["a@example.com"]
+    assert result["refused"] == ["b@example.com"]
 
 
 def test_email_notifier_skips_when_no_recipients_configured():

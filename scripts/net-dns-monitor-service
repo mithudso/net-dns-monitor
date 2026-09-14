@@ -20,7 +20,8 @@
 # Why launchd owns the process, and nothing else may start it
 #
 # All start/stop/restart goes through launchctl. Launching the bundle any other
-# way -- `open -n Net-DNS-Monitor.app`, or the project's own scripts/start.sh --
+# way -- `open -n Net-DNS-Monitor.app`, or a scripts/start.sh run from before
+# this agent was installed (start.sh refuses to launch while it is loaded) --
 # creates a process launchd does not track. `launchctl list` then shows no PID,
 # this script concludes the app is down, launches its own copy, and the user
 # gets two menu bar icons. `status` and `check` therefore also look for
@@ -246,6 +247,44 @@ reload_agent() {
     is_loaded || die "could not bootstrap $LABEL (try: launchctl bootstrap gui/$(id -u) '$PLIST')"
 }
 
+# Replace the installed bundle with $SOURCE_BUNDLE as a whole-bundle swap.
+#
+# Not `ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"` onto the existing bundle: ditto
+# merges into a destination that exists (checked: a file present only in the
+# destination survives the copy). A file the new build no longer contains -- a
+# deleted or renamed module, a dropped dependency -- stays behind in the
+# installed copy, where the frozen app can still import it, and where it is not
+# covered by the bundle's signature. Copying into a sibling first and swapping
+# also means a copy that fails part way leaves the installed bundle untouched
+# rather than half old and half new.
+#
+# ditto rather than cp -R for the copy itself: it preserves the bundle's
+# resource forks, symlinks and ad-hoc code signature, which cp -R can invalidate.
+replace_installed_bundle() {
+    local staged="$INSTALLED_APP.new" previous="$INSTALLED_APP.old"
+    rm -rf "$staged" "$previous"
+    if ! ditto "$SOURCE_BUNDLE" "$staged"; then
+        rm -rf "$staged"
+        die "copying $SOURCE_BUNDLE failed; $INSTALLED_APP was not changed"
+    fi
+    if [ ! -x "$staged/Contents/MacOS/$EXEC_NAME" ]; then
+        rm -rf "$staged"
+        die "$SOURCE_BUNDLE has no executable at Contents/MacOS/$EXEC_NAME; $INSTALLED_APP was not changed"
+    fi
+    if [ -e "$INSTALLED_APP" ]; then
+        mv "$INSTALLED_APP" "$previous" \
+            || die "could not move the old bundle aside; $INSTALLED_APP was not changed (new copy left at $staged)"
+    fi
+    if ! mv "$staged" "$INSTALLED_APP"; then
+        # Put the old bundle back so launchd still has something to run.
+        if [ -e "$previous" ]; then
+            mv "$previous" "$INSTALLED_APP" || true
+        fi
+        die "could not move the new bundle into place at $INSTALLED_APP"
+    fi
+    rm -rf "$previous"
+}
+
 # --- commands --------------------------------------------------------------
 
 cmd_install() {
@@ -255,9 +294,7 @@ cmd_install() {
         say "Installing bundle from build output:"
         say "  $SOURCE_BUNDLE"
         say "  -> $INSTALLED_APP"
-        # ditto, not cp -R: it preserves the bundle's resource forks, symlinks
-        # and ad-hoc code signature. A cp -R copy can invalidate the signature.
-        ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"
+        replace_installed_bundle
     elif [ -x "$EXEC" ]; then
         warn "note: build output not found at $SOURCE_BUNDLE"
         warn "      keeping the already-installed bundle at $INSTALLED_APP"
@@ -389,7 +426,7 @@ cmd_update() {
   Nothing to update from. If the git worktree was removed, rebuild the bundle
   and either restore that path or set NDM_SOURCE_BUNDLE to the new one."
     say "Updating $INSTALLED_APP from $SOURCE_BUNDLE"
-    ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"
+    replace_installed_bundle
     audit "update: re-copied bundle from $SOURCE_BUNDLE"
     cmd_restart
 }
@@ -522,7 +559,7 @@ cmd_uninstall() {
 }
 
 usage() {
-    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 

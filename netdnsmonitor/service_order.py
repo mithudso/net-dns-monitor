@@ -74,7 +74,12 @@ def promote(services: list[NetworkService], name: str) -> Optional[list[str]]:
 def is_order_intact(services: list[NetworkService], new_order: list[str]) -> bool:
     """The guard against the failure mode this module exists to prevent: the
     new order must be a permutation of the current one. Same length, same set,
-    no duplicates. Checked immediately before the order is applied.
+    no duplicates.
+
+    It can only compare against the `services` it is handed, so it cannot see
+    a service added after that listing was taken. `failover.apply_service_order`
+    closes most of that window by listing the order again right before the
+    write and refusing on any difference; one subprocess of window remains.
     """
     current = [s.name for s in services]
     if not current or len(new_order) != len(current):

@@ -26,8 +26,10 @@ signal-bars glyph that carried no information at all. The coloured circle after
 it is still the part that changes with status, the way a badge overlays an icon
 rather than replacing it. `status_state` is the single place the
 healthy/flaky/incident decision is made; the menu bar title here, the Dock
-tile in dock_icon.py, and the alert in alert.py all key off it, so the
-indicators can't drift out of sync with each other.
+tile in dock_icon.py, the mini window, the console's `:status` and the state
+advertised to peers all key off it, so those indicators can't drift out of
+sync with each other. The alert is not one of them: app.py calls alert.py on
+the ping monitor's own `alert` decision, not on this state.
 
 A failing ping forces the incident state even while the anti-flap gate is still
 healthy. The gate debounces a 30-second poll of TCP reachability and is
@@ -120,9 +122,9 @@ def build_status_report(
     Routed through `status_state` rather than re-reading `flap_state`, for the
     reason recorded at the top of this module: that function is the single place
     the healthy/flaky/incident decision is made, and a console that decided it
-    again would be a fourth indicator free to disagree with the title, the Dock
-    tile and the alert. A `:status` that says healthy under a red menu bar is
-    worse than no `:status` at all.
+    again would be one more indicator free to disagree with the title and the
+    Dock tile. A `:status` that says healthy under a red menu bar is worse than
+    no `:status` at all.
 
     Lives here rather than in console.py because it is menu-bar logic, not
     console logic, and because a console reaching into the running app to format
@@ -222,7 +224,6 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
         return [f"Failover: {snapshot['error']}"]
 
     mode = "automatic" if snapshot.get("auto_enabled") else "manual only"
-    active_side = snapshot.get("active_side")
     active_service = snapshot.get("active_service")
 
     # Show the backup that is actually carrying traffic, not simply the first
@@ -235,9 +236,13 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
         None,
     ) or snapshot.get("backup")
 
+    # Both markers compare names. `active_side` reports "preferred" for any head
+    # of the order that is not a configured backup, so keying the preferred
+    # marker off it filled that row while a third service carried the traffic.
+    preferred = snapshot["preferred"]
     lines = [
         f"Active: {active_service} — failover is {mode}",
-        _describe_side(snapshot["preferred"], "Preferred", active_side == "preferred"),
+        _describe_side(preferred, "Preferred", preferred.get("name") == active_service),
     ]
     if backup:
         label = "Backup" if len(backups) <= 1 else f"Backup (of {len(backups)})"

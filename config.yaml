@@ -8,6 +8,10 @@
 # window, then `net-dns-monitor-service restart`. Any key deleted from that copy
 # falls back to the value below.
 
+# Every target list (these two and failover_probe_targets) takes [IP, port]
+# pairs, and the IP must be a literal address. A hostname is refused: it would
+# be resolved inside the connect, outside the probe timeout, and a resolver
+# failure would be reported as the internet being unreachable.
 external_targets:
   - ["1.1.1.1", 443]
   - ["8.8.8.8", 443]
@@ -256,6 +260,8 @@ dock_refresh_seconds: 30
 # One shared deadline for every domain lookup in a tick, resolved on worker
 # threads. Serial lookups would make the block additive: with 20 learned names
 # plus the control domain, a resolver outage would freeze the menu bar for ~42s.
+# Must be greater than 0: a timeout of 0 makes every connect fail at once, so a
+# healthy network would read as an incident on every check.
 probe_timeout_seconds: 2.0
 
 # --- Auto-learned domains --------------------------------------------------
@@ -273,8 +279,10 @@ domain_learn_interval_seconds: 300
 # A name expected to always resolve, probed alongside the rest. It is the
 # control that lets a dead learned name be told apart from a broken resolver:
 # control up + learned name down means the name is dead; control down means DNS
-# really is broken and nothing is pruned. Set to null to drop it -- with no
-# control and an empty `domains`, pruning loses its anchor.
+# really is broken and nothing is pruned. Set to null to drop it, but only if
+# `domains` lists at least one name: with neither, the DNS check has nothing to
+# resolve, every check reads as unclassified, and an incident latches for good.
+# load_config refuses that combination.
 control_domain: "api.anthropic.com"
 
 # --- Notifications ---------------------------------------------------------
@@ -370,3 +378,23 @@ failover_probe_targets: []
 # probe_timeout_seconds". Only ever spent once the machine has failed over or is
 # in an incident: a healthy tick that never failed over runs no probes at all.
 failover_probe_timeout_seconds: 0
+
+# --- In-app router (NAT + DHCP) ---------------------------------------------
+# Off by default. When on, the app shares its upstream connection: at launch it
+# addresses lan_interface, turns on IP forwarding, loads a pf NAT rule, and
+# serves DHCP from dhcp_start to dhcp_end, all with administrator rights.
+#
+# CONFLICT: this in-app router and the standalone stack in the repo's router/
+# directory both rewrite pf NAT rules and run DHCP on the LAN interface. Run one
+# or the other, never both at once.
+#
+# While router_enabled is true, load_config refuses anything but an IPv4 address
+# in the four address keys and an interface name (en0, bridge100) in the two
+# interface keys, because these values are written into a privileged script.
+router_enabled: false
+wan_interface: "en3"
+lan_interface: "en0"
+lan_ip: "192.168.10.1"
+lan_netmask: "255.255.255.0"
+dhcp_start: "192.168.10.100"
+dhcp_end: "192.168.10.200"

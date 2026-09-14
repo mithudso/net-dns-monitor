@@ -1,6 +1,9 @@
 import json
 import os
 import pathlib
+import subprocess
+import threading
+import time
 
 from netdnsmonitor.domain_learner import (
     LearnedDomainStore,
@@ -9,6 +12,14 @@ from netdnsmonitor.domain_learner import (
     make_domain_learner,
     prune_dead_domains,
 )
+from netdnsmonitor.log_watcher import NO_EVIDENCE_PREFIX, make_log_watcher
+
+
+def run_inline(fn):
+    """A spawn hook that runs the scan on the calling thread, so a test sees the
+    scan's result on the same call that started it.
+    """
+    fn()
 
 
 def test_extract_picks_up_a_domain_from_a_resolution_failure_line():
@@ -194,6 +205,40 @@ def test_extract_ignores_a_completed_lookup_that_merely_mentions_a_timeout():
     assert extract_failed_domains(lines) == []
 
 
+def test_extract_never_learns_from_the_log_watchers_no_evidence_line():
+    def timing_out(args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args, timeout=10)
+
+    sentinel = make_log_watcher(run_fn=timing_out)()
+    assert extract_failed_domains(sentinel) == []
+    # The rule is the prefix, not a lucky absence of a dotted name: this line has a
+    # failure marker and a probeable hostname, and is still not log evidence.
+    forged = f"{NO_EVIDENCE_PREFIX} no log evidence: query for dead.example.com timed out"
+    assert extract_failed_domains([forged]) == []
+
+
+def test_store_save_leaves_the_previous_file_intact_when_the_write_fails(tmp_path, monkeypatch):
+    """save() used to truncate the file and then write it, so a failure part-way
+    left a truncated file that load() reads as empty -- every learned domain lost.
+    os.replace is patched because it is the commit point of the atomic write and
+    the store has no writer seam of its own.
+    """
+    path = tmp_path / "learned.json"
+    store = LearnedDomainStore(str(path))
+    store.add(["a.example.com"])
+
+    def failing_replace(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    assert store.add(["b.example.com"]) == ["b.example.com"]  # must not raise
+    monkeypatch.undo()
+
+    assert store.domains == ["a.example.com", "b.example.com"]
+    assert LearnedDomainStore(str(path)).domains == ["a.example.com"]
+    assert list(tmp_path.glob("*.tmp")) == []  # the failed write cleaned up after itself
+
+
 def test_learner_merges_configured_domains_with_learned_ones(tmp_path):
     store = LearnedDomainStore(str(tmp_path / "learned.json"))
     domains = make_domain_learner(
@@ -201,6 +246,7 @@ def test_learner_merges_configured_domains_with_learned_ones(tmp_path):
         store=store,
         configured_domains=["configured.example.com"],
         clock=lambda: 0.0,
+        spawn=run_inline,
     )
     assert domains() == ["configured.example.com", "learned.example.com"]
 
@@ -219,6 +265,7 @@ def test_learner_rate_limits_the_log_scan(tmp_path):
         configured_domains=[],
         interval_seconds=300.0,
         clock=lambda: now["t"],
+        spawn=run_inline,
     )
     domains()
     now["t"] = 100.0
@@ -236,5 +283,109 @@ def test_learner_does_not_duplicate_a_domain_that_is_both_configured_and_learned
         store=store,
         configured_domains=["shared.example.com"],
         clock=lambda: 0.0,
+        spawn=run_inline,
     )
     assert domains() == ["shared.example.com"]
+
+
+def test_a_slow_log_scan_does_not_hold_up_the_domain_list(tmp_path):
+    """domains() runs inside the rumps timer via the prober. `log show` took 2.25s
+    measured and may take its full 10s timeout, and the menu bar is frozen for as
+    long as the tick runs. This uses the default spawn, a real thread.
+    """
+    release = threading.Event()
+
+    def blocked_log_watcher():
+        release.wait(timeout=5)
+        return ["query for learned.example.com timed out"]
+
+    domains = make_domain_learner(
+        log_watcher=blocked_log_watcher,
+        store=LearnedDomainStore(str(tmp_path / "learned.json")),
+        configured_domains=["configured.example.com"],
+        clock=lambda: 0.0,
+    )
+    started = time.monotonic()
+    assert domains() == ["configured.example.com"]
+    assert time.monotonic() - started < 2
+
+    release.set()
+    deadline = time.monotonic() + 5
+    result = domains()
+    while "learned.example.com" not in result and time.monotonic() < deadline:
+        time.sleep(0.01)
+        result = domains()
+    assert result == ["configured.example.com", "learned.example.com"]
+
+
+def test_a_due_scan_does_not_start_while_the_previous_one_is_still_running(tmp_path):
+    spawned = []
+    now = {"t": 0.0}
+    domains = make_domain_learner(
+        log_watcher=lambda: ["query for learned.example.com timed out"],
+        store=LearnedDomainStore(str(tmp_path / "learned.json")),
+        configured_domains=[],
+        interval_seconds=300.0,
+        clock=lambda: now["t"],
+        spawn=spawned.append,  # records the scan without running it
+    )
+    assert domains() == []
+    now["t"] = 400.0
+    assert domains() == []
+    assert len(spawned) == 1
+
+    spawned[0]()  # the first scan finishes
+    assert domains() == ["learned.example.com"]
+    # It was due, and nothing was running any more, so the next scan started.
+    assert len(spawned) == 2
+
+
+def test_a_scan_that_raises_does_not_stop_later_scans(tmp_path):
+    """The scan runs on a worker thread. An exception there would end the thread
+    without reporting back, the learner would wait for it forever, and learning
+    would stop for the rest of the session.
+    """
+    calls = []
+    now = {"t": 0.0}
+
+    def flaky_log_watcher():
+        calls.append(now["t"])
+        if len(calls) == 1:
+            raise RuntimeError("unforeseen")
+        return ["query for learned.example.com timed out"]
+
+    domains = make_domain_learner(
+        log_watcher=flaky_log_watcher,
+        store=LearnedDomainStore(str(tmp_path / "learned.json")),
+        configured_domains=["configured.example.com"],
+        interval_seconds=300.0,
+        clock=lambda: now["t"],
+        spawn=run_inline,
+    )
+    assert domains() == ["configured.example.com"]
+    now["t"] = 400.0
+    assert domains() == ["configured.example.com", "learned.example.com"]
+    assert calls == [0.0, 400.0]
+
+
+def test_a_thread_that_cannot_start_does_not_stop_later_scans(tmp_path):
+    attempts = []
+    now = {"t": 0.0}
+
+    def spawn(fn):
+        attempts.append(now["t"])
+        if len(attempts) == 1:
+            raise RuntimeError("can't start new thread")
+        fn()
+
+    domains = make_domain_learner(
+        log_watcher=lambda: ["query for learned.example.com timed out"],
+        store=LearnedDomainStore(str(tmp_path / "learned.json")),
+        configured_domains=[],
+        interval_seconds=300.0,
+        clock=lambda: now["t"],
+        spawn=spawn,
+    )
+    assert domains() == []
+    now["t"] = 400.0
+    assert domains() == ["learned.example.com"]

@@ -26,6 +26,7 @@ import json
 import math
 import os
 import subprocess
+import threading
 import time
 from types import SimpleNamespace
 from typing import Callable, Optional
@@ -40,13 +41,15 @@ from netdnsmonitor.failover_policy import (
     decide,
     next_preferred_streak,
 )
+from netdnsmonitor.interface_probe import make_interface_prober
+from netdnsmonitor.report_storage import _atomic_write
 from netdnsmonitor.service_order import (
     find_service,
     is_order_intact,
     parse_service_order,
     promote,
 )
-from netdnsmonitor.throughput import measure_all
+from netdnsmonitor.throughput import make_throughput_meter, measure_all
 
 # networksetup's wording when the SystemConfiguration write is refused. Matched
 # to tell "you may not do this" apart from "this did not work", because the two
@@ -58,6 +61,16 @@ _PRIVILEGE_MARKERS = (
     "administrator",
     "authorization",
 )
+
+
+_BUSY = "no switch: another switch attempt is in progress"
+
+
+def _neither_side(head: str) -> str:
+    return (
+        f"no switch: '{head}' is at the head of the order, "
+        "which is neither the preferred link nor a configured backup"
+    )
 
 
 def _looks_like_privilege_error(text: str) -> bool:
@@ -75,18 +88,21 @@ def _is_finite_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def default_run(args: list[str]) -> object:
+def default_run(args: list[str], timeout: float = 5) -> object:
     """A subprocess failure has to arrive as data, not an exception: this runs
     under the rumps timer, where an escaping error kills monitoring for the
     rest of the session.
+
+    `timeout` exists for the console, whose catalogue commands (traceroute)
+    need far longer than a networksetup call. Failover callers keep the default.
     """
     # 5s to match repair_executor's ladder commands. A failover attempt spends
-    # three of these back to back (list, reorder, read back), all on the rumps
-    # timer thread, and networksetup contends with SystemConfiguration during
-    # exactly the network churn being diagnosed -- a longer ceiling turns one
-    # attempt into a menu-bar freeze.
+    # several of these back to back (list, re-list, reorder, read back), all on
+    # the rumps timer thread, and networksetup contends with SystemConfiguration
+    # during exactly the network churn being diagnosed -- a longer ceiling turns
+    # one attempt into a menu-bar freeze.
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=5)
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     except (subprocess.SubprocessError, OSError) as exc:
         return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
 
@@ -105,6 +121,24 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
         return (
             "failed: refused to apply a service order that is not a permutation of the current one"
         )
+    # `services` was listed before the probes, which can take seconds. A
+    # service added in that window is absent from `new_order`, the guard above
+    # cannot see it, and the write would drop it from the order -- after which
+    # the read-back matches and reports `ok`. So the order is listed again right
+    # before the write, and any difference from the listing the new order was
+    # built from refuses.
+    fresh_listing = run_fn(["networksetup", "-listnetworkserviceorder"])
+    fresh = (
+        parse_service_order(getattr(fresh_listing, "stdout", "") or "")
+        if getattr(fresh_listing, "returncode", 1) == 0
+        else []
+    )
+    if not fresh:
+        return (
+            "failed: could not re-read the service order right before writing; nothing was applied"
+        )
+    if [s.name for s in fresh] != [s.name for s in services]:
+        return "failed: the service order changed during the check; nothing was applied"
     result = run_fn(["networksetup", "-ordernetworkservices", *new_order])
     stderr = (getattr(result, "stderr", "") or "").strip()
     stdout = (getattr(result, "stdout", "") or "").strip()
@@ -147,9 +181,37 @@ class FailoverStore:
         self.enabled_by_us: Optional[str] = None
         self.last_switch_at: Optional[float] = None
         self.switch_times: list[float] = []
+        # Identity of the file as last loaded. The CLI and the console build
+        # their own store on the same path, so a record one process writes has
+        # to reach the others -- see refresh().
+        self._file_signature: Optional[tuple] = None
         self.load()
 
+    def _stat_signature(self) -> Optional[tuple]:
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return None
+        # save() replaces the file, so the inode changes on every write; mtime
+        # and size cover an editor that rewrites it in place.
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+    def refresh(self) -> None:
+        """Reload when another process has written the file since the last load.
+
+        One stat, no subprocess, so it is cheap enough for the healthy-tick
+        gate. Without it, a failover started from the terminal never reaches
+        the running app's failback gate, and the app's next save overwrites
+        the terminal's record with its own stale one.
+        """
+        signature = self._stat_signature()
+        if signature is not None and signature != self._file_signature:
+            self.load()
+
     def load(self) -> None:
+        # Stat before reading, so a write that lands mid-read is still seen as
+        # a change on the next refresh().
+        self._file_signature = self._stat_signature()
         try:
             with open(self.path) as f:
                 data = json.load(f)
@@ -173,20 +235,31 @@ class FailoverStore:
     def save(self) -> None:
         try:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-            with open(self.path, "w") as f:
-                json.dump(
+            # Atomic, because truncate-then-write leaves an empty or partial
+            # file if the write fails, and load() then reads no record at all.
+            _atomic_write(
+                self.path,
+                json.dumps(
                     {
                         "original_order": self.original_order,
                         "enabled_by_us": self.enabled_by_us,
                         "last_switch_at": self.last_switch_at,
                         "switch_times": self.switch_times[-32:],
                     },
-                    f,
                     indent=2,
-                )
+                ),
+            )
+            # Our own write is not a change to reload. Leaving the old
+            # signature would also let a later *failed* save be undone: the
+            # next refresh() would reload this file over the newer in-memory
+            # record.
+            self._file_signature = self._stat_signature()
         except OSError:
-            # Losing the record degrades failback to a promote(); it must never
-            # take down the tick.
+            # A failed save must never take down the tick. The in-memory record
+            # still drives failback for this session. After a restart it is
+            # gone, the failback gate stays shut, and automatic failback never
+            # runs -- only a manual switch to preferred, which then promotes the
+            # preferred link instead of restoring the exact order.
             pass
 
     def record_attempt(self, at: float) -> None:
@@ -255,6 +328,15 @@ class NetworkFailover:
         # Which backup was actually chosen last time, for the menu bar and the
         # report. None until a choice has been made.
         self.chosen_backup: Optional[str] = None
+        # The dashboard worker runs the ladder (attempt_failover) while the
+        # timer tick runs attempt_failback. Interleaved, the tick reads the
+        # pre-write order, self-heals the record away, and the switch that then
+        # lands can never be failed back. Acquired non-blocking, so a tick
+        # never waits behind a switch that takes several subprocess timeouts.
+        self._lock = threading.Lock()
+        # Set once an attempt reaches the write, so the tick only surfaces
+        # outcomes that changed (or tried to change) something.
+        self._wrote = False
 
     @property
     def backup_service(self) -> Optional[str]:
@@ -330,7 +412,7 @@ class NetworkFailover:
         Both of this machine's hotspot paths ship disabled, which is exactly the
         case that made this necessary.
 
-        Returns "" when nothing needed doing, otherwise a failure string.
+        Returns "" when the enable is confirmed, otherwise a failure string.
         """
         result = self.run_fn(["networksetup", "-setnetworkserviceenabled", name, "on"])
         stderr = (getattr(result, "stderr", "") or "").strip()
@@ -342,11 +424,55 @@ class NetworkFailover:
                     "administrator right is required"
                 )
             return f"failed: could not enable '{name}': {stderr or stdout}"
+        # Exit 0 means the enable may have landed even if the read-back below
+        # cannot confirm it, so it is recorded first: failback can then undo
+        # it. The record has one slot. A service already in it stays there, so
+        # a second enable never erases the first from what gets undone.
+        previous = self.store.enabled_by_us
+        if previous is None:
+            self.store.enabled_by_us = name
+            self.store.save()
         after = self._list_services()
-        service = find_service(after, name) if after else None
-        if service is not None and not service.enabled:
+        if not after:
+            return f"failed: could not read the order back to confirm '{name}' was enabled"
+        service = find_service(after, name)
+        if service is None:
+            return f"failed: '{name}' is no longer in the service order after enabling it"
+        if not service.enabled:
+            if previous is None:
+                # Confirmed not enabled, so there is nothing to undo. Keeping
+                # the record would make a later failback claim it turned off a
+                # service this app never turned on.
+                self.store.enabled_by_us = None
+                self.store.save()
             return f"failed: '{name}' reports success but is still disabled in the service order"
         return ""
+
+    def _undo_enable(self, head: Optional[str]) -> str:
+        """Put back the enable this app made, so the machine ends up in the
+        state it started in rather than one the user never asked for.
+
+        Returns a fragment for the outcome. The claim comes from a read-back,
+        not the exit code, because `-setnetworkserviceenabled` can exit 0 and
+        change nothing, just as the reorder can. The record is cleared either
+        way, and the caller saves it: a record kept after a failed undo would
+        make some later, unrelated failback turn the service off.
+        """
+        name = self.store.enabled_by_us
+        if not name:
+            return ""
+        self.store.enabled_by_us = None
+        if name == head:
+            # The service now carries the traffic (the config changed since it
+            # was enabled). Turning it off would take the live link down.
+            return f" (left '{name}' on, which this app enabled, because it is now at the head)"
+        result = self.run_fn(["networksetup", "-setnetworkserviceenabled", name, "off"])
+        if getattr(result, "returncode", 1) != 0:
+            return f" (could not re-disable '{name}', which this app enabled)"
+        service = find_service(self._list_services(), name)
+        if service is not None and service.enabled is False:
+            return f" and disabled '{name}' again, which this app had enabled"
+        return f" (could not confirm '{name}' was disabled again)"
 
     def _apply_order(self, services, new_order: list[str]) -> str:
         return apply_service_order(self.run_fn, services, new_order)
@@ -357,7 +483,13 @@ class NetworkFailover:
         """Ladder repair step. Runs once per incident onset."""
         if not self.auto_enabled:
             return "disabled: automatic switching is off (manual switching still works)"
-        return self._attempt(classification=classification, allow=FAILOVER)
+        if not self._lock.acquire(blocking=False):
+            return _BUSY
+        try:
+            self.store.refresh()
+            return self._attempt(classification=classification, allow=FAILOVER)
+        finally:
+            self._lock.release()
 
     def switch_now(self, target: str, service: Optional[str] = None) -> str:
         """Manual switch from the menu bar.
@@ -371,6 +503,15 @@ class NetworkFailover:
         The switch is recorded, so an automatic switch cannot immediately
         follow a manual one.
         """
+        if not self._lock.acquire(blocking=False):
+            return _BUSY
+        try:
+            self.store.refresh()
+            return self._switch_now(target, service)
+        finally:
+            self._lock.release()
+
+    def _switch_now(self, target: str, service: Optional[str]) -> str:
         services = self._list_services()
         if not services:
             return "failed: could not read the current network service order"
@@ -395,6 +536,8 @@ class NetworkFailover:
         if target == BACKUP and service and services[0].name == service:
             return f"no switch: already on '{service}'"
         if target == PREFERRED and active_side == PREFERRED:
+            if services[0].name != self.preferred_service:
+                return _neither_side(services[0].name)
             return "no switch: already on the preferred network"
 
         outcome = (
@@ -478,12 +621,30 @@ class NetworkFailover:
         and cleared on failback. Without that gate this would spend a
         `networksetup` subprocess plus two interface probes on the rumps timer
         thread every 30 seconds forever, to answer a question whose answer is
-        almost always "nothing to do".
+        almost always "nothing to do". The store refresh ahead of it is one
+        stat, which is neither.
+
+        Only an attempt that reached a write returns its outcome. A pre-write
+        failure (a misspelt preferred service, an unreadable order) would
+        otherwise come back every tick, and each return makes the app re-list
+        and re-probe for its menu.
         """
-        if self.store.original_order is None or not self.auto_enabled:
+        if not self.auto_enabled:
             return None
-        outcome = self._attempt(classification="healthy", allow=FAILBACK)
-        return outcome if outcome.startswith(("ok:", "failed:", "NEEDS_PRIVILEGE:")) else None
+        if not self._lock.acquire(blocking=False):
+            # A switch is running on another thread; this tick has nothing to add.
+            return None
+        try:
+            self.store.refresh()
+            if self.store.original_order is None:
+                return None
+            self._wrote = False
+            outcome = self._attempt(classification="healthy", allow=FAILBACK)
+            if self._wrote and outcome.startswith(("ok:", "failed:", "NEEDS_PRIVILEGE:")):
+                return outcome
+            return None
+        finally:
+            self._lock.release()
 
     def _attempt(self, *, classification: str, allow: str) -> str:
         services = self._list_services()
@@ -522,19 +683,31 @@ class NetworkFailover:
             # the live order rather than the outcome string, so a real failover
             # whose read-back failed keeps its record.
             #
-            # Only when the preferred service is *actually* at the head. A
-            # third service on top (the user promoted something by hand) also
-            # reads as "not on a backup", and clearing there would destroy the
-            # restore point while the machine is on neither side.
-            if self.store.original_order is not None and services[0].name == self.preferred_service:
+            # Only when the preferred service is *actually* at the head, or the
+            # live order is exactly the record (the write never landed, from
+            # whatever order it started). A third service on top that the user
+            # promoted by hand also reads as "not on a backup", and clearing
+            # there would destroy the restore point while the machine is on
+            # neither side.
+            #
+            # An enable this app made goes with the record. A failed reorder
+            # can leave one behind, and a record kept past this point would be
+            # undone by some later, unrelated failback.
+            names = [s.name for s in services]
+            undone = ""
+            if self.store.original_order is not None and (
+                names[0] == self.preferred_service or names == self.store.original_order
+            ):
                 self.store.original_order = None
+                undone = self._undo_enable(head=names[0])
                 self.store.save()
-            if services[0].name != self.preferred_service:
-                return (
-                    f"no switch: '{services[0].name}' is at the head of the order, "
-                    "which is neither the preferred link nor a configured backup"
-                )
-            return "no switch: already on the preferred network"
+            if names[0] != self.preferred_service:
+                outcome = _neither_side(names[0]) + undone
+            else:
+                outcome = "no switch: already on the preferred network" + undone
+            if undone:
+                self.last_event = outcome
+            return outcome
         if allow == FAILOVER and active_side == BACKUP:
             return "no switch: already on the backup network"
 
@@ -580,6 +753,7 @@ class NetworkFailover:
         if decision.action != allow:
             return f"no switch: {decision.reason}"
 
+        self._wrote = True
         if decision.action == FAILOVER:
             outcome = self._do_failover(services, winner)
         else:
@@ -614,13 +788,23 @@ class NetworkFailover:
                         f"failed: '{prefer_name}' is not one of the configured backups "
                         f"({', '.join(self.backup_services)})"
                     )
-                if winner.device is None:
+                if find_service(services, prefer_name) is None:
                     # Configured, but not present in the live service order --
                     # which is a different thing from vanishing mid-operation.
                     return (
                         f"failed: '{prefer_name}' is configured but not in the service "
                         "order; available: " + ", ".join(s.name for s in services)
                     )
+                if winner.device is None:
+                    # In the order, but with no device (a VPN-style service).
+                    # Calling it absent would send someone looking for a
+                    # service that is right there.
+                    return (
+                        f"failed: '{prefer_name}' is in the service order but has no "
+                        "device, so there is nothing to probe; not switching"
+                    )
+                if winner.reachable is not True:
+                    note_unverified = " -- WARNING: this path was not verified reachable"
             else:
                 winner = best_candidate(candidates)
             if winner is None and allow_unverified:
@@ -637,25 +821,33 @@ class NetworkFailover:
         if new_order is None:
             return f"failed: backup service '{target}' disappeared mid-check"
 
-        # Recorded before the change, so failback can restore it exactly.
-        self.store.original_order = [s.name for s in services]
-        self.store.save()
+        # Recorded before the change, so failback can restore it exactly. Only
+        # from the preferred side, or when nothing is recorded yet: on a switch
+        # from one backup to another, recording would make the first backup the
+        # "original", and failback would restore it and call that preferred.
+        if self.store.original_order is None or self._active_side(services) == PREFERRED:
+            self.store.original_order = [s.name for s in services]
+            self.store.save()
 
         # Enable before promoting. A disabled service sits in the order and is
         # skipped, so promoting one on its own is a change that looks like a
         # success and routes nothing.
         note = ""
         if not winner.enabled:
+            # _enable_service records the enable so failback can put it back.
+            # Enabling is a change to the machine's configuration just as much
+            # as the reorder is, and leaving it on afterwards is a change the
+            # user never asked for and is not told about.
             problem = self._enable_service(target)
             if problem:
                 return problem
-            # Recorded so failback can put it back the way it was. Enabling is
-            # a change to the machine's configuration just as much as the
-            # reorder is, and leaving it on afterwards is a change the user
-            # never asked for and is not told about.
-            self.store.enabled_by_us = target
-            self.store.save()
-            note = " (also enabled the service, which was off)"
+            if self.store.enabled_by_us == target:
+                note = " (also enabled the service, which was off)"
+            else:
+                note = (
+                    " (also enabled the service, which was off; it will stay on after "
+                    f"failback, because the record already holds '{self.store.enabled_by_us}')"
+                )
             # Re-read: enabling rewrites the listing, and the order about to be
             # applied has to be a permutation of what is there *now*.
             services = self._list_services() or services
@@ -663,6 +855,8 @@ class NetworkFailover:
 
         outcome = self._apply_order(services, new_order)
         if not outcome.startswith("ok:"):
+            if not winner.enabled:
+                outcome += f" ('{target}' was enabled first and is still on)"
             return outcome
         self.chosen_backup = target
         speed = (
@@ -675,14 +869,25 @@ class NetworkFailover:
     def _do_failback(self, services) -> str:
         current_names = {s.name for s in services}
         recorded = self.store.original_order
+        matches = (
+            bool(recorded) and set(recorded) == current_names and len(recorded) == len(services)
+        )
         note = ""
-        if recorded and set(recorded) == current_names and len(recorded) == len(services):
+        if matches and recorded[0] not in self.backup_services:
             new_order = recorded
         else:
-            # The stale record cannot be applied without dropping or inventing a
-            # service, so fall back to promoting the preferred link and say so.
+            # A stale record cannot be applied without dropping or inventing a
+            # service. A record that starts on a backup (taken while already
+            # failed over) would, restored verbatim, leave the machine on that
+            # backup under an outcome saying it failed back. Both promote the
+            # preferred link instead, and say so.
             new_order = promote(services, self.preferred_service)
-            if recorded:
+            if matches:
+                note = (
+                    " (the recorded pre-failover order starts with a backup, so the "
+                    "preferred link was promoted instead of an exact restore)"
+                )
+            elif recorded:
                 note = (
                     " (the recorded pre-failover order no longer matches the current "
                     "services, so the preferred link was promoted instead of an exact "
@@ -694,19 +899,136 @@ class NetworkFailover:
         if not outcome.startswith("ok:"):
             return outcome
 
-        # Put back the enable this app made, so the machine ends up in the
-        # state it started in rather than one the user never asked for.
-        undone = ""
-        if self.store.enabled_by_us:
-            name = self.store.enabled_by_us
-            result = self.run_fn(["networksetup", "-setnetworkserviceenabled", name, "off"])
-            undone = (
-                f" and disabled '{name}' again, which this app had enabled"
-                if getattr(result, "returncode", 1) == 0
-                else f" (could not re-disable '{name}', which this app enabled)"
-            )
-            self.store.enabled_by_us = None
-
+        undone = self._undo_enable(head=new_order[0])
         self.store.original_order = None
         self.store.save()
         return f"{outcome} (failed back to preferred '{self.preferred_service}'{undone}){note}"
+
+
+# --- construction from config -------------------------------------------------
+#
+# Here rather than in app.py so the CLI can build the same failover without
+# importing the menu bar module, and with it rumps and AppKit.
+
+
+def build_failover(config: dict):
+    """Returns a NetworkFailover, or None when the feature is off or not fully
+    configured.
+
+    Both service names are required and neither is guessed. The machine this
+    was written for has three wired adapters with near-identical names, so a
+    "helpful" default here would reorder the wrong physical link.
+    """
+    preferred = config.get("failover_preferred_service")
+    backups = failover_backup_names(config)
+    if not preferred or not backups:
+        return None
+    timeout = float(config["failover_speedtest_timeout_seconds"])
+    return NetworkFailover(
+        preferred_service=preferred,
+        backup_services=backups,
+        throughput_meter=make_throughput_meter(
+            host=config.get("failover_speedtest_host", ""),
+            path=config["failover_speedtest_path"],
+            port=int(config["failover_speedtest_port"]),
+            timeout=timeout,
+            max_bytes=int(config["failover_speedtest_max_bytes"]),
+        ),
+        # The configured timeout, not NetworkFailover's 5s default: measure_all
+        # stops waiting at this deadline, so a longer per-meter timeout was cut
+        # short and a slow but working backup read as no measurement at all.
+        measure_timeout=timeout,
+        store=FailoverStore(config["failover_state_path"]),
+        interface_prober=make_interface_prober(
+            targets=failover_probe_targets(config),
+            timeout=failover_probe_timeout(config),
+        ),
+        failback_threshold=int(config["failover_failback_threshold"]),
+        cooldown_seconds=float(config["failover_cooldown_seconds"]),
+        max_switches_per_hour=max(0, int(config["failover_max_switches_per_hour"])),
+        trigger_classifications=failover_trigger_classifications(config),
+        auto_enabled=bool(config.get("failover_enabled")),
+    )
+
+
+def failover_probe_targets(config: dict) -> list[tuple]:
+    """What the interface prober aims at, which is not always what the ordinary
+    probe aims at.
+
+    Both defaulted to `external_targets` until a machine turned up where that
+    could not work. The ordinary probe asks "is the internet reachable" and
+    wants a target out on it. The interface probe asks "would this specific
+    adapter carry traffic" and pins the socket to it with IP_BOUND_IF -- which
+    bypasses any VPN tunnel, so on a machine routing through one, every
+    physical interface reads unreachable against an internet target while the
+    machine is plainly online. See docs/known-issues.md.
+
+    Splitting them is the fix, and it has to be a split rather than a
+    repointing: aiming `external_targets` at a LAN gateway would make the
+    ordinary probe call the network healthy through an ISP outage, because the
+    gateway answers either way.
+
+    Empty means "use external_targets", which keeps the previous behaviour for
+    every machine that does not need the split.
+    """
+    configured = config.get("failover_probe_targets") or config["external_targets"]
+    return [tuple(t) for t in configured]
+
+
+def failover_probe_timeout(config: dict) -> float:
+    """The interface prober's deadline, which is not the ordinary probe's.
+
+    `make_interface_prober` spends ONE deadline across all targets, deliberately
+    -- see its comment about the additive stall. That makes the budget a
+    function of how many targets are listed, and the per-link gateways this
+    feature wants are unreachable from every link but their own: measured here,
+    the wired gateway blackholes for the full 2s from Wi-Fi rather than
+    refusing, so a 2s budget is consumed entirely by the first target and the
+    reachable one is never tried. The probe then reports "unreachable" about a
+    link that works.
+
+    Sized for the target list rather than shared with `probe_timeout_seconds`,
+    which bounds a different thing on every tick. This budget is only ever spent
+    once the machine has actually failed over or is in an incident -- a healthy
+    tick that has never failed over runs no probes at all.
+
+    0 means "use probe_timeout_seconds".
+    """
+    configured = float(config.get("failover_probe_timeout_seconds") or 0)
+    if configured > 0:
+        return configured
+    return float(config.get("probe_timeout_seconds", 2.0))
+
+
+def failover_backup_names(config: dict) -> list[str]:
+    """The ordered backup list, however it was written.
+
+    The singular key stays accepted because most setups have exactly one
+    backup and a list of one is noise. Duplicates are collapsed and the
+    preferred service is refused as its own backup -- promoting a service above
+    itself is not a failover.
+    """
+    names: list[str] = []
+    for name in [config.get("failover_backup_service")] + list(
+        config.get("failover_backup_services") or []
+    ):
+        if name and name not in names and name != config.get("failover_preferred_service"):
+            names.append(name)
+    return names
+
+
+def failover_trigger_classifications(config: dict) -> frozenset:
+    """An explicitly empty list means "nothing triggers a switch" and must be
+    honoured. `config.get(key) or [...]` would treat it as absent and re-arm
+    the default, so setting `failover_trigger_classifications: []` to stage the
+    feature inert while checking service names would still rewrite the service
+    order on the next incident. Only a missing or null key takes the default.
+    """
+    if not config.get("failover_enabled"):
+        # Manual-only mode: the menu bar button still switches, but no incident
+        # puts the failover step on the ladder.
+        return frozenset()
+    configured = config.get("failover_trigger_classifications")
+    if configured is None:
+        configured = ["network"]
+    return frozenset(configured)

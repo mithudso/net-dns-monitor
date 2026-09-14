@@ -27,6 +27,7 @@ MARGIN_TOP = 16  # room for the title
 MARGIN_BOTTOM = 12
 
 GRID_LINES = 3
+DOT_RADIUS = 1.5  # an isolated sample, drawn about as wide as the 1.5pt line
 
 COLOR_NAMES = {
     "latency": "systemBlueColor",
@@ -72,7 +73,7 @@ def render_series_graph(
     from Foundation import NSMakeRect
 
     width, height = int(size[0]), int(size[1])
-    formatter = format_value or (lambda v: f"{v:.0f}")
+    formatter = format_value or _plain
 
     image = AppKit.NSImage.alloc().initWithSize_((width, height))
     image.lockFocus()
@@ -151,10 +152,25 @@ def render_series_graph(
                 pen_down = True
         path.stroke()
 
+        # A measured sample with a gap on both sides is a subpath of one
+        # moveToPoint, and stroking that draws nothing -- so alternating 50% loss
+        # rendered exactly like a total outage. Those points get a dot instead.
+        color.setFill()
+        for index, value in enumerate(values):
+            if value is None:
+                continue
+            before = values[index - 1] if index > 0 else None
+            after = values[index + 1] if index + 1 < len(values) else None
+            if before is None and after is None:
+                x, y = origin_x + index * step, origin_y + project(value)
+                AppKit.NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(x - DOT_RADIUS, y - DOT_RADIUS, 2 * DOT_RADIUS, 2 * DOT_RADIUS)
+                ).fill()
+
         # The latest value, spelled out -- reading a number off a line is guesswork.
         _draw_text(
             AppKit,
-            f"{formatter(real[-1])}{unit}",
+            latest_label(values, formatter, unit),
             9.0,
             origin_x + plot_width - 52,
             height - MARGIN_TOP + 2,
@@ -166,6 +182,23 @@ def render_series_graph(
         # the menu bar's.
         image.unlockFocus()
     return image
+
+
+def latest_label(values: list, formatter=None, unit: str = "") -> str:
+    """The headline figure: the newest sample, or "--" if it was not measured.
+
+    The newest sample, not the newest *measured* one. Falling back to the last
+    real value headlined "61ms" through ten unanswered pings, beside a stats
+    pane saying "no reply" -- a stale number presented as current.
+    """
+    latest = values[-1] if values else None
+    if latest is None:
+        return "--"
+    return f"{(formatter or _plain)(latest)}{unit}"
+
+
+def _plain(value: float) -> str:
+    return f"{value:.0f}"
 
 
 def _draw_text(AppKit, text: str, point_size: float, x: float, y: float, color_name: str):
@@ -180,7 +213,14 @@ def _draw_text(AppKit, text: str, point_size: float, x: float, y: float, color_n
 
 
 def format_bits(value: Optional[float]) -> str:
-    """Axis labels for a throughput graph."""
+    """Throughput for the graph axes and the dashboard's stats pane.
+
+    Not plain `format_rate`: that rounds anything under 1K to "0" so the menu bar
+    stays short, which here labels a real trickle as nothing moving at all. There
+    is room for "587" on an axis.
+    """
     from netdnsmonitor.status import format_rate
 
+    if value is not None and 0 < value < 1e3:
+        return f"{value:.0f}"
     return format_rate(value)

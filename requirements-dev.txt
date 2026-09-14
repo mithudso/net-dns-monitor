@@ -1,7 +1,11 @@
 # Development and test tooling. Not installed on end-user machines --
 # scripts/start.sh installs requirements.txt only.
 #
-#   pip install -r requirements-dev.txt
+#   pip install -r requirements-dev.txt -c constraints.txt
+#
+# constraints.txt pins the transitive dependencies too, so this installs the
+# same tree CI tests against. Keep the ruff pin here in step with `rev` in
+# .pre-commit-config.yaml.
 #
 # Verify loop:
 #   ruff check . && ruff format --check . && python -m pytest -q

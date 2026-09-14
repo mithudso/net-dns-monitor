@@ -86,9 +86,16 @@ DNS_LADDER = [
 # Moving to the backup network rewrites the system's network service order, so
 # it goes last: every cheaper and more easily reversed repair on the ladder is
 # tried first. It is tagged needs_privilege because the write genuinely needs
-# an administrator right -- unlike the two stubs, though, it is really
+# an administrator right -- unlike toggle_network_service, though, it is really
 # attempted, and its outcome string says whether the write landed.
-FAILOVER_STEP = LadderStep("switch_to_backup_network", "repair", needs_privilege=True)
+FAILOVER_STEP = LadderStep(
+    "switch_to_backup_network",
+    "repair",
+    needs_privilege=True,
+    reason="Every cheaper, more easily reversed repair has already been tried; "
+    "moving to the backup link can restore connectivity while the preferred "
+    "link is investigated.",
+)
 
 
 def step_by_name(name: str):

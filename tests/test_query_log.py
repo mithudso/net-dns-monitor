@@ -68,7 +68,8 @@ def test_query_log_reader_invokes_log_show_with_lookback_window():
     reader = make_query_log_reader(run_fn=run_fn, lookback="1h")
     lines = reader()
     args = captured["args"]
-    assert args[:2] == ["log", "show"]
+    # Absolute path, not a PATH lookup -- see test_log_watcher.py for why.
+    assert args[:2] == ["/usr/bin/log", "show"]
     # Flag/value pair, not bare membership -- see test_log_watcher.py for why.
     assert args[args.index("--last") + 1] == "1h"
     assert any("example.com" in line for line in lines)

@@ -14,6 +14,14 @@ echo "========================================="
 echo "  ROUTER & DNS DIAGNOSTIC SUITE"
 echo "========================================="
 
+# Homebrew lives in /opt/homebrew on Apple silicon and /usr/local on Intel.
+# `brew` may not be on PATH (for example under sudo), so fall back rather than fail.
+PREFIX="$(brew --prefix 2>/dev/null || true)"
+if [ -z "$PREFIX" ]; then
+    PREFIX=/opt/homebrew
+    warn "brew --prefix unavailable; assuming $PREFIX"
+fi
+
 # 1. IP Forwarding
 if [ "$(sysctl -n net.inet.ip.forwarding)" -eq 1 ]; then
     pass "IP Forwarding is ENABLED (net.inet.ip.forwarding=1)"
@@ -36,49 +44,62 @@ else
 fi
 
 # 2c. Zombie Bridge Check
+# bridge100 existing is not by itself a fault: it only swallows traffic when the
+# LAN adapter is one of its members, which this check does not inspect.
 if ifconfig bridge100 >/dev/null 2>&1; then
-    fail "Zombie bridge100 exists! This will swallow your adapter's traffic."
+    warn "bridge100 exists. If the LAN adapter is a member it will swallow its traffic (ifconfig bridge100)."
 else
     pass "No zombie bridge100 detected"
 fi
 
 # 3. Packet Filter (PF) NAT Rules
-if sudo pfctl -s info 2>/dev/null | grep -q "Status: Enabled"; then
-    pass "PF Firewall is ENABLED"
+# `sudo -n` fails instead of prompting. A failed sudo is "not checked", not
+# "PF disabled" -- reporting it as disabled sends someone after the wrong fault.
+if PF_INFO="$(sudo -n pfctl -s info 2>/dev/null)"; then
+    if grep -q "Status: Enabled" <<<"$PF_INFO"; then
+        pass "PF Firewall is ENABLED"
+    else
+        fail "PF Firewall is DISABLED. NAT will not work."
+    fi
 else
-    fail "PF Firewall is DISABLED. NAT will not work."
+    warn "PF status not checked (needs root: rerun with sudo)"
 fi
 
-if sudo pfctl -a com.apple/custom_nat -s nat 2>/dev/null | grep -q "nat on"; then
-    pass "Custom NAT rules found in com.apple/custom_nat"
+if PF_NAT="$(sudo -n pfctl -a com.apple/custom_nat -s nat 2>/dev/null)"; then
+    if grep -q "nat on" <<<"$PF_NAT"; then
+        pass "Custom NAT rules found in com.apple/custom_nat"
+    else
+        fail "Custom NAT rules NOT found. Run the pfctl NAT injection command."
+    fi
 else
-    fail "Custom NAT rules NOT found. Run the pfctl NAT injection command."
+    warn "NAT anchor not checked (needs root: rerun with sudo)"
 fi
 
 # 4. Unbound Backend (192.168.4.1:53)
-if unbound-checkconf /opt/homebrew/etc/unbound/unbound.conf >/dev/null 2>&1; then
+if unbound-checkconf "$PREFIX/etc/unbound/unbound.conf" >/dev/null 2>&1; then
     pass "Unbound configuration syntax is VALID"
 else
     fail "Unbound configuration has SYNTAX ERRORS"
 fi
 
-# Test resolution via Unbound directly
-UNBOUND_TEST=$(dig @192.168.4.1 google.com +short +time=2)
-if [ -n "$UNBOUND_TEST" ]; then
-    pass "Unbound DNS (192.168.4.1:53) successfully resolved query over DoT"
+# Test resolution via Unbound directly. `dig +short` prints ";; connection timed
+# out" on stdout when nothing answers, so non-empty output alone is not an answer.
+if UNBOUND_TEST="$(dig @192.168.4.1 google.com +short +time=2 +tries=1)" \
+    && [ -n "$UNBOUND_TEST" ] && ! grep -q '^;' <<<"$UNBOUND_TEST"; then
+    pass "Unbound DNS (192.168.4.1:53) answered a query"
 else
     fail "Unbound DNS (192.168.4.1:53) FAILED to resolve query. Check logs or upstream TLS."
 fi
 
 # 5. Dnsmasq DHCP (192.168.4.1:67)
-if dnsmasq --test -C /opt/homebrew/etc/dnsmasq.conf >/dev/null 2>&1; then
+if dnsmasq --test -C "$PREFIX/etc/dnsmasq.conf" >/dev/null 2>&1; then
     pass "Dnsmasq configuration syntax is VALID"
 else
     fail "Dnsmasq configuration has SYNTAX ERRORS"
 fi
 
 # 6. DHCP Configuration Check
-if grep -q "dhcp-range=192.168.4.50" /opt/homebrew/etc/dnsmasq.conf; then
+if grep -q "dhcp-range=192.168.4.50" "$PREFIX/etc/dnsmasq.conf"; then
     pass "DHCP Range configured for 192.168.4.x subnet"
 else
     fail "DHCP Range missing or misconfigured in dnsmasq.conf"

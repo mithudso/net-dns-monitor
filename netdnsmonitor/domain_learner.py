@@ -18,16 +18,29 @@ Two hazards this module exists to contain:
    reverse-lookup zones, no bare labels, length-capped, lowercased, and the
    store is capped so a log flood cannot grow the probe list without bound.
 
-Learned domains stay on disk locally. They are never sent anywhere: the
-outbound paths (LLM escalation, Slack/email) carry booleans and summaries,
-and anything the user marks sensitive is redacted on the way out.
+Learned domains are stored on disk locally, and they leave the machine by one
+path. Every probed name is a key of `probe_results["domain_results"]`, and the
+LLM escalation bundle carries `probe_results`, so a learned domain is sent to
+the LLM whenever an incident escalates. The bundle is redacted, but a learned
+domain is masked only if the user lists it in `sensitive_strings`. Slack and
+email omit probe results (see `notifications.format_notification`), so a
+learned domain does not reach them.
+
+The log scan runs on a worker thread, not in the caller. The prober asks for
+the domain list inside the rumps timer, `log show` took 2.25s measured and may
+run to its 10s timeout, and the menu bar is frozen for as long as a tick runs.
 """
 
 import json
 import os
+import queue
 import re
+import threading
 import time
 from typing import Callable, Optional
+
+from netdnsmonitor.log_watcher import NO_EVIDENCE_PREFIX
+from netdnsmonitor.report_storage import _atomic_write
 
 # A DNS failure line has to look like a *resolution* failure, not merely a
 # line that happens to mention a hostname; matching on "error" alone pulled
@@ -97,6 +110,10 @@ def extract_failed_domains(log_lines: list[str]) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
     for line in log_lines:
+        # The watcher's own "no log evidence" note is not a log line, and a
+        # timeout note contains "timed out" -- one of the failure markers.
+        if line.startswith(NO_EVIDENCE_PREFIX):
+            continue
         lowered = line.lower()
         if not any(marker in lowered for marker in FAILURE_MARKERS):
             continue
@@ -151,8 +168,9 @@ class LearnedDomainStore:
             directory = os.path.dirname(self.path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
-            with open(self.path, "w") as f:
-                json.dump(self._domains, f, indent=2)
+            # Temp file plus rename: truncating in place and then failing part-way
+            # left a file load() reads as empty, losing every learned domain.
+            _atomic_write(self.path, json.dumps(self._domains, indent=2))
         except OSError:
             # A cache we cannot persist is still usable in memory. makedirs has
             # to be inside the try: exist_ok=True only forgives an existing
@@ -226,26 +244,68 @@ def prune_dead_domains(
     return store.remove(dead)
 
 
+def _spawn_daemon(fn: Callable[[], None]) -> None:
+    threading.Thread(target=fn, name="domain-learner-scan", daemon=True).start()
+
+
 def make_domain_learner(
     log_watcher: Callable[[], list[str]],
     store: LearnedDomainStore,
     configured_domains: list[str],
     interval_seconds: float = 300.0,
     clock: Callable[[], float] = time.monotonic,
+    spawn: Callable[[Callable[[], None]], None] = _spawn_daemon,
 ) -> Callable[[], list[str]]:
     """Returns the callable the prober asks for its domain list each tick.
 
     The log scan is rate-limited to interval_seconds because `log show` is a
     subprocess costing whole seconds -- running it every poll would make the
     monitor itself the heaviest thing on the machine.
+
+    `spawn` starts the scan. The scan thread only reads the log and extracts
+    names; `store` is touched only by the thread calling domains(), which picks
+    up finished scans. A scan's names therefore appear on the first call after
+    it finishes. With a spawn that runs the scan inline, that is the call that
+    started it.
     """
-    last_scan: dict[str, Optional[float]] = {"at": None}
+    last_scan_at: Optional[float] = None
+    scan_running = False
+    finished: queue.Queue = queue.Queue()
+
+    def scan() -> None:
+        try:
+            found = extract_failed_domains(log_watcher())
+        except Exception:  # noqa: BLE001 - a failed scan must still report back
+            # Without a report scan_running never clears, and learning stops for
+            # the rest of the session without any sign.
+            found = []
+        finished.put(found)
+
+    def collect_finished() -> None:
+        nonlocal scan_running
+        while True:
+            try:
+                found = finished.get_nowait()
+            except queue.Empty:
+                return
+            scan_running = False
+            store.add(found)
 
     def domains() -> list[str]:
+        nonlocal last_scan_at, scan_running
+        collect_finished()
         now = clock()
-        if last_scan["at"] is None or (now - last_scan["at"]) >= interval_seconds:
-            last_scan["at"] = now
-            store.add(extract_failed_domains(log_watcher()))
+        due = last_scan_at is None or (now - last_scan_at) >= interval_seconds
+        if due and not scan_running:
+            last_scan_at = now
+            scan_running = True
+            try:
+                spawn(scan)
+            except RuntimeError:
+                # Thread.start raises RuntimeError when no thread can be made.
+                # Learning is opportunistic, so try again at the next interval.
+                scan_running = False
+        collect_finished()
         configured = [d.strip().strip(".").lower() for d in configured_domains]
         merged = list(configured)
         for domain in store.domains:

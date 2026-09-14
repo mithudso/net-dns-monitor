@@ -58,3 +58,23 @@ def test_render_markdown_includes_key_sections():
     assert "## Ladder Steps" in md
     assert "## Log Excerpts" in md
     assert "flush_dns_cache" in md
+
+
+def test_summary_does_not_claim_a_ladder_ran_when_none_did():
+    """UNCLASSIFIED has no ladder (ladder_for returns []), so "after the offline
+    troubleshooting ladder ran" described steps that never happened.
+    """
+    report = build_report(
+        **_base_kwargs(
+            classification=Classification.UNCLASSIFIED,
+            ladder_results=[],
+            repair_outcome=None,
+        )
+    )
+    assert "ladder ran" not in report["summary"]
+    assert "no offline troubleshooting ladder steps ran" in report["summary"]
+
+
+def test_summary_still_says_the_ladder_ran_when_steps_ran():
+    report = build_report(**_base_kwargs())
+    assert "after the offline troubleshooting ladder ran" in report["summary"]

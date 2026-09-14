@@ -27,9 +27,10 @@ Everything that shells out does so on a worker thread and returns through a
 queue, because the run loop this all hangs off is also what draws the window.
 """
 
-import getpass
 import os
 import pathlib
+import plistlib
+import pwd
 import queue
 import socket as socket_module
 import subprocess
@@ -43,10 +44,10 @@ from typing import Callable, Optional
 
 import rumps
 
-from netdnsmonitor import alert, forensic_log, peer_net, privileges, system_log
+from netdnsmonitor import alert, console, forensic_log, peer_net, privileges, system_log
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.classifier import classify
-from netdnsmonitor.config import load_config
+from netdnsmonitor.config import ConfigError, load_config
 from netdnsmonitor.console_window import ConsoleWindowController
 from netdnsmonitor.dashboard import (
     DashboardWindow,
@@ -61,10 +62,17 @@ from netdnsmonitor.domain_learner import (
     prune_dead_domains,
 )
 from netdnsmonitor.escalation import redact
-from netdnsmonitor.failover import BACKUP, PREFERRED, FailoverStore, NetworkFailover
+from netdnsmonitor.failover import (
+    BACKUP,
+    PREFERRED,
+    build_failover,
+    failover_backup_names,  # noqa: F401 - re-exported; moved to failover.py
+    failover_probe_targets,  # noqa: F401 - re-exported; moved to failover.py
+    failover_probe_timeout,  # noqa: F401 - re-exported; moved to failover.py
+    failover_trigger_classifications,
+)
 from netdnsmonitor.forensic_log import ForensicRecorder
 from netdnsmonitor.history import SampleHistory
-from netdnsmonitor.interface_probe import make_interface_prober
 from netdnsmonitor.ladder import ladder_for, step_by_name
 from netdnsmonitor.localize import localize
 from netdnsmonitor.log_watcher import make_log_watcher
@@ -86,11 +94,21 @@ from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.resolution_log import append_resolution_findings
 from netdnsmonitor.resolution_prober import resolve_domains_parallel
-from netdnsmonitor.settings_window import SettingsWindow, collect, restart_note, save_config
+from netdnsmonitor.router import PF_ANCHOR, Router
+from netdnsmonitor.router_window import (
+    RouterWindowController,
+    collect_diagnostics,
+    get_interfaces,
+)
+from netdnsmonitor.settings_window import (
+    NEEDS_RESTART,
+    SettingsWindow,
+    collect,
+    restart_note,
+    save_config,
+)
 from netdnsmonitor.stall_log import select_stalled_domains
 from netdnsmonitor.state_machine import StateMachine
-from netdnsmonitor.router import Router
-from netdnsmonitor.router_window import RouterWindowController
 from netdnsmonitor.status import (
     STATS_UNKNOWN,
     build_failover_lines,
@@ -99,9 +117,22 @@ from netdnsmonitor.status import (
     format_stats,
     status_state,
 )
-from netdnsmonitor.throughput import make_throughput_meter
 
 OPEN_BIN = "/usr/bin/open"
+PFCTL_BIN = "/sbin/pfctl"
+
+# Router menu reads (interface list, diagnostics) are bounded by this. The admin
+# dialog behind Start and Stop is bounded by router.DEFAULT_TIMEOUT_SECONDS.
+ROUTER_COMMAND_TIMEOUT_SECONDS = 5.0
+
+# peers.json is rewritten at most this often from the UI tick. A busy LAN marks
+# the registry dirty on every peer message, and the tick runs every second.
+PEER_SAVE_MIN_INTERVAL_SECONDS = 30.0
+
+# The LaunchAgent the "Start at Login" item writes, and the one
+# scripts/net-dns-monitor-service installs. Either one can start the app at login.
+LOGIN_AGENT_LABEL = "com.netdnsmonitor"
+SERVICE_AGENT_LABEL = "com.mitchhudson.net-dns-monitor"
 
 # How many of the most-queried names the prewarm button resolves.
 PREWARM_LIMIT = 50
@@ -192,9 +223,12 @@ def anchor_domains(config: dict) -> list[str]:
     return anchors
 
 
-def build_domains_source(config: dict, log_watcher):
+def build_domains_source(config: dict, log_watcher, spawn=None):
     """Returns (domains_source, store). domains_source is what the prober asks
     each tick; store is None when log learning is turned off.
+
+    `spawn` runs the learner's log scan. None keeps the learner's own daemon
+    thread; a test passes a synchronous one to observe the scan's result.
     """
     anchors = anchor_domains(config)
     if not config.get("learn_domains_from_logs"):
@@ -203,131 +237,15 @@ def build_domains_source(config: dict, log_watcher):
         path=config["learned_domains_path"],
         max_domains=int(config["max_learned_domains"]),
     )
+    options = {} if spawn is None else {"spawn": spawn}
     learner = make_domain_learner(
         log_watcher=log_watcher,
         store=store,
         configured_domains=anchors,
         interval_seconds=float(config["domain_learn_interval_seconds"]),
+        **options,
     )
     return learner, store
-
-
-def build_failover(config: dict):
-    """Returns a NetworkFailover, or None when the feature is off or not fully
-    configured.
-
-    Both service names are required and neither is guessed. The machine this
-    was written for has three wired adapters with near-identical names, so a
-    "helpful" default here would reorder the wrong physical link.
-    """
-    preferred = config.get("failover_preferred_service")
-    backups = failover_backup_names(config)
-    if not preferred or not backups:
-        return None
-    return NetworkFailover(
-        preferred_service=preferred,
-        backup_services=backups,
-        throughput_meter=make_throughput_meter(
-            host=config.get("failover_speedtest_host", ""),
-            path=config["failover_speedtest_path"],
-            port=int(config["failover_speedtest_port"]),
-            timeout=float(config["failover_speedtest_timeout_seconds"]),
-            max_bytes=int(config["failover_speedtest_max_bytes"]),
-        ),
-        store=FailoverStore(config["failover_state_path"]),
-        interface_prober=make_interface_prober(
-            targets=failover_probe_targets(config),
-            timeout=failover_probe_timeout(config),
-        ),
-        failback_threshold=int(config["failover_failback_threshold"]),
-        cooldown_seconds=float(config["failover_cooldown_seconds"]),
-        max_switches_per_hour=max(0, int(config["failover_max_switches_per_hour"])),
-        trigger_classifications=failover_trigger_classifications(config),
-        auto_enabled=bool(config.get("failover_enabled")),
-    )
-
-
-def failover_probe_targets(config: dict) -> list[tuple]:
-    """What the interface prober aims at, which is not always what the ordinary
-    probe aims at.
-
-    Both defaulted to `external_targets` until a machine turned up where that
-    could not work. The ordinary probe asks "is the internet reachable" and
-    wants a target out on it. The interface probe asks "would this specific
-    adapter carry traffic" and pins the socket to it with IP_BOUND_IF -- which
-    bypasses any VPN tunnel, so on a machine routing through one, every
-    physical interface reads unreachable against an internet target while the
-    machine is plainly online. See docs/known-issues.md.
-
-    Splitting them is the fix, and it has to be a split rather than a
-    repointing: aiming `external_targets` at a LAN gateway would make the
-    ordinary probe call the network healthy through an ISP outage, because the
-    gateway answers either way.
-
-    Empty means "use external_targets", which keeps the previous behaviour for
-    every machine that does not need the split.
-    """
-    configured = config.get("failover_probe_targets") or config["external_targets"]
-    return [tuple(t) for t in configured]
-
-
-def failover_probe_timeout(config: dict) -> float:
-    """The interface prober's deadline, which is not the ordinary probe's.
-
-    `make_interface_prober` spends ONE deadline across all targets, deliberately
-    -- see its comment about the additive stall. That makes the budget a
-    function of how many targets are listed, and the per-link gateways this
-    feature wants are unreachable from every link but their own: measured here,
-    the wired gateway blackholes for the full 2s from Wi-Fi rather than
-    refusing, so a 2s budget is consumed entirely by the first target and the
-    reachable one is never tried. The probe then reports "unreachable" about a
-    link that works.
-
-    Sized for the target list rather than shared with `probe_timeout_seconds`,
-    which bounds a different thing on every tick. This budget is only ever spent
-    once the machine has actually failed over or is in an incident -- a healthy
-    tick that has never failed over runs no probes at all.
-
-    0 means "use probe_timeout_seconds".
-    """
-    configured = float(config.get("failover_probe_timeout_seconds") or 0)
-    if configured > 0:
-        return configured
-    return float(config.get("probe_timeout_seconds", 2.0))
-
-
-def failover_backup_names(config: dict) -> list[str]:
-    """The ordered backup list, however it was written.
-
-    The singular key stays accepted because most setups have exactly one
-    backup and a list of one is noise. Duplicates are collapsed and the
-    preferred service is refused as its own backup -- promoting a service above
-    itself is not a failover.
-    """
-    names: list[str] = []
-    for name in [config.get("failover_backup_service")] + list(
-        config.get("failover_backup_services") or []
-    ):
-        if name and name not in names and name != config.get("failover_preferred_service"):
-            names.append(name)
-    return names
-
-
-def failover_trigger_classifications(config: dict) -> frozenset:
-    """An explicitly empty list means "nothing triggers a switch" and must be
-    honoured. `config.get(key) or [...]` would treat it as absent and re-arm
-    the default, so setting `failover_trigger_classifications: []` to stage the
-    feature inert while checking service names would still rewrite the service
-    order on the next incident. Only a missing or null key takes the default.
-    """
-    if not config.get("failover_enabled"):
-        # Manual-only mode: the menu bar button still switches, but no incident
-        # puts the failover step on the ladder.
-        return frozenset()
-    configured = config.get("failover_trigger_classifications")
-    if configured is None:
-        configured = ["network"]
-    return frozenset(configured)
 
 
 def failover_status_text(failover) -> str:
@@ -343,6 +261,18 @@ def failover_status_text(failover) -> str:
             f"'{failover.backup_service}'. No switch attempted this session."
         )
     return f"Last attempt: {failover.last_event}"
+
+
+def dhcp_lease_granted(interface: str) -> bool:
+    """Does the installed grant cover a DHCP renewal on this interface?
+
+    Asked per step, not captured at launch, so a grant or revoke takes effect
+    without a restart. The grant lists the interfaces that existed when it was
+    made, so a dock or USB adapter that appeared since is not covered.
+    """
+    return privileges.covers(
+        privileges.granted_commands_now(), (privileges.IPCONFIG, "set", interface, "DHCP")
+    )
 
 
 def build_state_machine(config: dict, failover=None) -> StateMachine:
@@ -395,6 +325,7 @@ def build_state_machine(config: dict, failover=None) -> StateMachine:
         is_granted_fn=privileges.is_granted,
         primary_interface_fn=privileges.primary_interface,
         failover_fn=failover.attempt_failover if failover else None,
+        dhcp_granted_fn=dhcp_lease_granted,
     )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -463,8 +394,95 @@ def build_ping_job(config: dict) -> Callable[[], tuple[dict, Optional[tuple[int,
     return job
 
 
+def config_error_text(exc: BaseException) -> str:
+    """How a config read failure is shown. A ConfigError's message names the
+    key and the refused value, which is the part someone needs to fix it. Any
+    other exception is shown by class name only: a YAML parser's message quotes
+    file content.
+    """
+    if isinstance(exc, ConfigError):
+        return f"{type(exc).__name__}: {exc}"
+    return type(exc).__name__
+
+
+def login_agent_path(label: str) -> str:
+    return os.path.join(os.path.expanduser("~/Library/LaunchAgents"), f"{label}.plist")
+
+
+def login_item_installed() -> bool:
+    """True when either LaunchAgent is on disk. The service script's agent also
+    starts the app at login (while its supervision flag is set), so a checkmark
+    that ignored it would read "off" on a machine that starts the app anyway.
+    """
+    return any(
+        os.path.exists(login_agent_path(label))
+        for label in (LOGIN_AGENT_LABEL, SERVICE_AGENT_LABEL)
+    )
+
+
+def login_agent_plist(frozen: bool, executable: str, source_root: str) -> dict:
+    """The LaunchAgent that starts this copy of the app at login.
+
+    Frozen, `executable` is the bundle's own executable, which is what
+    net-dns-monitor-service points its agent at. From source it is the running
+    interpreter, run with `-m` from the checkout the package was imported from.
+    Neither is a fixed path: the agent this replaced named one user's home
+    directory, so on any other account it started nothing.
+    """
+    plist = {
+        "Label": LOGIN_AGENT_LABEL,
+        "RunAtLoad": True,
+        "KeepAlive": False,
+        # launchd starts jobs with no locale; see write_plist in
+        # scripts/net-dns-monitor-service for what that broke.
+        "EnvironmentVariables": {"LANG": "en_US.UTF-8"},
+    }
+    if frozen:
+        plist["ProgramArguments"] = [executable]
+    else:
+        plist["ProgramArguments"] = [executable, "-m", "netdnsmonitor.app"]
+        plist["WorkingDirectory"] = source_root
+    return plist
+
+
+def _bundle_executable() -> str:
+    try:
+        from Foundation import NSBundle
+
+        path = NSBundle.mainBundle().executablePath()
+        if path:
+            return str(path)
+    except Exception:  # noqa: BLE001 - fall back to the interpreter path
+        pass
+    return sys.executable
+
+
+def router_nat_text(run_fn: Callable[..., object]) -> str:
+    """The NAT rules the app's router loaded, or why they were not read.
+
+    `sudo -n`: reading pf needs root, and a sudo that may prompt waits on a
+    terminal this app does not have.
+    """
+    argv = [privileges.SUDO, "-n", PFCTL_BIN, "-a", PF_ANCHOR, "-s", "nat"]
+    try:
+        result = run_fn(
+            argv, capture_output=True, text=True, timeout=ROUTER_COMMAND_TIMEOUT_SECONDS
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        return f"NAT rules in {PF_ANCHOR}: not checked ({type(exc).__name__})"
+    code = getattr(result, "returncode", 1)
+    if code != 0:
+        return f"NAT rules in {PF_ANCHOR}: not checked (sudo -n exit {code}; needs root)"
+    rules = (getattr(result, "stdout", "") or "").strip()
+    return f"NAT rules in {PF_ANCHOR}:\n{rules or '(none loaded)'}"
+
+
 class NetDnsMonitorApp(rumps.App):
-    def __init__(self, config_path: str = DEFAULT_CONFIG_PATH):
+    def __init__(
+        self,
+        config_path: str = DEFAULT_CONFIG_PATH,
+        router_factory: Callable[..., object] = Router,
+    ):
         set_app_display_name(DISPLAY_NAME)
         super().__init__(name=DISPLAY_NAME, title=f"{STATS_UNKNOWN} Net/DNS: starting...")
         self.config = load_config(config_path)
@@ -528,6 +546,8 @@ class NetDnsMonitorApp(rumps.App):
         self.peer_registry.load(load_record(self.config["peer_record_path"]))
         self.peer_network: Optional[PeerNetwork] = None
         self._peers_dirty = True
+        # None until the first save, so the first dirty UI tick writes at once.
+        self._peers_saved_at: Optional[float] = None
 
         self.history = SampleHistory(
             path=self.config["history_path"],
@@ -573,6 +593,9 @@ class NetDnsMonitorApp(rumps.App):
         # `sudo -n -l`, and the window refreshes every second. Re-probed after a
         # grant or revoke, and once at launch.
         self.privileges_granted = False
+        # Whether this app's own sudoers rule is listed. None until probed, which
+        # status_rows reads as "follow privileges_granted".
+        self.privileges_file_rule_listed: Optional[bool] = None
         self.dhcp_interfaces: list[str] = []
         # What the installed grant covers, which is not the same set as the
         # interfaces the machine has -- see privileges.granted_interfaces.
@@ -594,7 +617,16 @@ class NetDnsMonitorApp(rumps.App):
         # dashboard button the *same* console, sharing one cwd and one history
         # rather than opening two that silently disagree.
         self.console: Optional[ConsoleWindowController] = None
+        # A console command still running at quit would outlive the app.
+        # `callbacks` is a set, so the many apps a test run builds register once.
+        rumps.events.before_quit.register(console.kill_running)
         self.router_window = None
+        # Router menu work runs on workers and reports through this queue: Start
+        # and Stop wait on the macOS admin dialog, and the reads shell out.
+        self.router_run_fn: Callable[..., object] = subprocess.run
+        self._router_thread: Optional[threading.Thread] = None
+        self._router_info_thread: Optional[threading.Thread] = None
+        self._router_results: queue.Queue = queue.Queue()
 
         # Indicator rows carry no callback, which is what greys them out: they
         # are readouts, not actions. Titles are set by _refresh_failover_menu.
@@ -615,7 +647,6 @@ class NetDnsMonitorApp(rumps.App):
             None,
             rumps.MenuItem("Router"),
             "Start at Login",
-
             "Test network alert",
             None,
             # Below the everyday items, and behind a separator, because two of
@@ -653,23 +684,22 @@ class NetDnsMonitorApp(rumps.App):
         self.launch_timer.start()
         set_dock_icon("healthy")
 
-        agent_path = os.path.expanduser("~/Library/LaunchAgents/com.netdnsmonitor.plist")
-        if os.path.exists(agent_path):
-            self.menu["Start at Login"].state = True
+        self.menu["Start at Login"].state = login_item_installed()
 
-        if self.config.get("router_enabled"):
-            self.router = Router(
-                wan_if=self.config.get("wan_interface", "en3"),
-                lan_if=self.config.get("lan_interface", "en0"),
-                lan_ip=self.config.get("lan_ip", "192.168.10.1"),
-                lan_netmask=self.config.get("lan_netmask", "255.255.255.0"),
-                dhcp_start=self.config.get("dhcp_start", "192.168.10.100"),
-                dhcp_end=self.config.get("dhcp_end", "192.168.10.200")
+        # Built but never started here. Starting runs a root script behind the
+        # macOS admin dialog, and __init__ runs on every launch and login: the
+        # dialog appeared unasked, and the app waited on it before any timer ran.
+        # The menu's Start item and the router window are the only ways to start it.
+        self.router = None
+        if self.config["router_enabled"]:
+            self.router = router_factory(
+                wan_if=self.config["wan_interface"],
+                lan_if=self.config["lan_interface"],
+                lan_ip=self.config["lan_ip"],
+                lan_netmask=self.config["lan_netmask"],
+                dhcp_start=self.config["dhcp_start"],
+                dhcp_end=self.config["dhcp_end"],
             )
-            self.router.start()
-        else:
-            self.router = None
-
 
     # --- launch-time UI setup ----------------------------------------------
 
@@ -747,6 +777,11 @@ class NetDnsMonitorApp(rumps.App):
         """
         if not self.config["peer_discovery_enabled"]:
             return
+        if self.peer_network is not None and not self.peer_network.alive():
+            # The reader thread ended (its socket closed under it). Announcing
+            # from a dead network would look like discovery still worked.
+            self.peer_network.stop()
+            self.peer_network = None
         if self.peer_network is None and not self._start_peer_network():
             return
 
@@ -815,15 +850,16 @@ class NetDnsMonitorApp(rumps.App):
     def _save_peer_record(self):
         save_record(self.peer_registry, self.config["peer_record_path"])
         self._peers_dirty = False
+        self._peers_saved_at = time.monotonic()
 
     def tick(self, _sender=None):
-        # A raise here lands in the rumps timer callback and kills monitoring
-        # for the rest of the session, so every tick is guarded. Real triggers
-        # exist: a TCC-denied /etc/resolver listing in the ladder, or a
-        # read-only volume under reports_dir.
+        # rumps 0.4.0 catches an exception in Timer.callback_, so the timer
+        # survives a raise. What does not survive is the rest of the tick: the
+        # title repaint, the gate-recovery note, and on an incident edge the
+        # alert, which the gate never offers again. So every tick is guarded.
         try:
             self._tick()
-        except Exception as exc:  # noqa: BLE001 - a dead timer is worse than a lost tick
+        except Exception as exc:  # noqa: BLE001 - the rest of the tick must still run
             self.last_tick_error = f"{type(exc).__name__}: {exc}"
             try:
                 # The recovery path must not raise either, or the guard has
@@ -837,9 +873,19 @@ class NetDnsMonitorApp(rumps.App):
     def _tick(self):
         report = self.state_machine.tick()
         if report is not None:
-            paths = save_report(report, self.config["reports_dir"])
-            self.last_report_path = paths["markdown_path"]
+            # Before anything that can fail. The gate reports only on the
+            # healthy->incident edge, so this report is the only one the incident
+            # will get: a save that raised used to skip the classification, the
+            # alert and the forensic DOWN, and the next tick had nothing to redo.
             self.last_classification = report["classification"]
+            try:
+                report_path = save_report(report, self.config["reports_dir"])["markdown_path"]
+            except Exception as exc:  # noqa: BLE001 - a lost file must not cost the alert
+                report_path = None
+                self.last_tick_error = f"report not saved: {type(exc).__name__}"
+            # None rather than the previous path: that file describes an earlier
+            # incident, and the window shows this path beside this classification.
+            self.last_report_path = report_path
             # Redact on the way out for the same reason escalation does: Slack
             # and email are off-machine, and the on-disk report is not.
             #
@@ -848,7 +894,7 @@ class NetDnsMonitorApp(rumps.App):
             # report over and redacting there -- would put the one step that
             # must not be skipped on the far side of a thread boundary.
             text = redact(
-                format_notification(report, paths["markdown_path"]),
+                format_notification(report, report_path),
                 self.config["sensitive_strings"],
             )
             self._send_notification(text)
@@ -1145,6 +1191,10 @@ class NetDnsMonitorApp(rumps.App):
         _finish_localization_if_due.
         """
         if not self.config["peer_discovery_enabled"] or self.peer_network is None:
+            return
+        if not self.peer_network.alive():
+            # No listener to hear the pongs, so a verdict computed later would
+            # read every peer as silent. peer_tick rebuilds the network.
             return
         self.peer_network.probe(self.peer_registry.addresses_to_probe())
         self._localize_due_at = time.monotonic() + self.config["peer_probe_wait_seconds"]
@@ -1456,7 +1506,10 @@ class NetDnsMonitorApp(rumps.App):
             granted_commands = privileges.granted_commands_now()
             self._privilege_results.put(
                 {
-                    "granted": " ".join(privileges.MDNS_HUP) in granted_commands,
+                    # covers, not exact-line membership: a blanket NOPASSWD: ALL
+                    # permits the restart, and the window said "not granted".
+                    "granted": privileges.covers(granted_commands, privileges.MDNS_HUP),
+                    "file_rule_listed": privileges.own_rule_listed(granted_commands),
                     "interfaces": privileges.dhcp_interfaces(),
                     "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
                     "primary": privileges.primary_interface(),
@@ -1484,6 +1537,9 @@ class NetDnsMonitorApp(rumps.App):
             # routing table; keep the last known answer rather than blanking it.
             self.primary_dhcp_interface = result.get("primary", self.primary_dhcp_interface)
             self.granted_interfaces = result.get("granted_interfaces", self.granted_interfaces)
+            self.privileges_file_rule_listed = result.get(
+                "file_rule_listed", self.privileges_file_rule_listed
+            )
             self.privileges_probed = self.privileges_probed or result.get("probed", False)
             if result.get("message"):
                 self._append_output(result["message"] + "\n")
@@ -1536,11 +1592,15 @@ class NetDnsMonitorApp(rumps.App):
             # here. Re-enumerating was how the installed grant could end up larger
             # than the one printed; _grant_privileges now refuses to prompt until it
             # has a real list instead.
-            outcome = privileges.grant(getpass.getuser(), interfaces)
+            # The account this process runs as. getpass.getuser() reads LOGNAME
+            # and USER first, so an inherited environment could name someone else
+            # in a rule that grants root commands.
+            outcome = privileges.grant(pwd.getpwuid(os.getuid()).pw_name, interfaces)
             granted_commands = privileges.granted_commands_now()
             self._privilege_results.put(
                 {
-                    "granted": " ".join(privileges.MDNS_HUP) in granted_commands,
+                    "granted": privileges.covers(granted_commands, privileges.MDNS_HUP),
+                    "file_rule_listed": privileges.own_rule_listed(granted_commands),
                     "interfaces": privileges.dhcp_interfaces(),
                     "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
                     "message": outcome["message"],
@@ -1571,7 +1631,8 @@ class NetDnsMonitorApp(rumps.App):
             granted_commands = privileges.granted_commands_now()
             self._privilege_results.put(
                 {
-                    "granted": " ".join(privileges.MDNS_HUP) in granted_commands,
+                    "granted": privileges.covers(granted_commands, privileges.MDNS_HUP),
+                    "file_rule_listed": privileges.own_rule_listed(granted_commands),
                     "interfaces": self.dhcp_interfaces,
                     "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
                     "message": outcome["message"],
@@ -1597,11 +1658,16 @@ class NetDnsMonitorApp(rumps.App):
         self._drain_action_results()
         self._drain_log_results()
         self._drain_privilege_results()
+        self._drain_router_results()
         self._finish_localization_if_due()
         self._refresh_mini()
-        if self._peers_dirty:
+        if self._peers_dirty and (
+            self._peers_saved_at is None
+            or time.monotonic() - self._peers_saved_at >= PEER_SAVE_MIN_INTERVAL_SECONDS
+        ):
             # A peer was heard from on the listener thread. Persisting from here
-            # keeps all file writing on the main thread.
+            # keeps all file writing on the main thread. Throttled: every peer message
+            # marks the registry dirty, and this runs every second.
             self._save_peer_record()
         self._refresh_dashboard()
         self._refresh_log_pane()
@@ -1631,8 +1697,20 @@ class NetDnsMonitorApp(rumps.App):
     def open_settings(self):
         if self._settings is None:
             self._settings = SettingsWindow(on_save=self._save_settings)
-        self._settings.load(self.config)
+        # The file, not the running config: restart-only keys keep their launch
+        # values in self.config, and the window edits what is on disk.
+        problem = None
+        try:
+            shown = load_config(self.config_path)
+        except Exception as exc:  # noqa: BLE001 - an unreadable file must not block the window
+            shown = self.config
+            problem = config_error_text(exc)
+        self._settings.load(shown)
         self._settings.show()
+        if problem:
+            self._settings.set_status(
+                f"Showing the running config; the file was not read -- {problem}"
+            )
 
     def _save_settings(self, values: Optional[dict]) -> str:
         """Parse, write, and report. Called from the window's Save button.
@@ -1647,18 +1725,31 @@ class NetDnsMonitorApp(rumps.App):
         need a restart.
         """
         if values is None:
-            self.config = load_config(self.config_path)
+            fresh = load_config(self.config_path)
+            self._apply_live_config(fresh)
             if self._settings is not None:
-                self._settings.load(self.config)
+                self._settings.load(fresh)
             return "Reloaded from disk."
 
         updates = collect(values)  # raises ValueError, which the window reports
+        previous = dict(self.config)
         result = save_config(self.config_path, updates)
-        self.config = load_config(self.config_path)
-        note = restart_note(updates)
+        self._apply_live_config(load_config(self.config_path))
+        note = restart_note(updates, previous=previous)
         if result["backup"]:
             note += f"\nPrevious config saved as {os.path.basename(result['backup'])}"
         return note
+
+    def _apply_live_config(self, fresh: dict):
+        """Fold a freshly loaded config into the running one, in place.
+
+        In place because the ping, resolution and router-window closures hold
+        this dict: rebinding self.config left them reading the launch values, so
+        a saved ping_host changed nothing. Restart-only keys keep their launch
+        values, so the running config matches what the running objects were
+        built from.
+        """
+        self.config.update({k: v for k, v in fresh.items() if k not in NEEDS_RESTART})
 
     def toggle_mini_window(self):
         """Collapse to the glanceable panel, or put it away."""
@@ -1685,6 +1776,7 @@ class NetDnsMonitorApp(rumps.App):
                 status_state(flap_gate.state, flap_gate.consecutive_failures, ping["down"]),
                 rtt_ms=ping["rtt_ms"],
                 loss_pct=ping["loss_pct"],
+                reason="ping" if ping["down"] else self.last_classification,
             )
         )
 
@@ -1723,6 +1815,7 @@ class NetDnsMonitorApp(rumps.App):
                     # What the grant covers, not what the machine has.
                     interfaces=self.granted_interfaces,
                     primary=self.primary_dhcp_interface,
+                    file_rule_listed=self.privileges_file_rule_listed,
                 ),
             )
         )
@@ -1746,7 +1839,10 @@ class NetDnsMonitorApp(rumps.App):
         ping does not run here.
         """
         if action_id == "open_router_window":
-            self.open_router_window(None)
+            try:
+                self._open_router_window()
+            except Exception as exc:  # noqa: BLE001 - a window failure must not cost the click
+                self._append_output(f"Router console failed: {type(exc).__name__}\n")
             return
         if action_id == "open_console":
             # Straight to the menu bar handler, not a fresh controller: two
@@ -1862,7 +1958,11 @@ class NetDnsMonitorApp(rumps.App):
         step = step_by_name(action_id)
         if step is None:
             return [f"Unknown step {action_id!r}."]
-        outcome = self.state_machine.repair_executor(step)
+        # Per step, never around a loop: tick() waits for this lock on the run
+        # loop during an incident, so holding it across a whole ladder would
+        # freeze the window and every timer for all of it.
+        with self.state_machine.lock:
+            outcome = self.state_machine.repair_executor(step)
         events.append({"detail": step.name, "reason": step.reason, "result": outcome})
         return [f"why: {step.reason}", f"result: {outcome}"]
 
@@ -1923,7 +2023,10 @@ class NetDnsMonitorApp(rumps.App):
             f"probe: {probe}",
             f"classified as: {classification.value}",
         ]
-        steps = ladder_for(classification)
+        # The configured classifications, not ladder_for's default: that default
+        # adds the failover step to every network ladder, so a manual diagnosis
+        # attempted a failover the configuration had not put on the ladder.
+        steps = ladder_for(classification, self.state_machine.failover_classifications)
         if not steps:
             lines.append(
                 "No ladder for this classification -- nothing is broken, or "
@@ -1931,7 +2034,9 @@ class NetDnsMonitorApp(rumps.App):
             )
             return lines
         for step in steps:
-            outcome = self.state_machine.repair_executor(step)
+            # Per step, for the reason given in _single_step.
+            with self.state_machine.lock:
+                outcome = self.state_machine.repair_executor(step)
             lines.append(f"[{step.kind}] {step.name}")
             lines.append(f"    why: {step.reason}")
             lines.append(f"    result: {outcome}")
@@ -2072,8 +2177,9 @@ class NetDnsMonitorApp(rumps.App):
 
         Guarded, an idea carried over from the failover line's console: building
         an AppKit window can fail, and a failure to open the console must cost
-        the console, not the monitoring -- this runs on the run loop, so an
-        escaping exception would take the timers with it. `console_window`
+        the console and nothing else. rumps 0.4.0 catches an exception in
+        MenuItem.callback_, so the timers would survive one, but the click would
+        do nothing visible and a half-built controller would be kept. `console_window`
         itself imports AppKit inside its methods rather than at module scope, so
         the import at the top of this file is safe; it is `show()` that can raise.
         """
@@ -2081,7 +2187,7 @@ class NetDnsMonitorApp(rumps.App):
             if self.console is None:
                 self.console = ConsoleWindowController(status=self.status_snapshot)
             self.console.show()
-        except Exception as exc:  # noqa: BLE001 - a dead timer is worse than no console
+        except Exception as exc:  # noqa: BLE001 - a failed window must say so
             # Cleared so a later attempt rebuilds rather than reusing a
             # half-constructed controller.
             self.console = None
@@ -2157,70 +2263,209 @@ class NetDnsMonitorApp(rumps.App):
         """
         alert.network_failed(self.config["ping_host"], error="test alert, not a real outage")
 
+    # --- router ------------------------------------------------------------
 
+    def _notify(self, subtitle: str, message: str):
+        """A notification that cannot raise into a menu callback."""
+        try:
+            rumps.notification("Net/DNS Monitor", subtitle, message)
+        except Exception:  # noqa: BLE001 - a lost banner must not cost the click
+            traceback.print_exc()
 
+    def _open_router_window(self):
+        """Raises on failure; each caller reports it where its user is looking."""
+        try:
+            if self.router_window is None:
+                # A getter and the path, not a copy of the dict: the window writes
+                # its own keys through save_config, and reads the live config.
+                self.router_window = RouterWindowController(
+                    config_getter=lambda: self.config,
+                    config_path=self.config_path,
+                    app=self,
+                )
+            self.router_window.show()
+        except Exception:
+            # Cleared so a later attempt rebuilds rather than reusing a
+            # half-constructed controller.
+            self.router_window = None
+            raise
 
     @rumps.clicked("Router", "Management Console")
-    def open_router_window(self, _sender):
-        if self.router_window is None:
-            self.router_window = RouterWindowController(config=self.config, app=self)
-        self.router_window.show()
+    def open_router_window(self, _sender=None):
+        try:
+            self._open_router_window()
+        except Exception as exc:  # noqa: BLE001 - a failed window must say so
+            self._notify(
+                "Router console",
+                f"Could not open the router console window ({type(exc).__name__}).",
+            )
 
     @rumps.clicked("Router", "Configure...")
-    def configure_router(self, _sender):
-        import subprocess
-        config_path = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
-        subprocess.run(["open", "-t", config_path], check=False)
+    def configure_router(self, _sender=None):
+        """Open the config file this app actually loaded, creating it if absent.
+
+        `open -t` on a missing file exits non-zero and shows nothing, and the
+        path used to be hardcoded rather than the one passed to the app.
+        """
+        path = self.config_path
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            if not os.path.exists(path):
+                with open(path, "a", encoding="utf-8"):
+                    pass
+            result = self.router_run_fn([OPEN_BIN, "-t", path], check=False, timeout=10)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self._notify("Router", f"Could not open {path} ({type(exc).__name__}).")
+            return
+        code = getattr(result, "returncode", 0)
+        if code != 0:
+            self._notify("Router", f"Could not open {path} (open exited {code}).")
+
+    def _router_or_notify(self):
+        if self.router is None:
+            self._notify("Router", "Router disabled (set router_enabled)")
+        return self.router
+
+    def _start_router_worker(
+        self,
+        slot: str,
+        label: str,
+        work: Callable[[], object],
+        reveal: bool = False,
+    ) -> bool:
+        """Run `work` on a worker and queue its text for the UI tick to show.
+
+        Two slots, so a diagnostics read is not refused while the admin dialog
+        for Start waits on a password -- and two Starts never stack. `reveal`
+        opens the dashboard for output too long for a notification.
+        """
+        running = getattr(self, slot)
+        if running is not None and running.is_alive():
+            self._notify("Router", f"{label}: the previous router action is still running.")
+            return False
+
+        def runner():
+            try:
+                outcome = work()
+            except Exception as exc:  # noqa: BLE001 - a worker must not die silently
+                outcome = f"failed: {type(exc).__name__}"
+            self._router_results.put((label, str(outcome), reveal))
+
+        thread = threading.Thread(target=runner, name=f"router{slot}", daemon=True)
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            self._notify(
+                "Router", f"{label}: failed: could not start a worker ({type(exc).__name__})"
+            )
+            return False
+        setattr(self, slot, thread)
+        return True
+
+    def _drain_router_results(self):
+        """Main thread: print each outcome to the results pane and announce it.
+
+        The pane, rather than rumps.alert, because an alert is modal: it holds
+        the run loop, and with it every monitoring timer, until someone clicks OK.
+        """
+        while True:
+            try:
+                label, text, reveal = self._router_results.get_nowait()
+            except queue.Empty:
+                return
+            if reveal:
+                try:
+                    self.open_dashboard()
+                except Exception:  # noqa: BLE001 - the notification still reports it
+                    traceback.print_exc()
+            self._append_output(f"\n>>> {label}\n{text}\n")
+            first = text.strip().splitlines()[0] if text.strip() else "(no output)"
+            self._notify("Router", f"{label}: {first[:200]}")
 
     @rumps.clicked("Router", "Start")
-    def start_router(self, _sender):
-        if self.router: self.router.start()
+    def start_router(self, _sender=None):
+        router = self._router_or_notify()
+        if router is not None:
+            self._start_router_worker("_router_thread", "Start router", router.start)
 
     @rumps.clicked("Router", "Stop")
-    def stop_router(self, _sender):
-        if self.router: self.router.stop()
+    def stop_router(self, _sender=None):
+        router = self._router_or_notify()
+        if router is not None:
+            self._start_router_worker("_router_thread", "Stop router", router.stop)
+
+    def _router_interfaces(self) -> tuple:
+        router = self.router
+        if router is not None:
+            return router.wan_if, router.lan_if
+        return self.config["wan_interface"], self.config["lan_interface"]
 
     @rumps.clicked("Router", "List Interfaces")
-    def list_interfaces(self, _sender):
-        import subprocess
-        output = subprocess.check_output(["networksetup", "-listallhardwareports"], text=True)
-        rumps.alert(title="Network Interfaces", message=output)
+    def list_interfaces(self, _sender=None):
+        run_fn = self.router_run_fn
+
+        def work() -> str:
+            names = get_interfaces(run_fn)
+            if not names:
+                return "Could not list network interfaces."
+            return "\n".join(names)
+
+        self._start_router_worker("_router_info_thread", "Network interfaces", work, reveal=True)
 
     @rumps.clicked("Router", "Troubleshoot")
-    def troubleshoot_router(self, _sender):
-        import subprocess
-        try:
-            pf_out = subprocess.check_output(["sudo", "pfctl", "-s", "nat"], text=True)
-            ip_fwd = subprocess.check_output(["sysctl", "net.inet.ip.forwarding"], text=True)
-            is_bootpd = "bootpd" in subprocess.check_output(["ps", "aux"], text=True)
-            status = f"IP Forwarding: {ip_fwd}\nNAT Rules:\n{pf_out}\nDHCP Server Running: {is_bootpd}"
-            rumps.alert(title="Router Diagnostics", message=status)
-        except Exception as e:
-            rumps.alert(title="Router Diagnostics Error", message=f"Need sudo for full diagnostics.\n{e}")
+    def troubleshoot_router(self, _sender=None):
+        run_fn = self.router_run_fn
+        wan, lan = self._router_interfaces()
+
+        def work() -> str:
+            lines = collect_diagnostics(run_fn, wan, lan)
+            lines.append("\n" + router_nat_text(run_fn))
+            return "\n".join(lines)
+
+        self._start_router_worker("_router_info_thread", "Router diagnostics", work, reveal=True)
+
+    # --- login item ----------------------------------------------------------
 
     @rumps.clicked("Start at Login")
     def toggle_login(self, sender):
-        import os, plistlib
-        agent_dir = os.path.expanduser("~/Library/LaunchAgents")
-        os.makedirs(agent_dir, exist_ok=True)
-        plist_path = os.path.join(agent_dir, "com.netdnsmonitor.plist")
-        sender.state = not sender.state
-        
-        if sender.state:
-            plist_data = {
-                "Label": "com.netdnsmonitor",
-                "ProgramArguments": [
-                    "/bin/bash", "-c",
-                    "cd /Users/mitch.hudson/dev/net-dns-monitor && /Users/mitch.hudson/dev/net-dns-monitor/.venv/bin/python -m netdnsmonitor.app"
-                ],
-                "RunAtLoad": True,
-                "KeepAlive": False
-            }
-            with open(plist_path, "wb") as f:
-                plistlib.dump(plist_data, f)
-        else:
-            if os.path.exists(plist_path):
-                os.remove(plist_path)
+        """Install or remove this item's LaunchAgent, then show what is on disk.
+
+        The checkmark is set from the files after the write, never flipped
+        before it: a write that failed used to leave the item checked with no
+        agent installed. The service script's agent is reported but not
+        removed here -- it carries the supervision flag, and
+        `net-dns-monitor-service uninstall` is what takes it out.
+        """
+        own = login_agent_path(LOGIN_AGENT_LABEL)
+        service = login_agent_path(SERVICE_AGENT_LABEL)
+        try:
+            if login_item_installed():
+                if os.path.exists(own):
+                    os.remove(own)
+                if os.path.exists(service):
+                    self._notify(
+                        "Start at Login",
+                        "Still on: net-dns-monitor-service installed its own login agent. "
+                        "Run `net-dns-monitor-service uninstall` to remove it.",
+                    )
+            else:
+                frozen = bool(getattr(sys, "frozen", False))
+                executable = _bundle_executable() if frozen else sys.executable
+                source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                plist = login_agent_plist(frozen, executable, source_root)
+                os.makedirs(os.path.dirname(own), exist_ok=True)
+                staged = own + ".tmp"
+                try:
+                    with open(staged, "wb") as f:
+                        plistlib.dump(plist, f)
+                    os.replace(staged, own)
+                finally:
+                    if os.path.exists(staged):
+                        os.remove(staged)
+        except OSError as exc:
+            self._notify("Start at Login", f"Not changed ({type(exc).__name__}).")
+        sender.state = login_item_installed()
+
 
 def main():
     NetDnsMonitorApp().run()

@@ -324,8 +324,10 @@ BACKUP_ROW = {"name": "Wi-Fi", "device": "en0", "found": True, "reachable": True
 
 def snapshot(**overrides):
     """`active_service` is what the system reports; `active_side` is derived
-    from it. A fixture where the two disagree describes a state that cannot
-    happen, so the helper keeps them consistent unless told otherwise.
+    from it: "backup" when a configured backup heads the order, "preferred"
+    otherwise -- including when a third service heads it. The helper derives
+    `active_service` from `active_side` unless told otherwise; passing a third
+    name with the default side reproduces what failover.snapshot reports for it.
     """
     snap = {
         "error": None,
@@ -371,6 +373,16 @@ def test_the_live_side_is_marked_and_the_other_is_not():
     assert on_preferred[1].startswith("●") and on_preferred[2].startswith("○")
     on_backup = build_failover_lines(snapshot(active_side="backup"))
     assert on_backup[1].startswith("○") and on_backup[2].startswith("●")
+
+
+def test_a_third_service_at_the_head_fills_neither_marker():
+    """failover.snapshot reports `active_side` "preferred" for any head of the
+    order that is not a configured backup. Filling the preferred marker for a
+    Thunderbolt Bridge claims traffic is on a link that carries none.
+    """
+    lines = build_failover_lines(snapshot(active_service="Thunderbolt Bridge"))
+    assert lines[1].startswith("○")
+    assert lines[2].startswith("○")
 
 
 def test_rows_name_the_device():

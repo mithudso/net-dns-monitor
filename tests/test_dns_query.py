@@ -30,11 +30,23 @@ def test_returns_false_when_rcode_is_nonzero():
     assert query_public_dns("example.com", send_recv_fn=send_recv_fn) is False
 
 
-def test_returns_false_on_transport_error():
+def test_returns_none_on_transport_error():
+    """No reply means the name was never tested. Returning False here made a
+    timeout or a blocked UDP port 53 read as "did NOT resolve via public
+    resolver" -- an unknown reported as a failed reading.
+    """
+
     def raising(packet, server, port, timeout):
         raise OSError("network unreachable")
 
-    assert query_public_dns("example.com", send_recv_fn=raising) is False
+    assert query_public_dns("example.com", send_recv_fn=raising) is None
+
+
+def test_returns_none_when_the_resolver_never_answers():
+    def timing_out(packet, server, port, timeout):
+        raise TimeoutError("timed out")
+
+    assert query_public_dns("example.com", send_recv_fn=timing_out) is None
 
 
 def test_query_packet_encodes_domain_labels():

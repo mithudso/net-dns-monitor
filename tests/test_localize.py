@@ -49,6 +49,26 @@ def test_unknown_own_state_is_not_treated_as_a_failure():
     assert result["verdict"] == INCONCLUSIVE
 
 
+def test_an_unprobed_machine_does_not_claim_nothing_is_failing():
+    """(None, None) is "not probed yet", not "probed and healthy". Saying nothing
+    is failing asserts a reading that was never taken.
+    """
+    result = localize(our_external_reachable=None, our_dns_ok=None, peers=[peer()])
+    assert result["verdict"] == INCONCLUSIVE
+    assert "Nothing is currently failing" not in result["reason"]
+    assert "not been probed" in result["reason"]
+
+
+def test_a_healthy_verdict_names_the_probe_it_rests_on():
+    """The reason must say what was seen, so a reader can tell a partial probe
+    from a complete one.
+    """
+    result = localize(our_external_reachable=True, our_dns_ok=None, peers=[peer()])
+    assert "Nothing is currently failing" not in result["reason"]
+    assert "external_reachable=True" in result["reason"]
+    assert "dns_ok=None" in result["reason"]
+
+
 def test_no_peers_means_the_question_cannot_be_answered():
     """One machine genuinely cannot tell these cases apart. Saying so, and saying
     what would fix it, beats a guess.
@@ -93,13 +113,18 @@ def test_a_peer_equally_cut_off_points_upstream():
     assert result["confidence"] == "high"
 
 
-def test_a_peer_that_answers_but_reports_nothing_still_rules_out_this_machine():
-    """An older peer, or one that has not probed yet. It proves the LAN is intact,
-    which is worth a medium-confidence answer rather than nothing at all.
+def test_a_peer_that_answers_but_reports_nothing_gives_only_a_medium_verdict():
+    """An older peer, or one that has not probed yet. It proves the LAN is
+    reachable from here, which is worth a medium-confidence answer rather than
+    nothing at all -- but it does not rule out this machine's route, firewall or
+    VPN, and the reason must not say it does.
     """
     result = localize(our_external_reachable=False, our_dns_ok=None, peers=[peer()])
     assert result["verdict"] == LOCAL_NETWORK
     assert result["confidence"] == "medium"
+    assert "link and the LAN are working" not in result["reason"]
+    for still_possible in ("route, firewall or VPN", "router", "ISP"):
+        assert still_possible in result["reason"]
 
 
 def test_a_silent_peer_is_ignored_when_another_one_answers():
@@ -138,6 +163,45 @@ def test_dns_broken_here_with_a_silent_peer_dns_state_is_only_medium():
     result = localize(our_external_reachable=True, our_dns_ok=False, peers=[peer(external=True)])
     assert result["verdict"] == LOCAL_DNS
     assert result["confidence"] == "medium"
+
+
+def test_dns_only_failure_with_silent_peers_is_not_blamed_on_the_link():
+    """Every peer silent is evidence against our link only when we also cannot
+    get out. Here addresses are reachable, so the link works and a silent peer
+    says nothing about it; blaming "this machine's own link" at high confidence
+    sends someone after a working interface.
+    """
+    result = localize(our_external_reachable=True, our_dns_ok=False, peers=[peer(answered=False)])
+    assert result["verdict"] == LOCAL_DNS
+    assert result["confidence"] == "medium"
+    assert "own link" not in result["reason"]
+
+
+def test_every_peer_silent_with_unprobed_reachability_is_not_blamed_on_the_link():
+    """None is not False: an unprobed external check cannot supply the "we
+    cannot get out" half of the all-silent signal.
+    """
+    result = localize(our_external_reachable=None, our_dns_ok=False, peers=[peer(answered=False)])
+    assert result["verdict"] != LOCAL_MACHINE
+    assert result["confidence"] != "high"
+
+
+@pytest.mark.parametrize("peer_dns", [True, False, None])
+def test_unprobed_external_does_not_claim_address_reachability(peer_dns):
+    """Only DNS was seen failing; whether addresses are reachable was never
+    checked. A reason that says they are, at high confidence, states a reading
+    that does not exist.
+    """
+    result = localize(
+        our_external_reachable=None, our_dns_ok=False, peers=[peer(external=True, dns=peer_dns)]
+    )
+    assert result["verdict"] in (LOCAL_DNS, DNS_OUTAGE)
+    assert result["confidence"] != "high"
+    reason = result["reason"]
+    assert "by address" not in reason
+    assert "addresses are still reachable" not in reason
+    assert "can still reach addresses" not in reason
+    assert "not probed" in reason
 
 
 def test_the_network_layer_is_decided_before_the_dns_layer():

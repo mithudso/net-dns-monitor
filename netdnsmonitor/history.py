@@ -151,6 +151,13 @@ class SampleHistory:
             if isinstance(sample, dict) and "at" in sample:
                 self.samples.append(_coerce(sample))
                 loaded += 1
+        if loaded:
+            # The graphs draw by index, not by timestamp, so the previous run's
+            # last sample and this run's first would be adjacent points and the
+            # time the app was not running would render as a continuous line.
+            # One all-None sample makes that downtime a gap. It is not appended to
+            # the file here; a later compaction keeps it, which is still true.
+            self.samples.append(_coerce({"at": self.clock().isoformat()}))
         return loaded
 
 
@@ -161,7 +168,10 @@ def _coerce(sample: dict) -> dict:
     expected would raise inside a draw call -- i.e. inside an AppKit callback,
     where the traceback is invisible.
     """
-    out = {"at": str(sample.get("at", "")), "down": bool(sample.get("down"))}
+    # `down` stays None when it was never recorded -- the restart gap marker, or a
+    # hand-edited line -- because nothing was probed and "not down" is a claim.
+    down = sample.get("down")
+    out = {"at": str(sample.get("at", "")), "down": None if down is None else bool(down)}
     for field in FIELDS:
         value = sample.get(field)
         try:

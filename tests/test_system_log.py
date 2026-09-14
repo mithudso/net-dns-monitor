@@ -317,6 +317,28 @@ def test_emptying_the_buffer_forgets_what_was_evicted_too():
     assert len(buffer.add([old_line])) == 1
 
 
+def test_a_wall_clock_step_back_does_not_make_new_lines_look_evicted():
+    """`log show` prints local wall-clock time, so at the end of daylight saving
+    (2026-11-01 in the US) the 01:00-01:59 hour happens twice. The eviction
+    high-water mark from the first pass sat above every line of the second pass,
+    so each new line compared as already evicted and was dropped -- 600 of 3,600
+    in the repro -- until the clock caught up an hour later.
+    """
+    buffer = LogBuffer(max_entries=50)
+    first_pass = [
+        entry(timestamp=f"2026-11-01 01:{minute:02d}:00.000", message=f"first {minute}")
+        for minute in range(60)
+    ]
+    buffer.add(first_pass)
+    assert len(buffer.entries()) == 50  # ten evicted, so the mark is 01:09
+
+    after_fall_back = entry(timestamp="2026-11-01 01:00:30.000", message="second pass")
+    assert buffer.add([after_fall_back]) == [after_fall_back]
+    # Resetting the mark must not reopen the overlap de-duplication for what is
+    # still held: the next overlapping poll hands the same line over again.
+    assert buffer.add([after_fall_back]) == []
+
+
 def test_the_buffer_counts_errors_separately_from_entries():
     buffer = LogBuffer()
     buffer.add(parse_lines([UNREACHABLE, MDNS_DEFAULT]))
