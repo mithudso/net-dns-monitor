@@ -1,0 +1,7 @@
+{
+  "unbound/unbound.conf": "DNS resolver config",
+  "dnsmasq/dnsmasq.conf": "DHCP server config",
+  "router/scripts/enable_nat.sh": "PF NAT routing",
+  "router/scripts/install_persistent_nat.sh": "LaunchDaemon boot script",
+  "router/scripts/test_router.sh": "Diagnostic suite"
+}
