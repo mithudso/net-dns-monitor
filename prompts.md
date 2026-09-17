@@ -25,3 +25,11 @@ Delta: 1
 Prompt:
 
 > 1. yes. 2. yes 3. both 4. conservative 5. I don't export anything. 6. gateway fallback 7. yes inspect.
+
+## v4 - 2026-09-17 - App Store readiness and submission documentation
+
+Delta: 1
+
+Prompt:
+
+> Get this repo ready for submitssion to the apple store and document everything necessary to submit

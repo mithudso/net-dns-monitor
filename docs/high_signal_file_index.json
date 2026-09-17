@@ -993,6 +993,24 @@
       "purpose": "Empty package marker.",
       "read_when": "Never; it is empty.",
       "entry_symbols": []
+    },
+    {
+      "path": "unbound/unbound.conf",
+      "role": "config",
+      "importance": "high",
+      "purpose": "Unbound resolver config for the router/ stack (192.168.4.1). Symlinked from /opt/homebrew/etc/unbound on the owner's Mac, so a change here reaches the live resolver at its next restart."
+    },
+    {
+      "path": "dnsmasq/dnsmasq.conf",
+      "role": "config",
+      "importance": "high",
+      "purpose": "dnsmasq DHCP config for the router/ stack; port=0 so DNS stays with unbound. Symlinked from /opt/homebrew/etc on the owner's Mac."
+    },
+    {
+      "path": "router/scripts/test_router.sh",
+      "role": "script",
+      "importance": "medium",
+      "purpose": "Read-only diagnostic suite for the router/ stack: forwarding sysctl, pf NAT anchor, dnsmasq/unbound liveness."
     }
   ]
 }
