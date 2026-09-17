@@ -31,6 +31,17 @@ PLIST = {
     "CFBundleShortVersionString": "1.0",
     "CFBundleVersion": "1",
     "LSUIElement": False,
+    # macOS 15 and later gate traffic to local-network addresses behind a
+    # per-app permission (Apple TN3179). This app trips it on purpose: the peer
+    # announcement is a UDP broadcast and the interface probe reaches the
+    # gateway. The prompt appears either way; this string is the reason the
+    # user sees in it, and a store build without it is refused by
+    # build_appstore.py.
+    "NSLocalNetworkUsageDescription": (
+        "Net-DNS-Monitor checks whether your router and other devices on your local "
+        "network are reachable, and announces itself to other copies of the app on "
+        "the same network."
+    ),
 }
 
 OPTIONS = {

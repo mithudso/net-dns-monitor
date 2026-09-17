@@ -6,6 +6,7 @@ that call py2app, clang, codesign and productbuild are exercised by running the
 ad-hoc build, which docs/APP_STORE_SUBMISSION.md describes.
 """
 
+import ast
 import importlib.util
 import plistlib
 import zipfile
@@ -263,3 +264,81 @@ def test_an_rpath_that_climbs_out_of_the_bundle_does_not_resolve(tmp_path):
     binary.parent.mkdir(parents=True)
     rpaths = ["@loader_path/../../.."]
     assert build.resolve_rpath_library(binary, "@rpath/libevil.dylib", rpaths, app) is None
+
+
+def test_missing_plist_keys_reports_absent_and_empty_values_in_order():
+    info = {
+        "CFBundleIdentifier": "com.example.app",
+        "CFBundleShortVersionString": "",
+        "CFBundleVersion": "1",
+        "LSMinimumSystemVersion": "26.0",
+    }
+    assert build.missing_plist_keys(info) == [
+        "CFBundleShortVersionString",
+        "LSApplicationCategoryType",
+        "NSLocalNetworkUsageDescription",
+    ]
+    assert build.missing_plist_keys(info, required=("CFBundleVersion",)) == []
+
+
+def _setup_py_plist() -> dict:
+    """The PLIST literal from setup.py, without importing it (import runs setup())."""
+    tree = ast.parse((ROOT / "setup.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            getattr(target, "id", None) == "PLIST" for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError("setup.py defines no PLIST literal")
+
+
+def test_setup_py_declares_local_network_use_for_both_builds():
+    # macOS 15+ shows this string in the local-network permission prompt that
+    # the peer broadcast and the gateway probe trigger; it belongs to every
+    # build, not only the store one, so it lives in the base PLIST.
+    plist = _setup_py_plist()
+    text = plist["NSLocalNetworkUsageDescription"]
+    assert text.strip() and "local network" in text.lower()
+    # The keys the App Store build adds from the build script's arguments.
+    store = {
+        **plist,
+        "LSApplicationCategoryType": "public.app-category.utilities",
+        "LSMinimumSystemVersion": "26.0",
+    }
+    assert build.missing_plist_keys(store) == []
+
+
+def _icns(*elements: tuple[bytes, bytes]) -> bytes:
+    body = b"".join(
+        kind + (len(payload) + 8).to_bytes(4, "big") + payload for kind, payload in elements
+    )
+    return b"icns" + (len(body) + 8).to_bytes(4, "big") + body
+
+
+def test_icns_types_walks_the_container():
+    data = _icns((b"TOC ", b"\0" * 16), (b"ic09", b"png1"), (b"ic10", b"png2"))
+    assert build.icns_types(data) == {"TOC ", "ic09", "ic10"}
+
+
+def test_icns_types_rejects_non_icns_and_corrupt_elements():
+    with pytest.raises(ValueError):
+        build.icns_types(b"PNG\r\n\x1a\n\0")
+    with pytest.raises(ValueError):
+        build.icns_types(b"icns" + (16).to_bytes(4, "big") + b"ic09" + (2).to_bytes(4, "big"))
+
+
+def test_icon_problem_names_the_missing_512_sizes():
+    only_small = _icns((b"ic07", b"x"), (b"ic08", b"x"))
+    problem = build.icon_problem(Path("/x/AppIcon.icns"), read=lambda p: only_small)
+    assert problem is not None and "ic09, ic10" in problem
+    complete = _icns((b"ic09", b"x"), (b"ic10", b"x"))
+    assert build.icon_problem(Path("/x/AppIcon.icns"), read=lambda p: complete) is None
+
+
+def test_icon_problem_requires_icns_suffix_and_readable_file():
+    assert "must be an .icns" in build.icon_problem(Path("/x/icon.png"), read=lambda p: b"")
+
+    def missing(_p):
+        raise FileNotFoundError("no such file")
+
+    assert "no such file" in build.icon_problem(Path("/x/AppIcon.icns"), read=missing)

@@ -62,7 +62,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -89,6 +89,12 @@ ALLOWED_LIBRARY_PREFIXES = (
 )
 
 FORBIDDEN_STRING = b"itms-services"
+
+# ICNS element types for 512x512 and 512x512@2x. App Store Connect rejects an
+# icon without both (ITMS-90236); make_icon.py writes them, a designed icon
+# from `iconutil -c icns` has them when the iconset had icon_512x512.png and
+# icon_512x512@2x.png.
+ICNS_REQUIRED_TYPES = frozenset({"ic09", "ic10"})
 
 
 # --- pure helpers (tested in tests/test_appstore_build.py) -----------------
@@ -252,6 +258,56 @@ def privacy_policy_problem(url: str, mode: str) -> str | None:
         return f"privacy policy URL must be an https:// URL, got {url!r}"
     if "<" in url or "PLACEHOLDER" in url.upper():
         return "privacy policy URL still contains a placeholder"
+    return None
+
+
+# Keys App Store Connect or the OS reads from the main Info.plist. The first
+# five are what validation rejects an upload for; the last is what macOS 15+
+# shows in the local-network permission prompt (TN3179), which this app's peer
+# announcement and gateway probe trigger.
+REQUIRED_PLIST_KEYS = (
+    "CFBundleIdentifier",
+    "CFBundleShortVersionString",
+    "CFBundleVersion",
+    "LSApplicationCategoryType",
+    "LSMinimumSystemVersion",
+    "NSLocalNetworkUsageDescription",
+)
+
+
+def missing_plist_keys(info: Mapping, required: Sequence[str] = REQUIRED_PLIST_KEYS) -> list[str]:
+    """Required Info.plist keys that are absent or empty, in `required` order."""
+    return [key for key in required if not info.get(key)]
+
+
+def icns_types(data: bytes) -> set[str]:
+    """Element types in an ICNS container: 'icns', total length, then (type, length) chunks."""
+    if len(data) < 8 or data[:4] != b"icns":
+        raise ValueError("not an ICNS file")
+    total = int.from_bytes(data[4:8], "big")
+    types: set[str] = set()
+    offset = 8
+    while offset + 8 <= min(total, len(data)):
+        kind = data[offset : offset + 4].decode("ascii", "replace")
+        length = int.from_bytes(data[offset + 4 : offset + 8], "big")
+        if length < 8:
+            raise ValueError(f"corrupt ICNS element {kind!r}")
+        types.add(kind)
+        offset += length
+    return types
+
+
+def icon_problem(path: Path, read=lambda p: Path(p).read_bytes()) -> str | None:
+    """Why `--icon` cannot ship, or None."""
+    if path.suffix != ".icns":
+        return f"--icon must be an .icns file, got {path.name!r}"
+    try:
+        types = icns_types(read(path))
+    except (OSError, ValueError) as exc:
+        return f"{path}: {exc}"
+    missing = sorted(ICNS_REQUIRED_TYPES - types)
+    if missing:
+        return f"{path} lacks the 512x512 sizes App Store Connect requires ({', '.join(missing)})"
     return None
 
 
@@ -533,6 +589,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         p.add_argument("--copyright", default="")
         p.add_argument("--declare-exempt-encryption", action="store_true")
         p.add_argument(
+            "--icon",
+            type=Path,
+            default=None,
+            help="a designed .icns to ship instead of the make_icon.py placeholder",
+        )
+        p.add_argument(
             "--privacy-policy-url",
             default="",
             help="public https URL of the hosted privacy policy (required for release)",
@@ -559,7 +621,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     icon = out / "AppIcon.icns"
     out.mkdir(parents=True)
-    run([sys.executable, REPO / "scripts" / "appstore" / "make_icon.py", icon])
+    if args.icon is not None:
+        problem = icon_problem(args.icon)
+        if problem:
+            raise SystemExit(problem)
+        shutil.copyfile(args.icon, icon)
+    else:
+        run([sys.executable, REPO / "scripts" / "appstore" / "make_icon.py", icon])
+        if args.mode == "release":
+            # Not a validation failure, so not a refusal; but a placeholder on
+            # the store page is the first thing a reviewer and a buyer see.
+            print("WARNING: shipping the placeholder icon; pass --icon <designed.icns>", flush=True)
 
     app = py2app_build(args, dist, bdist, icon)
     info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
@@ -587,6 +659,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.declare_exempt_encryption:
         plist_updates["ITSAppUsesNonExemptEncryption"] = False
     set_info_plist(app, plist_updates)
+    missing = missing_plist_keys(plistlib.loads((app / "Contents" / "Info.plist").read_bytes()))
+    if missing:
+        raise SystemExit("Info.plist is missing required keys: " + ", ".join(missing))
 
     base = plistlib.loads((PACKAGING / "entitlements.plist").read_bytes())
     team_id = getattr(args, "team_id", None)
