@@ -91,6 +91,10 @@ The app accepts these announcements only from addresses on the same local
 subnet, and it does not authenticate them. To stop announcing, turn peer
 discovery off in Settings and restart the app.
 
+On macOS 15 and later, macOS asks for your permission before the app can reach
+your local network. If you decline, the app cannot announce itself or check
+whether your router is reachable, and those checks report failures.
+
 ## Children
 
 The app is a network utility and is not directed at children.

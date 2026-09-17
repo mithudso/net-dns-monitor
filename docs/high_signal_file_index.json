@@ -1011,6 +1011,14 @@
       "role": "script",
       "importance": "medium",
       "purpose": "Read-only diagnostic suite for the router/ stack: forwarding sysctl, pf NAT anchor, dnsmasq/unbound liveness."
+    },
+    {
+      "path": "docs/APP_STORE_CHECKLIST.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Ordered Mac App Store submission checklist: what is verified in the repo, the owner-only steps with this Mac's Team ID and identity names filled in, the release command, metadata sections, and open items that do not block.",
+      "read_when": "Preparing or repeating a store submission, or asked what is left before the app can be submitted.",
+      "entry_symbols": []
     }
   ]
 }

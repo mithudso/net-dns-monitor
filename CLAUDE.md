@@ -77,7 +77,7 @@ report, because someone will act on it.
 ## Before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 1878 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 1884 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -164,9 +164,11 @@ comment that is wrong about why is as expensive as code that is wrong.
   all of this. `switch_to_backup_network` does not use the grant: it is genuinely
   attempted, and reports `NEEDS_PRIVILEGE` only when the write is actually refused.
 - **The canonical line is branch `feat/appstore-prep`**
-  (`.claude/worktrees/appstore-prep`), and the owner will merge it into `master`. `master`
-  (050e905) already contains the reconciled `dns-resolution-monitor` head (02c40dd),
-  but not the optimizer pass or the App Store work. The other worktrees under
+  (`.claude/worktrees/appstore-prep`), and the owner will merge it into `master`.
+  `master` (c31d044) was merged into this branch on 2026-09-17 (`a78fa0f`), so the
+  branch is a superset of it; `master` alone still lacks the optimizer pass and the
+  App Store work. Merging back changes the live resolver: `unbound/unbound.conf` and
+  `dnsmasq/dnsmasq.conf` are symlinked from `/opt/homebrew/etc` into the main checkout. The other worktrees under
   `.claude/worktrees/` and the `docs/scripts-manual` branch are older and are not what
   should run. `scripts/net-dns-monitor-service` resolves `SOURCE_BUNDLE` from
   `NDM_SOURCE_BUNDLE`, then the path its last install or update recorded in
@@ -211,5 +213,6 @@ comment that is wrong about why is as expensive as code that is wrong.
 
 `AGENTS.md` points here. `docs/SCRIPTS.md` is the operator's manual for every entry
 point; `docs/ARCHITECTURE.md` is the shape of the system; `docs/known-issues.md` is the
-current defect list; `docs/APP_STORE_SUBMISSION.md` covers the Mac App Store build;
-`router/docs/ROUTER.md` describes the `router/` stack.
+current defect list; `docs/APP_STORE_SUBMISSION.md` covers the Mac App Store build and
+`docs/APP_STORE_CHECKLIST.md` is its ordered checklist; `router/docs/ROUTER.md`
+describes the `router/` stack.

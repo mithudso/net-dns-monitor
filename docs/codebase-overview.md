@@ -104,7 +104,7 @@ a real default.
 ## `tests/`
 
 Plain pytest functions with injected fakes. The suite runs offline;
-`docs/TESTING.md` has the commands and the count (`1878`).
+`docs/TESTING.md` has the commands and the count (`1884`).
 
 `tests/conftest.py` (high) holds four autouse fixtures. Each one keeps every
 test away from something real:
@@ -150,7 +150,7 @@ imports, and `test_peer_net.py` sends UDP over loopback.
 
 | File | Mark | What it is |
 |---|---|---|
-| `build_appstore.py` | high | The Mac App Store pipeline in `adhoc` and `release` modes: py2app build, launcher rebuild, `itms-services` removal, linkage check, signing, and in release a signed `.pkg`. |
+| `build_appstore.py` | high | The Mac App Store pipeline in `adhoc` and `release` modes: py2app build, launcher rebuild, `itms-services` removal, linkage check, required `Info.plist` keys, optional `--icon` with an ICNS size check, signing, and in release a signed `.pkg`. |
 | `make_icon.py` | | Draws the placeholder icon and writes an `.icns` with every size App Store Connect needs. |
 | `sandbox_probe.py` | | Runs inside an ad-hoc sandboxed bundle and records which operations the sandbox allows, as JSON. |
 

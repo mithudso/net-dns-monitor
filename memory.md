@@ -68,3 +68,19 @@ Owner answers to the seven open questions, and what was done:
 - **Old sudoers file: inspect.** Also needs the owner's sudo password (`sudo cat /etc/sudoers.d/net-dns-monitor`).
 
 Test count: 1878.
+
+## v4 - 2026-09-17 - App Store readiness pass
+
+Delta: 1
+
+What was done (branch `feat/appstore-prep`):
+- Merged `master` (c31d044) into the branch (`a78fa0f`): the semantic-index scripts, `config.example.yaml` and the doc stubs arrived; `AGENTS.md` stayed the pointer (master's copy was a stale CLAUDE.md duplicate); the file index kept this branch's entries plus master's three router files. The four indexer scripts were then brought under the ruff gate.
+- `setup.py` now declares `NSLocalNetworkUsageDescription` for every build: macOS 15+ gates the peer broadcast and the gateway probe behind the Local Network permission (Apple TN3179). `build_appstore.py` refuses a bundle whose Info.plist lacks that key, the bundle id, either version string, the category or the minimum system version, and gained `--icon <designed.icns>` with an ICNS element check (ic09/ic10). Six tests added; 1884 total.
+- Verified on this Mac (macOS 27.0, Xcode 27.0): 1884 tests pass in 22 s; ruff clean; ad-hoc sandboxed build succeeds (58 MB, arm64, minimum macOS 26.0, signature valid, three entitlements, no `itms-services`); the probe run inside the bundle matches the 2026-09-14 table exactly (`log show` and the real `~/.config` refused, everything else works).
+- Facts re-checked against Apple: `altool` 27.0.5 still documents `--upload-package`; 5.1.2(i) names third-party AI; the privacy-manifest rule and the 2026-04-28 Xcode 26 SDK floor do not name macOS; quarantine attribute rule since 2025-02-18; age-rating questionnaire changed 2026-01-31; EU DSA trader status required.
+- Team ID is `L9ELX85ZFD` (OU field of the Apple Development certificate; the Xcode template in the main checkout agrees). This Mac still has no Apple Distribution or Mac Installer Distribution certificate, so release mode remains unrun.
+- Wrote `docs/APP_STORE_CHECKLIST.md`: verified state, owner-only steps in order with the release command filled in, manual GUI checks, metadata sections, open non-blocking items.
+
+Remaining steps (owner):
+- Steps 0 to 9 of `docs/APP_STORE_CHECKLIST.md`: bundle id, paid membership check, certificates and profile, hosting the privacy policy (repo is private, so not this repo's Pages), the manual sandboxed-GUI checks, the release build, upload, metadata, submit.
+- Merge to `master` after approval, minding the resolver symlinks.

@@ -9,7 +9,8 @@ for the owner. "Decided" records owner decisions that are now implemented. "Gaps
 is what is missing. "No longer issues" records entries that earlier revisions
 listed.
 
-Last reviewed 2026-09-14, after the optimizer commit `b07eee5`.
+Last reviewed 2026-09-17, after the `master` merge (`a78fa0f`) in the App Store
+readiness pass.
 
 Measurements below are dated where they were taken. The masked-log counts, the
 `log_watcher` timing, the `IP_BOUND_IF` tunnel finding and the `scselect`
@@ -57,6 +58,16 @@ review. Treat them as priors, and re-measure before relying on any of them.
 
 ## Unproven
 
+- **A denied Local Network permission reads like a LAN fault.** macOS 15 and later
+  ask before an app sends to local-network addresses (Apple TN3179), and this
+  app's peer announcement and gateway probe do exactly that. If the user
+  declines, those sends fail, the app has no API to learn that the permission is
+  the cause, and a gateway probe that fails for that reason is indistinguishable
+  from an unreachable router. Neither build has been observed under a denial
+  (added 2026-09-17; `setup.py` now carries the `NSLocalNetworkUsageDescription`
+  the prompt shows). Until it is measured, read a report that blames the local
+  network on macOS 15 or later with the permission state in mind (System
+  Settings → Privacy & Security → Local Network).
 Each item below is covered by tests with injected fakes. That proves the logic
 and proves nothing about the world.
 

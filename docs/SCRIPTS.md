@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 1878 tests; the whole decision surface
+python3 -m pytest -q          # 1884 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 1878 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 1878 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 1884 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -732,7 +732,9 @@ certificates.
 
 Options for both modes: `--bundle-id` (default `com.net-dns-monitor.app`), `--version`
 (default `1.0`), `--build-number` (default `1`), `--copyright`,
-`--declare-exempt-encryption`, `--privacy-policy-url`. `adhoc` adds `--with-probe`.
+`--declare-exempt-encryption`, `--privacy-policy-url`, and `--icon` (a designed `.icns`;
+without it the `make_icon.py` placeholder is used, and a `release` run says so in a
+warning). `adhoc` adds `--with-probe`.
 `release` requires `--team-id`, `--app-identity`, `--installer-identity` and
 `--profile`. The full `release` command is in `docs/APP_STORE_SUBMISSION.md` §4.2.
 
@@ -742,8 +744,12 @@ Options for both modes: `--bundle-id` (default `com.net-dns-monitor.app`), `--ve
 
 The build stops if a `release` run has no `https://` privacy policy URL or the URL still
 holds a placeholder, if the profile belongs to a different app ID, if a `release` bundle
-contains the probe, if `itms-services` survives anywhere, or if any binary links a
-library outside the bundle, `/System/Library/` or `/usr/lib/`.
+contains the probe, if `itms-services` survives anywhere, if any binary links a
+library outside the bundle, `/System/Library/` or `/usr/lib/`, if the bundle's
+`Info.plist` lacks `CFBundleIdentifier`, either version string,
+`LSApplicationCategoryType`, `LSMinimumSystemVersion` or
+`NSLocalNetworkUsageDescription`, or if `--icon` names a file that is not `.icns` or
+lacks the 512x512 elements (`ic09`, `ic10`).
 
 ### `make_icon.py` — placeholder icon
 
@@ -795,7 +801,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 1878 passed
+python3 -m pytest -q            # 1884 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -830,7 +836,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 34 | `test_repair_executor.py` |
 | 33 | `test_domain_learner.py` |
 | 32 | `test_throughput.py` |
-| 27 | `test_appstore_build.py` |
+| 33 | `test_appstore_build.py` |
 | 27 | `test_forensic_log.py` |
 | 26 | `test_failover_policy.py` |
 | 25 | `test_app_router_wiring.py` |
@@ -874,7 +880,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 6 | `test_classifier.py` |
 | 6 | `test_resolution_log.py` |
 | 3 | `test_app_resolution_wiring.py` |
-| **1878** | **total** |
+| **1884** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

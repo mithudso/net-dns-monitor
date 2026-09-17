@@ -2,8 +2,10 @@
 
 This is the complete path from this repository to a submitted build, with the
 decisions that are yours to make called out. Facts were checked against
-Apple's documentation in September 2026; each source is linked where it is
-used.
+Apple's documentation on 2026-09-14 and re-checked on 2026-09-17; each source
+is linked where it is used. `docs/APP_STORE_CHECKLIST.md` is the ordered
+checklist that points back here: what is done, what only the account owner
+can do, and the commands with this Mac's values filled in.
 
 ## 1. Read this first: what the store build can and cannot do
 
@@ -15,9 +17,10 @@ build. The app detects the sandbox at startup
 report says "not available in the Mac App Store build" rather than failing in
 a way that looks like a network fault.
 
-The table below was **measured** on 2026-09-14. The test was an ad-hoc-signed,
-sandboxed build of this repo running `sandbox_probe` on macOS 26 (§4.1 shows
-how to repeat it). "Apple docs" means the row rests on Apple's documentation,
+The table below was **measured** on 2026-09-14 on macOS 26 and re-measured on
+2026-09-17 on macOS 27.0 with the same result. The test was an ad-hoc-signed,
+sandboxed build of this repo running `sandbox_probe` (§4.1 shows how to repeat
+it). "Apple docs" means the row rests on Apple's documentation,
 not on a measurement.
 
 | Feature | Direct build | Store build | Evidence |
@@ -60,16 +63,38 @@ notarization (§10). Both can coexist.
 - `scripts/appstore/make_icon.py` generates a placeholder ICNS with the 512 and 512@2x sizes App Store Connect requires.
 - `scripts/appstore/sandbox_probe.py` measures sandbox behaviour (§4.1).
 - `docs/PRIVACY_POLICY.md` is a draft privacy policy with placeholders.
+- `setup.py` declares `NSLocalNetworkUsageDescription` for every build. macOS 15
+  and later ask the user before an app sends to local-network addresses, and
+  this app does so on purpose: the peer announcement is a UDP broadcast and the
+  interface probe reaches the gateway
+  ([TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy)).
+  The build refuses a bundle whose `Info.plist` lacks that key, the bundle
+  identifier, either version string, the category or the minimum system version.
+- `build_appstore.py --icon <designed.icns>` ships a designed icon instead of
+  the placeholder, after checking that the file holds the 512x512 and
+  512x512@2x elements (`ic09`, `ic10`) that ITMS-90236 requires.
 
 **Not verified here:**
-- **Release mode was never run.** This Mac has no Apple Distribution or Mac Installer Distribution certificate, so release signing, provisioning-profile embedding and `productbuild` signing have not been run. Ad-hoc mode was run end to end.
+- **Release mode was never run.** This Mac has no Apple Distribution or Mac Installer Distribution certificate (checked again 2026-09-17: `security find-identity -v` lists one *Apple Development* identity, which cannot sign a store upload), so release signing, provisioning-profile embedding and `productbuild` signing have not been run. Ad-hoc mode was run end to end on 2026-09-14 and again on 2026-09-17.
+- **The Local Network permission prompt has not been observed.** The probe cannot see a GUI prompt. Launch the ad-hoc app once and confirm the prompt shows the `NSLocalNetworkUsageDescription` text. Then deny it once: the app has no way to learn that the denial, not the router, is why the gateway probe fails (see `docs/known-issues.md`), so check what the dashboard says in that state before a reviewer does.
 - **The GUI app itself was not launched sandboxed.** Launching it cannot be automated (see CLAUDE.md). Only the probe executable was run.
 - **Two helpers still shell out in the store build.** "Open forensic logs folder" runs `/usr/bin/open`, and the alert's notification fallback runs `osascript`. Neither has run sandboxed. Reports themselves now open through NSWorkspace. Click both once in the ad-hoc build.
 - **Pasting into the credentials dialog needs a manual check.** The app now installs a standard Edit menu, so ⌘V should paste into Credentials → Set Anthropic API key…. No automated test can send a real keystroke. Try it once in the ad-hoc build before submitting.
 
 ## 3. One-time Apple setup
 
-You need an [Apple Developer Program](https://developer.apple.com/programs/) membership ($99/year) and Xcode 26 or later. Xcode 26.6 is installed on this Mac.
+You need an [Apple Developer Program](https://developer.apple.com/programs/) membership ($99/year) and Xcode 26 or later. Xcode 27.0 (27A266a) is installed on this Mac as of 2026-09-17, on macOS 27.0.
+
+**Your Team ID is `L9ELX85ZFD`.** The `Apple Development: Mitchell Hudson (…)`
+certificate already in the login keychain carries it in its OU field (checked
+2026-09-17 with
+`security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject`;
+the value in the certificate's parentheses is a different identifier), and the
+stock Xcode project created in the main checkout on 2026-09-15
+(`net-dns-monitor/net-dns-monitor.xcodeproj`, unrelated to this build) records
+the same `DEVELOPMENT_TEAM`. [Membership details](https://developer.apple.com/account)
+shows the same value. That development certificate cannot sign a store upload;
+§3.3 covers the two you need.
 
 ### 3.1 Choose the bundle identifier
 
@@ -194,7 +219,9 @@ Output: `build/appstore/release/Net-DNS-Monitor-<version>-<build>.pkg`.
 
 The minimum is 26.0 because Homebrew's Python 3.13 is built for macOS 26 on
 Apple silicon, and an app cannot run below the highest minimum of its
-binaries. Apple accepts arm64-only Mac apps, and macOS 27 is Apple-silicon
+binaries. Re-measured 2026-09-17 on macOS 27.0: `vtool -show-build` on
+Homebrew's Python 3.13.15 framework reports `minos 26.0`, `sdk 26.5`, so a
+buyer on macOS 26 can still install it. Apple accepts arm64-only Mac apps, and macOS 27 is Apple-silicon
 only ([Apple news](https://developer.apple.com/news/?id=k1mtkt1k)).
 
 To support older macOS or Intel Macs, build with a python.org universal2
@@ -211,8 +238,10 @@ xcrun altool --upload-package build/appstore/release/Net-DNS-Monitor-1.0-1.pkg \
   --api-key <KEY_ID> --api-issuer <ISSUER_ID> --wait
 ```
 
-Syntax is from the local `altool` 26.40.1 help. Alternatively, drag the
-`.pkg` into Apple's **Transporter** app. Processing takes minutes to an hour.
+Syntax is from the local `altool` help (26.40.1 on 2026-09-14; 27.0.5 on
+2026-09-17 still lists `--validate-app` and `--upload-package` with no
+deprecation notice). Alternatively, drag the `.pkg` into Apple's
+**Transporter** app, installed at `/Applications/Transporter.app`. Processing takes minutes to an hour.
 The build then appears under the app's TestFlight tab. Mac TestFlight
 installs it through the TestFlight app, which is the closest you can get to
 the real store environment before review.
@@ -239,8 +268,8 @@ Use these titles for screenshots and in the review notes below.
 | Subtitle | `Network & DNS troubleshooter` | 28 of 30 characters |
 | Category | Primary **Utilities**; secondary **Developer Tools** | Must match `LSApplicationCategoryType` |
 | Content rights | Does not contain third-party content | |
-| Age rating | Answer the questionnaire truthfully | No web browsing, user-generated content, gambling or mature content. The app can show AI-written diagnostic text; say so if asked. ([age ratings](https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions)) |
-| Privacy Policy URL | `<URL where you host docs/PRIVACY_POLICY.md>` | Required for macOS. GitHub Pages works. |
+| Age rating | Answer the questionnaire truthfully | No web browsing, user-generated content, gambling or mature content. The app can show AI-written diagnostic text; say so if asked. The questionnaire changed on 2026-01-31 (tiers 4+, 9+, 13+, 16+, 18+), so answer it fresh rather than copying an older app's. ([age ratings](https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions), [requirement](https://developer.apple.com/news/upcoming-requirements/)) |
+| Privacy Policy URL | `<URL where you host docs/PRIVACY_POLICY.md>` | Required for macOS. This repository is **private** (checked 2026-09-17), and GitHub Pages on a private repository needs a paid GitHub plan, so host the page elsewhere: a small public repository with Pages, a public Gist, or any site you control. The URL must be `https://` and live before the release build, which refuses to run without it. |
 
 ### 6.2 Pricing and Availability
 
@@ -344,7 +373,16 @@ data in transit, which is the exempt case. Build with
 each upload. If App Store Connect still asks, answer that the app uses
 encryption only through standard HTTPS/TLS and qualifies for the exemption.
 
-### 6.6 App Review Information
+### 6.6 EU trader status (Digital Services Act)
+
+Before an app can be distributed in the European Union, App Store Connect
+requires the account to declare whether it is a *trader* under the DSA
+([requirement](https://developer.apple.com/news/upcoming-requirements/)).
+A free app with no revenue fits a non-trader declaration; a trader must publish
+contact details on the product page. Decide this when you choose territories
+(§6.2), or leave the EU out of the territory list.
+
+### 6.7 App Review Information
 
 | Field | Value |
 |---|---|
@@ -392,14 +430,18 @@ you can reply without a new build when a note is enough.
 | 2.4.5(viii): deprecated technologies | Risk | `rumps` posts notifications with `NSUserNotificationCenter`, deprecated since macOS 11; `alert.py` falls back to `osascript`. Neither has been tested sandboxed. If review objects, move to `UNUserNotificationCenter`, which needs a new dependency (`pyobjc-framework-UserNotifications`). |
 | 4.2: minimum functionality | Low | Native menu bar utility with a real window |
 | Icon quality | Placeholder | Replace `make_icon.py` output with a designed icon before release |
-| ITMS-90236 (icon sizes) | Mitigated | ICNS includes 512 and 512@2x |
+| ITMS-90236 (icon sizes) | Mitigated | ICNS includes 512 and 512@2x; `--icon` checks a designed icon for the same |
+| Local Network privacy prompt (macOS 15+) | Mitigated | `NSLocalNetworkUsageDescription` is in the plist and the build refuses a bundle without it. A denial is not detectable from inside the app; see `docs/known-issues.md` |
+| Privacy manifest / required-reason API (ITMS-91053) | Not applicable | Apple's requirement names iOS, iPadOS, tvOS, visionOS and watchOS only ([source](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)) |
+| SDK floor for uploads (Xcode 26, since 2026-04-28) | Not applicable | The requirement names the iOS-family SDKs, not macOS ([source](https://developer.apple.com/news/upcoming-requirements/)). The launcher is rebuilt against the installed SDK regardless |
+| Quarantine attribute in the upload | Mitigated | `xattr -cr` runs before signing; Apple rejects `com.apple.quarantine` in uploads since 2025-02-18 ([source](https://developer.apple.com/news/upcoming-requirements/)) |
 | Signing / provisioning errors | Release path unrun | Fix identities or profile per the error text, then re-run §4.2 |
 
 ## 9. Every upload
 
 1. Bump `--build-number` (and `--version` for a new release).
 2. Run `.venv/bin/python -m pytest -q`, then the ad-hoc build and probe (§4.1).
-3. Run the release build (§4.2), then validate and upload (§5).
+3. Run the release build (§4.2) with `--icon` for the designed icon, then validate and upload (§5).
 4. Update "What's New" and submit.
 
 ## 10. The full-featured alternative: Developer ID

@@ -737,6 +737,9 @@ before anything goes to Anthropic.
 [`docs/APP_STORE_SUBMISSION.md`](docs/APP_STORE_SUBMISSION.md) is the authoritative
 guide: what was measured in the sandbox, how to build and sign, what App Store Connect
 needs, and what has not been verified.
+[`docs/APP_STORE_CHECKLIST.md`](docs/APP_STORE_CHECKLIST.md) is the ordered checklist:
+what is done, what only the account owner can do, and the commands with this Mac's
+values filled in.
 
 ## Tests
 
