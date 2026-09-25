@@ -1,0 +1,609 @@
+<!-- generated: llms-suite 1.0, 2026-09-25; verified-as-of 2026-09-25; local paths rewritten to repo-relative -->
+
+# net-dns-monitor
+Source: https://github.com/mithudso/net-dns-monitor/blob/HEAD/README.md
+
+## net-dns-monitor
+
+macOS menu bar app that monitors network + DNS connectivity, auto-diagnoses
+via an offline troubleshooting ladder, escalates to Claude when the ladder
+can't resolve it, and saves an IT-ready incident report -- no user action
+required to detect, diagnose, or report an issue.
+
+### Honest scope
+
+This app can genuinely fix a small set of local problems and diagnose a
+great many more -- but even that small set is partial. `dscacheutil
+-flushcache` runs fine unprivileged; the `killall -HUP mDNSResponder` half
+of a full DNS cache flush does not, since mDNSResponder runs as a different
+user and a signal to a process you don't own is rejected regardless of the
+command's own permissions (confirmed empirically, not assumed). The app
+reports that case as `partial` rather than claiming success. It cannot fix an ISP outage, a
+misconfigured upstream DNS server, or a captive portal -- those need a
+human. The diagnostic report is the primary deliverable for most real
+incidents, not a fallback.
+
+Repairs that need elevated privilege (renewing a DHCP lease, toggling a
+network interface) are stubbed as `NEEDS_PRIVILEGE` in this MVP rather than
+executed, because a sandboxed menu-bar app doesn't have the rights to do
+them. See `netdnsmonitor/repair_executor.py` and the design plan's
+sandbox/privileged-helper discussion for the path to adding a proper
+`SMAppService` helper later.
+
+### Setup
+
+Requires Python 3.9+ (the code uses bare `list[...]`/`tuple[...]` generic
+type hints).
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+mkdir -p ~/.config/net-dns-monitor
+cp config.example.yaml ~/.config/net-dns-monitor/config.yaml
+# edit config.yaml: add the domains you actually care about, any internal
+# targets, and (optionally) sensitive_strings to redact before LLM escalation
+```
+
+To enable the Claude escalation step (used only when the offline ladder +
+repair attempt still leave an incident unresolved):
+
+```bash
+export ANTHROPIC_API_KEY=<your-api-key>
+```
+
+Without that variable set, escalation is skipped and the report still gets
+written -- it just won't have an LLM analysis section.
+
+To enable notifications (both channels are optional and independent):
+
+```bash
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...   # Slack
+export SMTP_PASSWORD=...                                        # email, if the relay authenticates
+```
+
+Neither secret belongs in `config.yaml` -- for a Slack incoming webhook the
+URL *is* the credential, so it stays in the environment and is never echoed
+back in an error message. Email also needs `email_recipients` in
+`config.yaml`; with an empty recipient list that channel stays inactive.
+
+### Notifications
+
+When an incident is declared and its report is written, a redacted one-block
+summary goes to every configured channel: classification, start time,
+duration, whether local repair resolved it, the repair outcome, the Claude
+analysis if there was one, and the path to the local report. Raw probe results
+and log excerpts are deliberately *not* sent -- those are unredacted by design
+because the report stays on the machine. Anything in `sensitive_strings` is
+stripped on the way out, the same rule that governs LLM escalation.
+
+Honest limits, same shape as the escalation caveat above:
+
+- These channels need working connectivity, so they cannot fire during a
+  genuine full outage -- only during partial degradation. The on-disk report
+  is written either way.
+- Notifications fire on incident *onset* only. Recovery produces no report
+  (see `status.py`), so there is no "back to normal" message; the menu bar
+  icon is the recovery signal.
+- Send timeouts are short (`notify_timeout_seconds`, default 5s) because this
+  runs on the UI thread at the moment the network is known to be broken.
+- A delivery failure is recorded and swallowed, never raised: a Slack outage
+  must not stop the report from being saved.
+
+### Auto-learned domains
+
+`domains` in the config is a floor, not the whole list. Every
+`domain_learn_interval_seconds` (default 300) the app scans the unified log for
+*failed DNS resolutions* and adds those hostnames to the probe list --
+evidence already on the machine that someone tried to reach a name and could
+not. That avoids the browser-history route, which would mean reading another
+app's data.
+
+**On a stock macOS install this finds nothing, and that is not a bug in the parser.**
+macOS masks hostnames in the unified log by default: mDNSResponder's resolver lines
+carry `<mask.hash: '...'>` or an opaque token (`BBUpzafn IN A?`) where the queried name
+would be, so there is no name to extract. Measured on one machine: 758 error-like
+lines, 198 of them explicitly masked, 0 learnable domains. Unmasking
+(`sudo log config --mode "private_data:on"`) is a **system-wide privacy change** and is
+not recommended lightly. Treat `domains` as the real probe list and this feature as
+opportunistic. `docs/SCRIPTS.md` shows how to check what your own log yields.
+
+Two guards keep this from making the monitor worse:
+
+- `dns_ok` is an all()-across-domains signal, so one dead name scraped out of a
+  log line would otherwise pin the app in a permanent false incident. A learned
+  domain that fails *while the control domain still resolves* is a dead name
+  rather than a broken resolver, and is evicted. With the control domain also
+  failing, nothing is pruned -- that is the real outage this app exists to
+  report. Hand-configured domains and the control domain are never evicted.
+
+  The control domain (`control_domain`, default `api.anthropic.com` -- the host
+  LLM escalation already depends on, so a failing control means escalation was
+  going to fail too) is what makes that test possible. Learned names are by definition names that *failed*, so
+  on the default `domains: []` every probed name is a learned failure and
+  "something else resolved" is false by construction; a name known to resolve
+  is the anchor that breaks the tie. Setting `control_domain: null` with no
+  configured domains disables pruning's anchor.
+- Scraped hostnames are validated before use (no IP literals, no
+  `in-addr.arpa`/`ip6.arpa` reverse zones, no bare labels, length-capped), and
+  the store is capped at `max_learned_domains` so a log flood cannot grow the
+  probe list without bound.
+
+- All domain lookups in a tick share **one** deadline
+  (`probe_timeout_seconds`, default 2s), resolved on worker threads. Serial
+  lookups would make the block additive -- with 20 learned names plus the
+  control domain, a resolver outage would freeze the menu bar for ~42s.
+- `domain_learn_interval_seconds` is clamped to at least twice
+  `poll_interval_seconds`. Scanning every tick re-adds a dead name as fast as
+  pruning drops it, so the flap gate's success counter never resets and one
+  dead name latches a permanent incident.
+
+Learned domains live in `learned_domains_path` and stay local; only the
+redacted summary described above ever leaves the machine. Set
+`learn_domains_from_logs: false` to probe exactly the configured list. Setting
+`control_domain: null` *and* leaving `domains` empty removes the anchor: with
+nothing known-good to compare against, a dead learned name can no longer be
+identified as dead and will hold the app in an incident.
+
+### Run
+
+```bash
+source .venv/bin/activate
+python -m netdnsmonitor.app
+```
+
+This puts a status icon in the menu bar (🟢 healthy / 🔴 degraded) and
+polls on the configured interval. Click the menu bar item and choose
+"Open last report" to see the most recent incident report, or "Open console"
+for a shell.
+
+### Console
+
+"Open console" in the menu opens a window that runs **arbitrary shell
+commands**, because during a real incident the useful next command is whatever
+the person watching thinks of, not whatever a fixed menu anticipated. Type a
+line, press Return, read the output. Pipes, redirects and quoting all work --
+the line goes to `/bin/sh` exactly as typed.
+
+Be clear about what that means: this runs as your user, with your environment
+and your file access, exactly like Terminal.app. It is not a sandbox and does
+not pretend to be one. There is deliberately **no blocklist** of dangerous
+commands: a pattern match over arbitrary shell is theater, since it would miss
+the destructive command spelled slightly differently while refusing the harmless
+one that happens to contain `rm`. Anyone who can open this menu can already open
+Terminal, so a filter here would buy nothing and would only make the console
+lie about its own reach.
+
+The guards that *are* here are the ones that hold no matter what gets typed,
+and they exist to protect the monitoring, not to police the user:
+
+- **20-second timeout, then the whole process group is killed.** A bare `ping
+  google.com` never exits on its own. Killing only the shell -- which is what
+  `subprocess.run(timeout=...)` does under `shell=True` -- would leave the
+  `ping` itself running, detached and invisible, one orphan per attempt.
+- **stdin is `/dev/null`.** Anything that would prompt (`sudo`, `ssh`) fails
+  immediately with a readable error instead of hanging until the timeout.
+- **Output is capped at 64 KB.** One `log show` would otherwise wedge the text
+  view. Redirect to a file if you need all of it.
+- **Every command runs on a worker thread.** A blocking command on the main
+  thread would freeze the window, the menu bar, *and* the poll timer doing the
+  actual monitoring -- during the outage you opened the console to investigate.
+
+Built-ins. Most are prefixed with `:` so they cannot collide with a real
+command; `cd` and `q` are not, because `cd` has to look like `cd` and `q` has to
+be one keystroke. A `cd` line cannot chain -- `cd /tmp && ls` is rejected with
+an explanation rather than run, since the built-in cannot honour the `&& ls`:
+
+| | |
+|---|---|
+| `:help` | the built-in list and the limits above |
+| `:status` | live monitor state: flap gate, classification, last report, last swallowed tick error |
+| `:history` | lines run this session |
+| `:pwd` | current directory |
+| `:clear` | empty the transcript |
+| `cd <dir>` | change directory -- a built-in, since a subprocess cannot change ours |
+| `q` | close the window; **the monitor keeps running** |
+
+`:status` is worth knowing about: `app.py` guards every tick so that one bad
+probe cannot kill monitoring for the session, which means a persistently failing
+tick is otherwise invisible behind a title that only says "check failed".
+`:status` is where that error surfaces.
+
+`q` closes the window and leaves the timer running. Quitting the whole app on a
+keystroke would mean losing the monitoring you opened the console to look at.
+
+### Permissions
+
+Reading system logs (`log show`) may require the "Full Disk Access" or
+log-access permission the first time it runs, depending on macOS version --
+macOS will prompt if so. No other special entitlements are needed for the
+diagnose-only build; see the README section above for what changes if you
+add privileged repair actions.
+
+### Reports
+
+Every incident produces a timestamped `.json` (machine-readable) and `.md`
+(human-readable) file under `reports_dir` (default:
+`~/Library/Application Support/net-dns-monitor/reports/`). Each report is
+self-contained: classification, probe results, log excerpts, every ladder
+step attempted and its outcome, the repair outcome, the recheck result, and
+the Claude escalation response if one occurred. Hand the `.md` file to IT.
+
+### Tests
+
+```bash
+source .venv/bin/activate
+python -m pytest -v
+```
+
+`docs/SCRIPTS.md` is the operator's manual for every entry point — including the
+one-shot module invocations that exercise the prober, the ladder, the log watcher, the
+domain learner and the notification text without starting a menu bar.
+
+All decision logic (classification, anti-flap gating, the troubleshooting
+ladder, escalation redaction/gating, the report builder, and the full
+state-machine orchestration) is unit tested with injected fakes for every
+external effect (network, subprocess, LLM, SMTP, webhook). The `app.py`
+menu-bar shell is thin wiring over those tested modules; its `tick()` and
+builder functions are covered with fakes, but the rumps run loop itself is
+not, since that needs a real macOS event loop.
+
+### Project layout
+
+- `classifier.py` -- network-vs-DNS-vs-healthy-vs-unclassified split
+- `flap_gate.py` -- anti-flap consecutive-count debounce
+- `ladder.py` -- the offline troubleshooting ladder definition
+- `repair_executor.py` -- dispatches ladder steps to real macOS commands
+- `dns_query.py` -- raw UDP query against a specific public resolver
+- `prober.py` -- TCP-connect reachability + DNS resolution aggregation
+- `log_watcher.py` -- `log show` tailing/filtering for DNS/network errors
+- `escalation.py` -- redaction + the escalate-or-not gate
+- `domain_learner.py` -- learns/validates/prunes domains from failed log lookups
+- `notifications.py` -- redacted Slack webhook + SMTP email incident alerts
+- `anthropic_escalator.py` -- the Claude API call itself
+- `report.py` / `report_storage.py` -- incident report schema + persistence
+- `status.py` -- menu bar title/icon logic + the console's `:status` text
+- `console.py` -- the console's decisions: built-ins, `cd`, the guarded runner
+- `console_window.py` -- AppKit shell for the console; holds no decisions
+- `state_machine.py` -- orchestrates all of the above
+- `config.py` -- YAML config loading with defaults
+- `app.py` -- the rumps menu bar shell
+
+# CLAUDE.md
+Source: https://github.com/mithudso/net-dns-monitor/blob/HEAD/CLAUDE.md
+
+## CLAUDE.md
+
+Guidance for Claude Code (and any other AI assistant) working in this repo.
+
+### What this is
+
+A macOS menu bar app (Python + `rumps`) that monitors network/DNS
+connectivity, runs an offline troubleshooting ladder, optionally escalates
+unresolved incidents to the Claude API, and writes an IT-ready incident
+report. See `README.md` for the full pitch and `docs/ARCHITECTURE.md` for
+how the modules fit together.
+
+### Workflow rules
+
+- **TDD first.** This codebase was built test-first (see commit history) and
+  every decision module (`classifier`, `flap_gate`, `ladder`, `escalation`,
+  `report`, `state_machine`, `repair_executor`, `dns_query`, `prober`,
+  `log_watcher`, `report_storage`, `status`) has a matching `tests/test_*.py`
+  file with fakes/injected callables for every external effect. Add or
+  change behavior with a failing test first, then make it pass.
+- **`app.py` is thin wiring**, intentionally untested — it needs a real
+  macOS run loop. Don't add test-avoidance patterns to the tested modules;
+  push logic down into a testable module instead of growing `app.py`.
+- **No real external calls in tests.** Network, subprocess, and the
+  Anthropic API are always injected as callables/fakes in tests — never hit
+  them for real in the test suite.
+- **Run tests before considering a change done:**
+  ```bash
+  source .venv/bin/activate
+  python -m pytest -v
+  ```
+- **Don't invent privileged behavior.** Repair steps that need elevated
+  rights (DHCP renew, interface toggle) are intentionally stubbed as
+  `NEEDS_PRIVILEGE` in `repair_executor.py` — this is a known, documented
+  MVP boundary, not a bug to silently "fix" by shelling out with sudo.
+- **Preserve empirically-confirmed behavior.** The partial-success wording
+  in `flush_dns_cache()` (`repair_executor.py`) reflects a real, verified
+  macOS permission boundary (`mDNSResponder` HUP requires privilege
+  `dscacheutil` doesn't). Don't simplify it back to a blanket success/failure
+  without re-verifying on-device.
+
+### Commands
+
+| Task | Command |
+|---|---|
+| Install deps | `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt` |
+| Run the app | `python -m netdnsmonitor.app` |
+| Run tests | `python -m pytest -v` |
+| Config | copy `config.example.yaml` to `~/.config/net-dns-monitor/config.yaml` |
+
+### Scope note
+
+This is a personal single-maintainer utility, not a service with a
+deployment pipeline, CI, or external API surface beyond the (optional,
+user-provided-key) Anthropic escalation call. Don't propose CI/CD,
+multi-tenant, or server-side infrastructure — it doesn't apply here.
+
+# Architecture
+Source: https://github.com/mithudso/net-dns-monitor/blob/HEAD/docs/ARCHITECTURE.md
+
+## Architecture
+
+### System context
+
+`net-dns-monitor` is a single-process macOS menu bar app. It has no server
+component, no database, and no multi-user concerns — everything runs inside
+one `rumps` process on the user's machine, polling on a timer.
+
+```
+ ┌─────────────────────────────────────────────────────────────┐
+ │                         app.py (rumps)                       │
+ │  menu bar icon/title, "Open last report" menu item, timer    │
+ └───────────────────────────┬────────────────────────────────-┘
+                              │ tick()
+                              ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │                     state_machine.StateMachine                │
+ │  orchestrates one full incident lifecycle per tick            │
+ └───┬──────────┬──────────────┬──────────────┬─────────────┬──┘
+     │          │              │              │             │
+     ▼          ▼              ▼              ▼             ▼
+ prober.py  classifier.py  flap_gate.py   ladder.py    escalation.py
+ (reachability +   (network/DNS/    (debounce so a   (which repair  (redact +
+  DNS resolution)   healthy split)   single blip      steps to run   escalate-
+                                     isn't an          for this       or-not
+                                     incident)         classification) gate)
+     │                                                     │             │
+     ▼                                                     ▼             ▼
+ dns_query.py                                    repair_executor.py  anthropic_escalator.py
+ (raw UDP query                                  (dispatches ladder  (Claude API call,
+  against a public                                steps to real      only reached if
+  resolver)                                       macOS commands)    escalation.py says so)
+                                                        │
+                                                        ▼
+                                                  log_watcher.py
+                                              (`log show` tail/filter)
+                              │
+                              ▼
+                        report.py / report_storage.py
+                  (build the incident report, write .json + .md)
+                              │
+                              ▼
+                          status.py
+                  (menu bar icon/title from current state)
+```
+
+### Data flow — one incident
+
+1. `state_machine.tick()` calls `prober()` for a reachability/DNS snapshot.
+2. `classifier.classify()` turns that into `HEALTHY` / `NETWORK` / `DNS` /
+   `UNCLASSIFIED`.
+3. `flap_gate.FlapGate` debounces: an incident is only declared after
+   `failure_threshold` consecutive bad ticks, and only cleared after
+   `success_threshold` consecutive healthy ticks.
+4. On a `healthy -> incident` transition, `state_machine` runs
+   `ladder.ladder_for(classification)` — an ordered list of `check` and
+   `repair` steps appropriate to that classification — through
+   `repair_executor`.
+5. It re-probes (the recheck) to see whether the ladder actually fixed
+   things.
+6. `escalation.should_escalate()` decides, from ladder-completed +
+   repair-attempted-or-n/a + recheck-still-failing, whether to call Claude.
+   If so, `escalation.redact()` strips `sensitive_strings` from the bundle
+   first.
+7. `report.build_report()` assembles everything (classification, probe
+   results, log excerpts, ladder results, repair outcome, recheck result,
+   escalation response) into one report dict; `report_storage` writes it as
+   timestamped `.json` + `.md` under `reports_dir`.
+8. `status.py` derives the menu bar icon/title from the current state so the
+   user sees 🟢/🔴 without opening anything.
+
+### Key design decisions
+
+- **All external effects are injected callables.** `prober`, `repair_executor`,
+  `escalator`, and `log_watcher` are passed into `StateMachine.__init__` as
+  functions, not imported and called directly. This is what makes every
+  decision path unit-testable with fakes — see `docs/TESTING.md`.
+- **Escalation only fires after the loop closes**, never on first detection —
+  see the docstring at the top of `state_machine.py`. This avoids paying for
+  an LLM call before the cheap offline ladder has had a chance to resolve
+  things.
+- **Privileged repairs are stubbed, not attempted.** `repair_executor.py`
+  reports `NEEDS_PRIVILEGE` for steps that need elevated rights, rather than
+  trying and silently failing. See `docs/known-issues.md`.
+- **No auto-detected targets.** `domains` and `internal_targets` are
+  explicit, user-supplied config (`config.example.yaml`) — the app never
+  reads browser history or other app data to guess what to monitor.
+
+### ADRs (informal)
+
+- **Why `rumps` instead of a full native app / Swift menu bar app?** Fast to
+  build and test in Python, matches the rest of the codebase's language, and
+  a menu bar utility doesn't need a full app bundle's capabilities.
+- **Why stub privileged repairs instead of a helper tool?** Out of scope for
+  the MVP; a proper fix is a `SMAppService` privileged helper, noted as
+  follow-up work in the README and `repair_executor.py`.
+
+# Development
+Source: https://github.com/mithudso/net-dns-monitor/blob/HEAD/docs/DEVELOPMENT.md
+
+## Development
+
+### Prerequisites
+
+- macOS (the app shells out to `dscacheutil`, `killall`, `scutil`, `netstat`,
+  and `log show` — it will not run on Linux/Windows)
+- Python 3.9+ (the code uses bare `list[...]`/`tuple[...]` generic type hints)
+
+### Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Config file:
+
+```bash
+mkdir -p ~/.config/net-dns-monitor
+cp config.example.yaml ~/.config/net-dns-monitor/config.yaml
+# edit config.yaml — see comments in that file for every key
+```
+
+Optional — enable Claude escalation:
+
+```bash
+export ANTHROPIC_API_KEY=<your-api-key>
+```
+
+Without this set, escalation is skipped and reports are still written, just
+without an LLM analysis section.
+
+### Running
+
+```bash
+source .venv/bin/activate
+python -m netdnsmonitor.app
+```
+
+Puts a status icon in the menu bar (🟢 healthy / 🔴 degraded). Click it and
+choose "Open last report" to see the most recent incident report.
+
+The first `log show` call may prompt for Full Disk Access / log-access
+permission — see `README.md` → Permissions.
+
+### Testing
+
+```bash
+source .venv/bin/activate
+python -m pytest -v
+```
+
+See `docs/TESTING.md` for the test strategy and per-module coverage.
+
+### Workflow
+
+- Test-first: add/adjust a `tests/test_*.py` case before changing behavior in
+  the corresponding module.
+- Keep `app.py` thin. It's the one intentionally-untested module (needs a
+  real macOS run loop) — push new logic into a testable module instead of
+  growing it.
+- Inject external effects. If new code needs to shell out, hit the network,
+  or call an API, take that dependency as a constructor/function parameter
+  (see every `make_*` factory in the codebase) so it can be faked in tests.
+
+### Env vars
+
+| Var | Required | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | No | Enables the Claude escalation step in `anthropic_escalator.py`. Omit to skip escalation entirely. |
+
+### Troubleshooting
+
+- **No menu bar icon appears** — run from a real Terminal session (not over
+  SSH); `rumps` needs a GUI session.
+- **`log show` output empty or permission errors** — grant Full Disk Access
+  to your terminal/Python in System Settings → Privacy & Security.
+- **DNS flush repair reports `partial`** — expected, not a bug. See
+  `docs/known-issues.md`.
+
+# Testing
+Source: https://github.com/mithudso/net-dns-monitor/blob/HEAD/docs/TESTING.md
+
+## Testing
+
+### Strategy
+
+Every decision module has a matching test file with all external effects
+(network, subprocess, the Anthropic API, the filesystem clock) injected as
+fakes — no test hits a real network, spawns a real macOS subprocess, or
+calls the real Anthropic API.
+
+| Module | Test file | What's faked |
+|---|---|---|
+| `classifier.py` | `test_classifier.py` | pure function, nothing to fake |
+| `flap_gate.py` | `test_flap_gate.py` | pure state, nothing to fake |
+| `ladder.py` | `test_ladder.py` | pure data, nothing to fake |
+| `dns_query.py` | `test_dns_query.py` | UDP socket |
+| `prober.py` | `test_prober.py` | TCP connect + DNS resolution |
+| `log_watcher.py` | `test_log_watcher.py` | `log show` subprocess |
+| `repair_executor.py` | `test_repair_executor.py` | `subprocess.run`, `os.path.isdir`, `os.listdir`, the DNS query fn |
+| `escalation.py` | `test_escalation.py` | pure function, nothing to fake |
+| `anthropic_escalator.py` | `test_anthropic_escalator.py` | the Anthropic client |
+| `report.py` | `test_report.py` | pure builder, nothing to fake |
+| `report_storage.py` | `test_report_storage.py` | filesystem writes (tmp dir) |
+| `status.py` | `test_status.py` | pure function, nothing to fake |
+| `state_machine.py` | `test_state_machine.py` | prober, repair_executor, escalator, log_watcher — all four injected |
+| `config.py` | `test_config.py` | filesystem read (tmp dir) |
+| `app.py` | `test_app_status_wiring.py` | partial — only the status-wiring glue is tested; the `rumps` run loop itself is not |
+
+`app.py` is the one module without full coverage: it's thin wiring over the
+tested modules above and needs a real macOS run loop to exercise fully. Keep
+it that way — new decision logic belongs in a testable module, not in
+`app.py`.
+
+### Running tests
+
+```bash
+source .venv/bin/activate
+python -m pytest -v
+```
+
+Config: `pytest.ini` points `testpaths` at `tests/`, collecting `test_*.py`.
+
+### Coverage target
+
+No numeric line-coverage gate is enforced (no CI in this repo yet — see
+`docs/known-issues.md`). The standard instead: every module in the table
+above with "what's faked" listed has real behavioral assertions on its
+public functions, not just import/smoke checks. When adding a module, add
+its test file in the same commit, following the injected-fake pattern of the
+nearest existing test.
+
+### Adding a test
+
+1. Identify the external effect(s) the new code touches (subprocess,
+   network, filesystem, API).
+2. Take each as a parameter with a real-implementation default (see
+   `make_repair_executor`'s `run_fn: RunFn = subprocess.run` pattern).
+3. In the test, pass a fake/stub for that parameter and assert on the
+   returned value or on calls made to the fake.
+
+# Known issues
+Source: https://github.com/mithudso/net-dns-monitor/blob/HEAD/docs/known-issues.md
+
+## Known issues
+
+### By design (not bugs)
+
+- **DNS cache flush is only partial.** `dscacheutil -flushcache` runs
+  unprivileged fine; `killall -HUP mDNSResponder` fails because
+  mDNSResponder runs as a different user and rejects a signal from a
+  process that doesn't own it. Confirmed empirically. `repair_executor.py`
+  reports this outcome as `"partial: ..."` rather than a false `"ok"`. See
+  `README.md` → Honest scope.
+- **Privileged repairs are stubbed.** `renew_dhcp_lease` and
+  `toggle_network_service` return `NEEDS_PRIVILEGE: ...` instead of running,
+  because a sandboxed menu-bar app can't perform them. Fixing this needs a
+  privileged `SMAppService` helper — not implemented in this MVP.
+- **`app.py` has no automated test coverage.** It's a thin `rumps` shell that
+  needs a real macOS run loop; all decision logic it wires together is
+  tested in the modules it calls.
+- **No auto-detection of "sites you care about."** `domains` in the config
+  starts empty by design — the app won't read browser history to guess.
+
+### Gaps / TODO
+
+- No CI workflow yet (no `.github/workflows/`) — tests are run locally only.
+- No `.env.example` — the only env var is `ANTHROPIC_API_KEY`, documented in
+  `docs/DEVELOPMENT.md` instead since it's a single optional key with no safe
+  placeholder value to demonstrate.
+- No packaged `.app` bundle / installer — run via `python -m
+  netdnsmonitor.app` from a checked-out clone only.
