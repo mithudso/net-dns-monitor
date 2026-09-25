@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
-import os
+"""Ad-hoc query against the local index: python3 query_index.py 'question'."""
+
 import sys
 
-import chromadb
-from chromadb.utils import embedding_functions
+from semantic_indexer import open_collection
 
-if len(sys.argv) < 2:
-    print("Usage: python3 query_index.py 'your question here'")
-    sys.exit(1)
 
-query = " ".join(sys.argv[1:])
-client = chromadb.PersistentClient(path=os.path.join(os.path.dirname(__file__), "..", ".chroma_db"))
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print("Usage: python3 query_index.py 'your question here'", file=sys.stderr)
+        return 2
 
-ollama_ef = embedding_functions.OllamaEmbeddingFunction(
-    url="http://localhost:11434/api/embeddings", model_name="nomic-embed-text"
-)
+    query = " ".join(argv[1:])
+    try:
+        collection = open_collection()
+    except ImportError as exc:
+        print(exc, file=sys.stderr)
+        return 1
 
-collection = client.get_collection(name="codebase_index", embedding_function=ollama_ef)
+    results = collection.query(query_texts=[query], n_results=3)
+    print(f"\nResults for: '{query}'\n")
+    for i in range(len(results["documents"][0])):
+        print(f"Source: {results['metadatas'][0][i]['source']}")
+        print(f"{results['documents'][0][i]}\n{'-' * 40}")
+    return 0
 
-results = collection.query(query_texts=[query], n_results=3)
 
-print(f"\n🔍 Results for: '{query}'\n")
-for i in range(len(results["documents"][0])):
-    print(f"📄 Source: {results['metadatas'][0][i]['source']}")
-    print(f"{results['documents'][0][i]}\n{'-' * 40}")
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

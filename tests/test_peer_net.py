@@ -280,6 +280,43 @@ def test_a_silent_peer_accumulates_missed_healthchecks(pair):
     assert b.registry.peers["ghost"]["missed_healthchecks"] >= 1
 
 
+def test_a_probe_that_never_left_is_not_counted_as_a_miss():
+    """No socket, so no datagram went out. A peer cannot have failed to answer a
+    question it was never asked.
+    """
+    net = PeerNetwork(
+        registry=PeerRegistry(self_id="id-a"), host="mac-a", broadcast_fn=lambda: ["127.0.0.1"]
+    )
+    net.registry.observe("peer", host="mac-b", address="127.0.0.1")
+    net.probe(net.registry.addresses_to_probe())
+    net.probe(net.registry.addresses_to_probe())
+    assert net.registry.peers["peer"]["missed_healthchecks"] == 0
+
+
+def test_a_probe_accepts_a_generator_of_addresses(pair):
+    a, b = pair
+    a.announce()
+    assert wait_for(lambda: "id-a" in b.registry.peers)
+    assert b.probe(entry for entry in b.registry.addresses_to_probe()) == 1
+
+
+def test_a_probe_from_outside_the_local_network_is_ignored():
+    """The socket is bound to every interface, so a datagram can arrive from
+    beyond the LAN. Answering it would disclose this machine's hostname and
+    health to anyone who can route a packet here.
+
+    Never started, so no reply can leave even if the gate regresses. A global
+    address rather than a TEST-NET one: Python 3.13 files 203.0.113.0/24 under
+    `is_private`.
+    """
+    net = PeerNetwork(
+        registry=PeerRegistry(self_id="id-a"), host="mac-a", broadcast_fn=lambda: ["127.0.0.1"]
+    )
+    payload = build_message(PROBE, "id-far", "far-away", "healthy", 1)
+    net._handle(payload, "8.8.8.8")
+    assert "id-far" not in net.registry.peers
+
+
 # --- robustness ------------------------------------------------------------
 
 
@@ -321,6 +358,28 @@ def test_a_nonsense_configured_port_degrades_instead_of_crashing_the_app(bad_por
     )
     assert net.start() is False
     assert net.started is False
+
+
+def test_a_failed_bind_closes_the_socket_it_opened():
+    """start() is retried every few minutes for as long as the bind keeps
+    failing, so a socket left open on each attempt is a descriptor leak.
+    """
+    import gc
+    import os
+
+    net = PeerNetwork(
+        registry=PeerRegistry(self_id="id-a"),
+        host="mac-a",
+        bind_port="45737",
+        broadcast_fn=lambda: ["127.0.0.1"],
+    )
+    gc.disable()
+    try:
+        before = len(os.listdir("/dev/fd"))
+        assert net.start() is False
+        assert len(os.listdir("/dev/fd")) == before
+    finally:
+        gc.enable()
 
 
 def test_sending_before_start_is_a_no_op_not_a_crash():

@@ -25,30 +25,23 @@ def default_connect(host: str, port: int, timeout: float) -> bool:
 
 
 def default_resolve(domain: str, timeout: float) -> bool:
-    """Resolve with a deadline that actually holds.
+    """One blocking lookup. The deadline is enforced by `resolve_all`'s join,
+    not here.
 
-    `socket.setdefaulttimeout()` looks like it bounds this but does not: it
-    sets the default for new socket *objects*, while `getaddrinfo` is a
+    `socket.setdefaulttimeout()` looks like it would bound this but does not:
+    it sets the default for new socket *objects*, while `getaddrinfo` is a
     module-level C call that never consults it. With an unreachable resolver
-    the lookup then blocks for the OS resolver's own multi-second retry
-    budget, once per domain, on the rumps UI thread -- freezing the menu bar
-    during exactly the outage being reported. So the lookup runs on a worker
-    thread and a lookup that outlives the deadline is reported as a failure;
-    the thread is left to finish and die on its own (it holds no lock).
+    the lookup blocks for the OS resolver's own multi-second retry budget, so
+    it must never run on the rumps UI thread. `resolve_all` already puts every
+    domain on its own worker and joins them against one shared deadline; a
+    second thread-and-join in here doubled the thread count per tick (42 at a
+    full learned list) and bounded nothing the outer join did not.
     """
-    result: list[bool] = []
-
-    def lookup() -> None:
-        try:
-            socket.getaddrinfo(domain, None)
-            result.append(True)
-        except OSError:
-            result.append(False)
-
-    worker = threading.Thread(target=lookup, daemon=True)
-    worker.start()
-    worker.join(timeout)
-    return bool(result) and result[0]
+    try:
+        socket.getaddrinfo(domain, None)
+        return True
+    except OSError:
+        return False
 
 
 def resolve_all(

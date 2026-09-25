@@ -15,10 +15,10 @@ Four measurements on the machine this was built for shaped everything here:
    the error/fault predicate below: 1 minute took 1.4s, 5 minutes 1.6s,
    15 minutes 4.2s -- and 60 minutes took **16.9s**. So this polls a 1-minute
    window on a cadence and backfills 15 minutes once, rather than re-querying a
-   long window. It also means `log_watcher.py`'s `timeout=10` is not a safe
-   ceiling to copy: `LOG_TIMEOUT_SECONDS` is 45, and a timeout is reported as
-   text rather than as an empty result, because an empty pane looks like a quiet
-   network.
+   long window. It also means `log_watcher.py`'s `TIMEOUT_SECONDS` of 10 is not
+   a safe ceiling to copy: `LOG_TIMEOUT_SECONDS` is 45. Like the watcher, a
+   timeout is reported as text rather than as an empty result, because an empty
+   pane looks like a quiet network.
 
 2. **Unfiltered network log volume is unusable.** A predicate matching
    `eventMessage CONTAINS "network"` returned 192,901 lines over 30 minutes.
@@ -53,6 +53,7 @@ a logging configuration profile, not a permission this app can request. See
 
 import re
 import subprocess
+from collections import deque
 from collections.abc import Iterable
 from typing import Callable, Optional
 
@@ -370,8 +371,10 @@ class LogBuffer:
     duplicated in an open forensic episode. That needs the buffer to hold less than one poll
     overlap, which cannot happen at the errors-only default (~60 entries/min against a 3,000
     cap) but is reachable the moment "All levels" is pressed: roughly 6,000 entries a minute
-    against a 30-second overlap is the cap exactly, and log arrival is bursty. A high-water
-    mark of the newest evicted timestamp closes it without depending on capacity.
+    against a 30-second overlap is the cap exactly, and log arrival is bursty. A bounded
+    ring of evicted keys closes it without depending on capacity -- and without depending
+    on the clock, which a high-water mark on the local timestamp did: one NTP step or DST
+    fall-back and every new entry for the next hour was "already seen".
     """
 
     def __init__(self, max_entries: int = 3000):
@@ -382,11 +385,11 @@ class LogBuffer:
         self.max_entries = max_entries
         self._entries: list[dict] = []
         self._seen: set[tuple] = set()
-        # Newest timestamp ever evicted. Anything at or below it has already been through
-        # this buffer, so an overlapping poll re-fetching it is not news. `log show` emits
-        # oldest-first and "YYYY-MM-DD HH:MM:SS.ffffff" sorts lexicographically, so a string
-        # comparison is a time comparison here.
-        self._evicted_through: str = ""
+        # The most recently evicted keys, at most one buffer's worth. That is the
+        # whole poll overlap this exists to cover: anything evicted longer ago
+        # than that cannot be re-fetched by a window shorter than the buffer.
+        self._evicted_order: deque = deque()
+        self._evicted_lookup: set[tuple] = set()
 
     @staticmethod
     def _key(entry: dict) -> tuple:
@@ -399,26 +402,10 @@ class LogBuffer:
         announces new error lines without having to diff the buffer itself.
         """
         batch = list(entries)
-        # The timestamps are local wall-clock time, so the clock can step back: at
-        # the end of daylight saving the 01:00 hour repeats, and every new line
-        # compares below the mark from the first pass. A poll window runs up to
-        # "now", so while the clock runs forward a batch holding any line older
-        # than the mark also holds the line at the mark. A whole batch strictly
-        # below the mark therefore means the clock stepped back, and the mark no
-        # longer means "already seen". `_seen` still de-duplicates what the
-        # buffer holds.
-        if (
-            batch
-            and self._evicted_through
-            and max(entry.get("timestamp", "") for entry in batch) < self._evicted_through
-        ):
-            self._evicted_through = ""
         added = []
         for entry in batch:
-            if self._evicted_through and entry.get("timestamp", "") <= self._evicted_through:
-                continue
             key = self._key(entry)
-            if key in self._seen:
+            if key in self._seen or key in self._evicted_lookup:
                 continue
             self._seen.add(key)
             self._entries.append(entry)
@@ -431,10 +418,14 @@ class LogBuffer:
         if overflow <= 0:
             return
         for entry in self._entries[:overflow]:
-            self._seen.discard(self._key(entry))
-            stamp = entry.get("timestamp", "")
-            if stamp > self._evicted_through:
-                self._evicted_through = stamp
+            key = self._key(entry)
+            self._seen.discard(key)
+            if key in self._evicted_lookup:
+                continue
+            if len(self._evicted_order) >= self.max_entries:
+                self._evicted_lookup.discard(self._evicted_order.popleft())
+            self._evicted_order.append(key)
+            self._evicted_lookup.add(key)
         del self._entries[:overflow]
 
     def entries(self) -> list[dict]:
@@ -448,7 +439,8 @@ class LogBuffer:
         self._seen.clear()
         # Emptying means "forget everything", including what was evicted -- otherwise
         # "Empty buffer" would silently refuse to re-accept the recent past.
-        self._evicted_through = ""
+        self._evicted_order.clear()
+        self._evicted_lookup.clear()
 
     def view(
         self,
@@ -493,6 +485,10 @@ def make_log_reader(
     with no explanation reads as "the network is quiet", which is the opposite of
     what a timed-out or refused log query means.
     """
+    # `log_view_timeout_seconds` arrives from YAML unvalidated. Coerced once here
+    # so a quoted "45" works and the `{timeout:.0f}` in the timeout message
+    # cannot itself raise from inside the handler.
+    timeout = float(timeout)
 
     def reader(window: str = "1m", errors_only: bool = True) -> dict:
         try:
@@ -512,7 +508,9 @@ def make_log_reader(
                     f"given up on. A shorter window than {window} would help."
                 ),
             }
-        except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
+        except (subprocess.SubprocessError, OSError, UnicodeError, TypeError, ValueError) as exc:
+            # TypeError/ValueError: what subprocess raises for a config value it
+            # rejects, on a worker thread where nobody would see it.
             return {"entries": [], "error": f"Could not read the system log: {exc}"}
 
         if getattr(result, "returncode", 1) != 0:

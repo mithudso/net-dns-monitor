@@ -89,6 +89,7 @@ GROUPS = [
         "Windows and graphs",
         [
             ("open_dashboard_at_launch", "Open dashboard at launch", "bool"),
+            ("auto_open_console", "Open console at launch", "bool"),
             ("ui_refresh_seconds", "Window refresh (seconds)", "int"),
             ("dock_refresh_seconds", "Dock tile refresh (seconds)", "int"),
             ("history_max_samples", "Graph history samples", "int"),
@@ -377,13 +378,18 @@ def parse_field(kind: str, text: str, label: str = ""):
         return targets
     if kind == "int":
         try:
-            return int(float(text))
+            value = int(float(text))
         except (ValueError, OverflowError):
             # OverflowError is not hypothetical: float("inf") parses fine and
             # int() then refuses it, and that exception is not a ValueError -- so
             # it escaped past the window's handler into an AppKit callback, where
             # the click simply appeared to do nothing.
             raise ValueError(f"{name}: expected a whole number, got {text!r}") from None
+        # Zero stays legal: it means "never" or "use the default" for several
+        # keys. Below zero reaches rumps.Timer as an interval.
+        if value < 0:
+            raise ValueError(f"{name}: expected a whole number of 0 or more, got {text!r}")
+        return value
     if kind == "float":
         try:
             value = float(text)
@@ -392,6 +398,8 @@ def parse_field(kind: str, text: str, label: str = ""):
         # inf/nan parse as floats and would reach a timer interval or a timeout.
         if value != value or value in (float("inf"), float("-inf")):
             raise ValueError(f"{name}: expected a finite number, got {text!r}")
+        if value < 0:
+            raise ValueError(f"{name}: expected a number of 0 or more, got {text!r}")
         return value
     return text
 
@@ -551,8 +559,12 @@ def restart_note(
     updates: dict,
     previous: Optional[dict] = None,
     restart_hint: str = SERVICE_RESTART_HINT,
+    changed: Optional[set] = None,
 ) -> str:
     """Which of these need a restart, in words for the window.
+
+    `changed` is an alternative to `previous`: the set of keys whose text differs
+    from what the window loaded.
 
     The window sends every field, so `updates` alone names every restart-only key
     whether or not it changed. Pass `previous` (the config as loaded before the
@@ -561,6 +573,8 @@ def restart_note(
     keys = list(updates)
     if previous is not None:
         keys = [key for key in keys if not _same(previous.get(key), updates[key])]
+    if changed is not None:
+        keys = [key for key in keys if key in changed]
     pending = sorted(key for key in keys if key in NEEDS_RESTART)
     if not pending:
         return "Saved. These take effect immediately."
@@ -615,6 +629,8 @@ class SettingsWindow:
 
         self.on_save = on_save
         self.fields = {}
+        # Field text as of the last load(), so a save can say which keys changed.
+        self._loaded: dict[str, str] = {}
         self._target = _make_button_target(self._handle)
 
         rows = sum(len(fields) for _g, fields in GROUPS)
@@ -741,7 +757,13 @@ class SettingsWindow:
         for key, _label, kind in FIELDS:
             field = self.fields.get(key)
             if field is not None:
-                field.setStringValue_(format_field(kind, config.get(key)))
+                text = format_field(kind, config.get(key))
+                field.setStringValue_(text)
+                self._loaded[key] = text
+
+    def changed_keys(self, values: dict) -> set:
+        """Keys whose text differs from what load() put in the field."""
+        return {key for key, text in values.items() if self._loaded.get(key) != text}
 
     def show(self):
         import AppKit

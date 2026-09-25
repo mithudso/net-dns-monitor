@@ -139,8 +139,12 @@ def build_status_report(
     # Shown only off-healthy: on a good network these are all zero or stale, and
     # a status pane that pads itself with "0 consecutive failures" trains the
     # reader to skim past the lines that do matter.
-    if state != "healthy":
-        lines.append(f"classification: {last_classification or 'unknown'}")
+    if state == "incident":
+        # Same rule as build_title: last_classification is set only on the
+        # healthy->incident edge and never cleared, so a ping-only incident
+        # printing it would name a subsystem from an unrelated incident.
+        reason = (last_classification or "unknown") if flap_state == "incident" else "ping"
+        lines.append(f"classification: {reason}")
     if consecutive_failures:
         lines.append(f"consecutive failures: {consecutive_failures}")
     if ping_down:

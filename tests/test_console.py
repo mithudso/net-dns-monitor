@@ -71,6 +71,35 @@ def test_help_does_not_reach_the_runner():
     runner = recording_runner()
     text, _ = handle(":help", ConsoleState(cwd="/tmp"), runner)
     assert "shell command" in text or "built-ins" in text
+    assert ":scripts" in text
+    assert ":tools" in text
+    assert ":suggested" in text
+    assert runner.calls == []
+
+
+def test_scripts_builtin_returns_scripts_catalog():
+    runner = recording_runner()
+    text, _ = handle(":scripts", ConsoleState(cwd="/tmp"), runner)
+    assert "python3 -m netdnsmonitor.app" in text
+    assert "SCRIPTS.md" in text
+    assert "prober.py" in text
+    assert runner.calls == []
+
+
+def test_tools_builtin_returns_diagnostic_tools():
+    runner = recording_runner()
+    text, _ = handle(":tools", ConsoleState(cwd="/tmp"), runner)
+    assert "scutil --dns" in text
+    assert "traceroute" in text
+    assert "lsof" in text
+    assert runner.calls == []
+
+
+def test_suggested_builtin_returns_suggested_commands():
+    runner = recording_runner()
+    text, _ = handle(":suggested", ConsoleState(cwd="/tmp"), runner)
+    assert "scutil --nwi" in text
+    assert "dig @8.8.8.8" in text
     assert runner.calls == []
 
 
@@ -235,6 +264,26 @@ def test_a_chained_cd_says_it_cannot_chain_rather_than_blaming_the_directory(tmp
     assert "cannot chain" in text
     assert "no such directory" not in text
     assert state.cwd == "/tmp"
+
+
+def test_cd_strips_quotes_and_expands_variables(tmp_path, monkeypatch):
+    """`cd "$SCRATCH"` is how a shell user types a path with spaces in it; the
+    built-in has no shell to do the unquoting and expansion for it.
+    """
+    target = tmp_path / "with space"
+    target.mkdir()
+    monkeypatch.setenv("SCRATCH", str(target))
+    state = ConsoleState(cwd="/tmp")
+    _, state = handle('cd "$SCRATCH"', state, recording_runner())
+    assert state.cwd == str(target)
+    _, state = handle(f"cd '{target}'", ConsoleState(cwd="/tmp"), recording_runner())
+    assert state.cwd == str(target)
+
+
+def test_history_output_is_capped_like_any_other_output():
+    state = ConsoleState(cwd="/tmp", history=["x" * 1000] * 100)
+    text, _ = handle(":history", state, recording_runner())
+    assert "truncated" in text
 
 
 def test_status_output_is_capped_like_any_other_output():
@@ -451,6 +500,32 @@ def test_running_from_source_passes_the_environment_through_unchanged():
     env = child_env(environ, None)
     assert env == environ
     assert env is not environ
+
+
+def test_output_survives_a_child_that_outlives_the_shell(tmp_path):
+    """`sh -c 'sleep 20' & echo started` exits at once, but the grandchild keeps
+    the pipe's write end open. A reader that waits for a full block or EOF sits
+    on that pipe and the line that *was* printed is reported as no output.
+    """
+    started = time.monotonic()
+    result = run_command("sh -c 'sleep 20' & echo started", cwd=str(tmp_path), timeout=10)
+    elapsed = time.monotonic() - started
+    assert "started" in result.stdout
+    assert result.timed_out is False
+    assert elapsed < 3
+
+
+def test_a_background_job_does_not_hold_the_console_open(tmp_path):
+    """A `&` job that outlives its shell must not keep the reader threads -- and
+    the console line -- alive until the job ends on its own.
+    """
+    before = threading.active_count()
+    started = time.monotonic()
+    result = run_command("sh -c 'sleep 20' & echo started", cwd=str(tmp_path), timeout=20)
+    elapsed = time.monotonic() - started
+    assert result.timed_out is False
+    assert elapsed < 3
+    assert threading.active_count() == before
 
 
 def test_a_flood_of_output_is_capped_without_buffering_all_of_it(tmp_path):

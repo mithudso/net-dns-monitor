@@ -307,6 +307,30 @@ def test_an_evicted_entry_re_fetched_by_an_overlapping_poll_is_not_stored_again(
     assert buffer.add([old_line]) == []
 
 
+def test_a_new_entry_older_than_the_last_eviction_is_still_stored():
+    """A high-water mark on the local timestamp turns a clock step backwards --
+    an NTP correction, DST fall-back on a machine logging local time -- into an
+    hour in which every new entry is thrown away as "already seen". Eviction
+    memory must be keyed on what was evicted, not on when.
+    """
+    buffer = LogBuffer(max_entries=1)
+    buffer.add([entry(timestamp="2026-11-01 01:59:58.000", message="m0")])
+    buffer.add([entry(timestamp="2026-11-01 01:59:59.000", message="m1")])
+    # The clock fell back: a genuinely new line stamped earlier than the eviction.
+    stepped_back = entry(timestamp="2026-11-01 01:05:00.000", message="m2")
+    assert len(buffer.add([stepped_back])) == 1
+
+
+def test_the_eviction_memory_is_bounded():
+    """The evicted-key set cannot grow for the life of the process; it holds at
+    most one buffer's worth, which is the whole poll overlap it exists to cover.
+    """
+    buffer = LogBuffer(max_entries=2)
+    buffer.add([entry(timestamp=f"t{i}", message=f"m{i}") for i in range(10)])
+    assert len(buffer._evicted_order) <= 2
+    assert len(buffer._evicted_lookup) <= 2
+
+
 def test_emptying_the_buffer_forgets_what_was_evicted_too():
     """Otherwise 'Empty buffer' would silently refuse to re-accept the recent past."""
     buffer = LogBuffer(max_entries=1)
@@ -512,3 +536,48 @@ def test_the_reader_passes_the_window_and_level_through_to_the_command():
     make_log_reader(run_fn=run_fn)("3m", errors_only=False)
     assert seen["command"][seen["command"].index("--last") + 1] == "3m"
     assert "messageType" not in " ".join(seen["command"])
+
+
+def test_the_reader_bounds_and_captures_the_log_show_call():
+    """Every fake here supplies these for free, so nothing else pins them. Without
+    `timeout=` a wedged `log show` holds the worker forever; without `encoding=`
+    the frozen app's ASCII locale decides, which is the UnicodeDecodeError that
+    crashed the incident tick in 123fe13.
+    """
+    seen = {}
+
+    def run_fn(command, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    make_log_reader(run_fn=run_fn)("1m")
+    assert seen["timeout"] == 45
+    assert seen["capture_output"] is True
+    assert seen["text"] is True
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "replace"
+
+
+def test_a_type_error_from_the_call_is_reported_not_raised():
+    """`log_view_timeout_seconds` comes from unvalidated YAML. A value subprocess
+    rejects raises TypeError, which the docstring's "never raises" did not cover
+    -- on a worker thread, where nobody sees it.
+    """
+
+    def run_fn(*_args, **_kwargs):
+        raise TypeError("'<' not supported between instances of 'str' and 'float'")
+
+    result = make_log_reader(run_fn=run_fn)("1m")
+    assert result["entries"] == []
+    assert "not supported" in result["error"]
+
+
+def test_a_numeric_string_timeout_is_coerced_before_the_call():
+    seen = {}
+
+    def run_fn(command, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    make_log_reader(run_fn=run_fn, timeout="30")("1m")
+    assert seen["timeout"] == 30.0

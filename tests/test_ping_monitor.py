@@ -73,12 +73,25 @@ def test_threshold_of_two_is_reset_by_a_success_in_between():
     assert monitor.record(FAIL, now=10.0)["alert"] is False
 
 
-def test_threshold_below_one_is_clamped_so_a_good_ping_cannot_alert():
-    """`consecutive_failures >= 0` is true on a successful ping too, which
-    would alert continuously on a perfectly healthy network.
+def test_threshold_below_one_is_clamped_to_one():
+    """A successful ping returns early from _should_alert regardless, so the
+    clamp is about the value reported matching the value acted on: 0 behaves
+    exactly like 1, and must say so.
     """
     monitor = PingMonitor(failure_threshold=0)
+    assert monitor.failure_threshold == 1
     assert monitor.record(OK, now=0.0)["alert"] is False
+    assert monitor.record(FAIL, now=5.0)["alert"] is True
+
+
+def test_a_negative_repeat_interval_does_not_alert_on_every_failing_tick():
+    """A negative value from YAML is truthy, and `now - last >= negative` is
+    always true -- twelve bounces a minute, the failure mode edge-triggering
+    exists to prevent.
+    """
+    monitor = PingMonitor(alert_repeat_seconds=-5)
+    assert monitor.record(FAIL, now=0.0)["alert"] is True
+    assert [monitor.record(FAIL, now=t)["alert"] for t in (5.0, 10.0)] == [False, False]
 
 
 def test_repeat_interval_re_alerts_only_after_it_elapses():

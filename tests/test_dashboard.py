@@ -113,6 +113,25 @@ def test_status_reports_healthy():
     assert rows["Status"] == "healthy"
 
 
+def test_status_does_not_claim_healthy_before_the_first_ping():
+    """`ping_stats` starts as NO_PING_YET, whose `down` is False -- so before the
+    first reply, and for as long as the ping worker keeps failing to run at all,
+    the fall-through reads as a clean bill of health.
+    """
+    rows = flat(dashboard_sections(ping_stats=NO_DATA, flap_state="healthy", config=CONFIG))
+    assert rows["Round trip"] == "not measured yet"
+    assert rows["Status"] != "healthy"
+    assert "probed" in rows["Status"]
+
+
+def test_an_absent_re_alert_setting_renders_as_unknown_not_as_off():
+    """A missing key is not the same as a zero: the sibling rows say '?' for the
+    former, and "one alert per outage" is a claim about configured behaviour.
+    """
+    rows = flat(dashboard_sections(ping_stats=HEALTHY, flap_state="healthy", config={}))
+    assert rows["Re-alert while down"] == "?"
+
+
 def test_resolution_batch_summarised_when_one_has_run():
     rows = flat(
         dashboard_sections(
@@ -199,6 +218,95 @@ def test_rendered_text_labels_every_section():
     assert "NETWORK RIGHT NOW" in text
     assert "MONITOR" in text
     assert "SETTINGS IN FORCE" in text
+
+
+# --- peers and the verdict -------------------------------------------------
+
+
+VERDICT = {
+    "verdict": "local_machine",
+    "summary": "This machine",
+    "confidence": "high",
+    "reason": "A peer reached the internet while this machine could not.",
+    "evidence": {
+        "peers_known": 2,
+        "peers_answered": 1,
+        "peer_external_reachable": True,
+        "peer_dns_ok": None,
+    },
+}
+
+
+def titles(sections):
+    return [title for title, _ in sections]
+
+
+def test_the_verdict_section_comes_first_when_something_is_broken():
+    sections = dashboard_sections(
+        ping_stats=DOWN, flap_state="incident", config=CONFIG, fault_verdict=VERDICT
+    )
+    assert titles(sections)[0] == "Where the problem is"
+    rows = flat(sections)
+    assert rows["Cause"] == "This machine"
+    assert rows["Peers consulted"] == "1 answered of 2 known"
+    assert rows["Peer can reach internet"] == "yes"
+    assert "Peer can resolve DNS" not in rows
+
+
+def test_peers_section_sits_after_monitor_and_before_settings():
+    sections = dashboard_sections(
+        ping_stats=HEALTHY, flap_state="healthy", config=CONFIG, peers={"current": []}
+    )
+    order = titles(sections)
+    assert order.index("Monitor") < order.index("Other monitors on this network")
+    assert order.index("Other monitors on this network") < order.index("Settings in force")
+
+
+def test_permissions_section_follows_settings_in_force():
+    sections = dashboard_sections(
+        ping_stats=HEALTHY,
+        flap_state="healthy",
+        config=CONFIG,
+        permissions=[("Elevated repairs", "not granted")],
+    )
+    order = titles(sections)
+    assert order.index("Permissions") == order.index("Settings in force") + 1
+
+
+def test_a_peer_that_has_gone_quiet_is_still_listed():
+    """ "Was here yesterday and isn't answering now" is the interesting fact, and
+    it is invisible if only the live bucket is shown.
+    """
+    peers = {
+        "current": [],
+        "recent": [],
+        "other": [
+            {
+                "id": "peer-x",
+                "host": "old-mac",
+                "address": "192.168.1.9",
+                "status": "healthy",
+                "missed_healthchecks": 3,
+            }
+        ],
+    }
+    rows = flat(
+        dashboard_sections(ping_stats=HEALTHY, flap_state="healthy", config=CONFIG, peers=peers)
+    )
+    assert rows["[other]"] == "1 host(s)"
+    assert "3 missed heartbeat(s)" in rows["  old-mac"]
+
+
+def test_a_long_peer_hostname_does_not_push_every_value_off_the_window():
+    """Label width is global, and the peer's hostname is network-supplied: one
+    253-character name would shove every value in the window 250 columns right.
+    """
+    peers = {"current": [{"id": "p", "host": "h" * 253, "address": "10.0.0.2", "status": "ok"}]}
+    text = render_dashboard_text(
+        dashboard_sections(ping_stats=HEALTHY, flap_state="healthy", config=CONFIG, peers=peers)
+    )
+    ping_line = next(line for line in text.splitlines() if "Ping target" in line)
+    assert len(ping_line) < 80
 
 
 # --- the window ------------------------------------------------------------
@@ -530,3 +638,18 @@ def test_the_results_pane_keeps_only_the_newest_text():
 
     assert capped_output("abc", "def", limit=4) == "cdef"
     assert capped_output("", "short", limit=100) == "short"
+
+
+def test_the_output_pane_keeps_only_the_tail_once_it_is_full():
+    """The pane is fed automatically by the log watcher for as long as the app
+    runs, so without a cap it grows -- and each append re-reads the whole thing
+    across the ObjC bridge.
+    """
+    from netdnsmonitor.dashboard import OUTPUT_MAX_CHARS
+
+    window = DashboardWindow(on_action=lambda action: None)
+    window.append_output("x" * OUTPUT_MAX_CHARS)
+    window.append_output("the end\n")
+    body = str(window.output_view.string())
+    assert len(body) <= OUTPUT_MAX_CHARS
+    assert body.endswith("the end\n")

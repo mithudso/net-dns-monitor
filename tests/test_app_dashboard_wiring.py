@@ -40,6 +40,9 @@ class FakeStateMachine:
     ):
         self.flap_gate = FakeFlapGate(flap_state, consecutive_failures)
         self._report = report
+        # The real StateMachine carries this; the full-diagnosis path reads it so
+        # its ladder matches the one an incident tick would run.
+        self.failover_classifications = frozenset()
         self.prober = lambda: {"external_reachable": True, "dns_ok": False}
         self.repair_executor = lambda step, classification=None: f"ran {step.name}"
         # The two attributes the manual steps read off the real StateMachine.
@@ -183,6 +186,24 @@ def test_the_window_reports_a_failing_ping(tmp_path):
     text = app._dashboard.stats_view.string()
     assert "DOWN" in text
     assert "no reply" in text
+
+
+def test_a_raise_in_the_repaint_does_not_kill_the_ui_timer(tmp_path):
+    """rumps prints and swallows a raise from a timer callback, so without a
+    guard a repaint that fails every second would fail silently every second:
+    nothing in `:status` would say why the window stopped updating.
+    """
+    app = make_app(tmp_path)
+    app.open_dashboard()
+
+    def corrupted():
+        raise RuntimeError("registry corrupted")
+
+    app.peer_registry.buckets = corrupted
+
+    app.ui_tick()  # returns rather than raising
+
+    assert "RuntimeError" in app.last_tick_error
 
 
 # --- troubleshooting buttons -------------------------------------------------

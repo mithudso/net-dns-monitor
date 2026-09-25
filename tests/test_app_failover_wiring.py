@@ -23,6 +23,9 @@ from netdnsmonitor.report import build_report
 
 def config(**overrides):
     cfg = dict(DEFAULT_CONFIG)
+    # The real FailoverStore reads and writes this path; nothing here may
+    # touch a live state file.
+    cfg["failover_state_path"] = "/dev/null/no-such-dir/failover.json"
     cfg.update(overrides)
     return cfg
 

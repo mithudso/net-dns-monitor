@@ -7,6 +7,8 @@ import errno
 import socket
 import time
 
+import pytest
+
 from netdnsmonitor.failover_policy import Candidate, best_candidate, rank_candidates
 from netdnsmonitor.throughput import (
     default_measure,
@@ -31,9 +33,25 @@ def no_lookup(host, timeout):
 # --- meter ------------------------------------------------------------------
 
 
+def resolved(host, timeout):
+    return "192.0.2.1"
+
+
 def test_meter_returns_the_measurement():
     meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2, resolve_fn=no_lookup)
     assert meter("en0") == 94.2
+
+
+def test_meter_does_not_touch_the_resolver(monkeypatch):
+    """The lookup enters through `resolve_fn`; with a fake injected, the suite
+    must never reach the real resolver. Guarded at the socket boundary because
+    that is the only place an accidental real lookup would show.
+    """
+    calls = []
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: calls.append(a) or [])
+    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 1.0, resolve_fn=resolved)
+    assert meter("en0") == 1.0
+    assert calls == []
 
 
 def test_no_device_is_not_measured():
@@ -45,7 +63,9 @@ def test_no_device_is_not_measured():
 def test_an_empty_host_disables_measurement_entirely():
     """Ranking then falls back to reachability rather than inventing numbers."""
     calls = []
-    meter = make_throughput_meter(host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0)
+    meter = make_throughput_meter(
+        host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0, resolve_fn=resolved
+    )
     assert meter("en0") is None
     assert calls == []
 
@@ -75,13 +95,14 @@ def test_measurement_parameters_reach_the_measure_function():
         resolve_fn=no_lookup,
     )
     meter("en3")
-    seen.pop("address", None)  # resolved once by the meter, not a caller concern
+    assert seen.pop("address") == [V4]
+    # Whatever the lookup cost comes off the top, so the meter sees the rest.
+    assert seen.pop("timeout") == pytest.approx(9.0, abs=0.5)
     assert seen == {
         "device": "en3",
         "host": "h",
         "path": "/p",
         "port": 8443,
-        "timeout": 9.0,
         "max_bytes": 5,
     }
 

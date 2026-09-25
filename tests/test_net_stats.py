@@ -93,7 +93,10 @@ def test_malformed_rows_are_skipped_rather_than_raising():
     """This runs every 5 seconds forever; one unexpected line must not take
     the heartbeat down.
     """
-    junk = NETSTAT_OUTPUT + "en0        1500  <Link#15>   4a:63:a4:bf:16:ed  -  -  -  -\n"
+    junk = NETSTAT_OUTPUT + (
+        "en0        1500  <Link#15>   4a:63:a4:bf:16:ed     1000     0"
+        "          �      900     0      40000     0\n"
+    )
     assert parse_interface_counters(junk) == (EN0_IN + EN9_IN, EN0_OUT + EN9_OUT)
 
 
@@ -226,6 +229,16 @@ def test_recovers_on_the_sample_after_a_counter_reset():
     down, up = meter.sample((5_000 + 6250, 5_000 + 1250), now=110.0)
     assert down == 10_000
     assert up == 2_000
+
+
+def test_an_unmeasured_reading_keeps_the_baseline():
+    """One failed netstat read must cost one blank cycle, not two: the next
+    good reading still has the earlier baseline to diff against.
+    """
+    meter = ThroughputMeter()
+    meter.sample((1000, 500), now=100.0)
+    assert meter.sample(None, now=105.0) == (None, None)
+    assert meter.sample((7250, 1750), now=110.0) == (5000.0, 1000.0)
 
 
 def test_zero_elapsed_time_reports_no_rate_instead_of_dividing_by_zero():

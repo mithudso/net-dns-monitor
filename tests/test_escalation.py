@@ -24,6 +24,24 @@ def test_redact_leaves_unrelated_values_untouched():
     assert redacted["external_target"] == "1.1.1.1"
 
 
+def test_redact_rewrites_dict_keys_as_well_as_values():
+    """`probe_results["domain_results"]` is keyed by hostname, so a sensitive
+    name used as a key left for the API untouched while its value was scrubbed.
+    """
+    bundle = {"domain_results": {"mail.corp.local": True, "example.com": True}}
+    redacted = redact(bundle, sensitive_strings=["mail.corp.local"])
+    assert "mail.corp.local" not in redacted["domain_results"]
+    assert redacted["domain_results"] == {"[REDACTED]": True, "example.com": True}
+
+
+def test_redact_ignores_an_empty_needle():
+    """A stray `- ` in the YAML list yields "" and `str.replace("", ...)` inserts
+    the marker between every character.
+    """
+    redacted = redact({"note": "abc"}, sensitive_strings=["", "b"])
+    assert redacted["note"] == "a[REDACTED]c"
+
+
 def test_should_not_escalate_before_ladder_completes():
     assert (
         should_escalate(ladder_completed=False, repair_attempted_or_na=True, recheck_ok=False)
@@ -88,7 +106,7 @@ def test_redact_applies_the_longer_of_two_overlapping_needles():
     assert redacted == "lookup [REDACTED] failed"
 
 
-def test_redact_ignores_an_empty_needle():
+def test_redact_ignores_an_empty_needle_in_a_plain_string():
     """str.replace("", x) inserts x between every character."""
     assert redact("dns ok", sensitive_strings=["", "corp"]) == "dns ok"
 

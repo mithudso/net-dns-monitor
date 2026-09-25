@@ -38,8 +38,9 @@ class PingMonitor:
         loss_window: int = 12,
         alert_repeat_seconds: Optional[float] = 0,
     ):
-        # A threshold below 1 would make `consecutive_failures >= threshold`
-        # true on a successful ping too, alerting on a healthy network.
+        # A threshold of 0 or below behaves exactly like 1: _should_alert
+        # returns early on a successful ping, so a healthy network cannot
+        # alert either way. Clamp so the value reported is the value acted on.
         self.failure_threshold = max(1, failure_threshold)
         # A negative interval makes `now - last >= interval` true on every tick,
         # which would alert on every failing ping instead of once per outage.
@@ -88,7 +89,10 @@ class PingMonitor:
             self.down = True
             return True  # the failure edge
 
-        if self.alert_repeat_seconds and self._last_alert_at is not None:
+        # `> 0`, not truthiness: a negative repeat interval from YAML is truthy
+        # and `now - last >= negative` is always true, which is the alert on
+        # every failing tick this whole class exists to prevent.
+        if self.alert_repeat_seconds > 0 and self._last_alert_at is not None:
             return now - self._last_alert_at >= self.alert_repeat_seconds
         return False
 

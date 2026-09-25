@@ -34,7 +34,7 @@ def test_incident_spells_out_down_rather_than_showing_a_number():
     the panel keeps its old wording, and a round-trip time during an incident
     would be a stale reading presented as current.
     """
-    text = mini_text("incident", rtt_ms=61.4)
+    text = mini_text("incident", rtt_ms=61.4, ping_down=True)
     assert "DOWN" in text
     assert "61" not in text
 
@@ -70,6 +70,17 @@ def test_a_reason_changes_nothing_outside_an_incident():
     """
     assert mini_text("healthy", rtt_ms=61.4, reason="dns") == f"{GREEN}  61ms"
     assert mini_text("flaky", rtt_ms=61.4, reason="dns") == f"{YELLOW}  61ms"
+
+
+def test_a_dns_only_incident_keeps_the_live_round_trip():
+    """DNS broken, pings answered: the network is not down, and saying so sends
+    someone after the wrong fault. The red dot carries the incident; the
+    number carries the evidence that the link itself is alive.
+    """
+    text = mini_text("incident", rtt_ms=61.4, ping_down=False)
+    assert RED in text
+    assert "61ms" in text
+    assert "DOWN" not in text
 
 
 def test_healthy_shows_the_round_trip_time_in_whole_milliseconds():

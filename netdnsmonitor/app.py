@@ -459,6 +459,7 @@ def build_state_machine(
     capabilities: Optional[Capabilities] = None,
     credential_store: Optional[credentials.CredentialStore] = None,
     consent: Optional[ai_consent.ConsentStore] = None,
+    spawn=None,
 ) -> StateMachine:
     """`failover` is passed in by the app so the ladder step and the tick-path
     failback share one instance and therefore one set of counters. It is
@@ -469,6 +470,8 @@ def build_state_machine(
     `capabilities` is detected from the environment when omitted, for the same
     reason: a caller who forgets must not get a sandboxed state machine that
     tries to rewrite the service order or read the unified log.
+
+    `spawn` goes straight to the domain learner; see build_domains_source.
     """
     capabilities = distribution.detect() if capabilities is None else capabilities
     if failover is None:
@@ -481,7 +484,9 @@ def build_state_machine(
         log_watcher = make_log_watcher(lookback=config["log_lookback"])
     else:
         log_watcher = unified_log_unavailable_watcher()
-    domains_source, store = build_domains_source(config, log_watcher, capabilities=capabilities)
+    domains_source, store = build_domains_source(
+        config, log_watcher, spawn=spawn, capabilities=capabilities
+    )
 
     base_prober = make_prober(
         external_targets=external_targets,
@@ -944,6 +949,10 @@ class NetDnsMonitorApp(rumps.App):
         if self.config["open_dashboard_at_launch"]:
             # activate=False: ordered front without stealing focus at login.
             self.open_dashboard(activate=False)
+        if self.config.get("auto_open_console", True):
+            # open_console is guarded: a failure to build the window costs the
+            # console, never the launch tick.
+            self.open_console()
 
     def _install_activation_observer(self):
         """Open the dashboard when the app is brought to the front.
@@ -991,6 +1000,16 @@ class NetDnsMonitorApp(rumps.App):
     # --- LAN peer discovery ------------------------------------------------
 
     def peer_tick(self, _sender=None):
+        # Same guard as `tick`, for the same reason: rumps prints and swallows a
+        # raise from a timer callback, so an unguarded failure here would leave
+        # `:status` saying nothing about why peers stopped hearing from us.
+        try:
+            self._peer_tick()
+        except Exception as exc:  # noqa: BLE001 - record it; a lost sweep is not fatal
+            self.last_tick_error = f"{type(exc).__name__}: {exc}"
+            traceback.print_exc()
+
+    def _peer_tick(self):
         """Announce, heartbeat every known peer, and persist the record.
 
         Starts discovery on the first tick rather than in `__init__`: binding a
@@ -1251,7 +1270,7 @@ class NetDnsMonitorApp(rumps.App):
         one cadence (~5s). That is the same trade resolution_tick already makes
         and it buys the thing that matters: the ping itself never runs on the run
         loop. A failed ping takes about 3 seconds to give up (measured against an
-        unroutable address), so doing it inline here would wedge the UI and both
+        unroutable address), so doing it inline here would wedge the UI and the
         other timers for most of every cycle for the entire length of an outage.
 
         Alerting and repainting therefore both happen here, on the main thread,
@@ -1349,7 +1368,7 @@ class NetDnsMonitorApp(rumps.App):
         `setApplicationIconImage_` is synchronous and costs ~2 seconds per call
         (measured), on the main thread. Called every 5-second heartbeat -- which is
         what the round-trip number changing means -- that would block the run loop
-        for a large fraction of every cycle and starve the other three timers.
+        for a large fraction of every cycle and starve the other timers.
 
         So: a status change goes through immediately, because that is the urgent
         and rare case, and a change to the number alone waits for
@@ -1364,20 +1383,26 @@ class NetDnsMonitorApp(rumps.App):
         self._dock_state = state
         self._dock_updated_at = now
 
-    def _refresh_title(self):
-        # Snapshot once. The resolution worker rebinds this attribute
-        # concurrently, and reading it three separate times (confirmed via
-        # `dis`) lets one batch's total splice with a newer batch's failure
-        # count -- rendering e.g. "7/2 resolution fails". The rebind itself is
-        # atomic; a reader that reads three times is not.
+    def _display_snapshot(self) -> tuple:
+        """One read of everything the title, the Dock tile and `:status` show.
+
+        Snapshot once. The resolution worker rebinds `last_resolution_findings`
+        concurrently, and reading it three separate times (confirmed via `dis`)
+        lets one batch's total splice with a newer batch's failure count --
+        rendering e.g. "7/2 resolution fails". The rebind itself is atomic; a
+        reader that reads three times is not. `ping_stats` is only rebound on
+        this thread, but one read keeps the title and the Dock tile describing
+        the same moment.
+
+        `.get("resolved")`, not `["resolved"]`: a finding without the key is a
+        failure to count, not a KeyError to raise into the ping drain.
+        """
         findings = self.last_resolution_findings
         resolution_failed = resolution_total = None
         if findings:
             resolution_total = len(findings)
-            resolution_failed = sum(1 for finding in findings if not finding["resolved"])
+            resolution_failed = sum(1 for finding in findings if not finding.get("resolved"))
 
-        # Same reason, even though ping_stats is only rebound on this thread:
-        # one read keeps the title and the Dock tile describing the same moment.
         ping = self.ping_stats
         ping_down = ping["down"]
         stats = format_stats(
@@ -1387,8 +1412,19 @@ class NetDnsMonitorApp(rumps.App):
             up_bps=ping["up_bps"],
             ping_down=ping_down,
         )
+        return (
+            resolution_failed,
+            resolution_total,
+            ping,
+            ping_down,
+            stats,
+            self.state_machine.flap_gate,
+        )
 
-        flap_gate = self.state_machine.flap_gate
+    def _refresh_title(self):
+        resolution_failed, resolution_total, ping, ping_down, stats, flap_gate = (
+            self._display_snapshot()
+        )
         self.title = build_title(
             flap_gate.state,
             self.last_classification,
@@ -1745,10 +1781,50 @@ class NetDnsMonitorApp(rumps.App):
         )
         self._privilege_status_thread.start()
 
+    def _privilege_snapshot(
+        self,
+        granted_commands: list,
+        *,
+        message: Optional[str] = None,
+        interfaces: Optional[list] = None,
+        probed: bool = False,
+    ) -> dict:
+        """What a privilege worker hands back to the drain.
+
+        One `sudo -l` listing answers both questions -- is the DNS restart
+        granted, and which interfaces are covered -- so nothing here pays for a
+        second subprocess. "Granted" is asked of `privileges.is_granted_from`
+        rather than by matching the joined argv against the listing: exact
+        matching reports a blanket `NOPASSWD: ALL` rule as "not granted" in the
+        window while the repairs run under it.
+
+        `interfaces=None` re-enumerates the machine. Only the launch/window probe
+        passes `probed=True`, and it is the only caller that reads the routing
+        table; a grant or revoke has no reason to, and omitting "primary" and
+        "probed" is what lets the drain keep its last known answers.
+        """
+        snapshot = {
+            "granted": privileges.is_granted_from(granted_commands),
+            "interfaces": privileges.dhcp_interfaces() if interfaces is None else interfaces,
+            "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
+        }
+        if message is not None:
+            snapshot["message"] = message
+        if probed:
+            snapshot["primary"] = privileges.primary_interface()
+            snapshot["probed"] = True
+        return snapshot
+
+    def _privilege_failure(self, verb: str) -> dict:
+        """A grant or revoke that raised: keep the status as it was and say so."""
+        return {
+            "granted": self.privileges_granted,
+            "interfaces": self.dhcp_interfaces,
+            "message": f"{verb} raised; see the app log for the traceback.",
+        }
+
     def _run_privilege_status(self):
         try:
-            # One `sudo -l` listing answers both questions, so this does not pay for
-            # a second subprocess to find out which interfaces are covered.
             granted_commands = privileges.granted_commands_now()
             self._privilege_results.put(
                 {
@@ -1854,13 +1930,7 @@ class NetDnsMonitorApp(rumps.App):
             )
         except Exception:  # noqa: BLE001 - never raise out of a worker
             traceback.print_exc()
-            self._privilege_results.put(
-                {
-                    "granted": self.privileges_granted,
-                    "interfaces": self.dhcp_interfaces,
-                    "message": "Granting raised; see the app log for the traceback.",
-                }
-            )
+            self._privilege_results.put(self._privilege_failure("Granting"))
 
     def _revoke_privileges(self):
         if self._privilege_thread is not None and self._privilege_thread.is_alive():
@@ -1886,15 +1956,20 @@ class NetDnsMonitorApp(rumps.App):
             )
         except Exception:  # noqa: BLE001 - never raise out of a worker
             traceback.print_exc()
-            self._privilege_results.put(
-                {
-                    "granted": self.privileges_granted,
-                    "interfaces": self.dhcp_interfaces,
-                    "message": "Revoking raised; see the app log for the traceback.",
-                }
-            )
+            self._privilege_results.put(self._privilege_failure("Revoking"))
 
     def ui_tick(self, _sender=None):
+        # Same guard as `tick`: rumps prints and swallows a raise from a timer
+        # callback and the timer keeps firing, so a repaint that failed every
+        # second would fail silently every second. Recording it is what lets
+        # `:status` say why the window stopped updating.
+        try:
+            self._ui_tick()
+        except Exception as exc:  # noqa: BLE001 - record it; a lost repaint is not fatal
+            self.last_tick_error = f"{type(exc).__name__}: {exc}"
+            traceback.print_exc()
+
+    def _ui_tick(self):
         """Repaint the window and collect any finished troubleshooting step.
 
         Its own timer, at 1s, rather than riding the 5s heartbeat: a button whose
@@ -2111,7 +2186,7 @@ class NetDnsMonitorApp(rumps.App):
 
         Anything that shells out goes to a worker: repair_executor allows 5s per
         step and a full ladder is four of them, so running inline would freeze the
-        window and all four timers for up to half a minute -- the same reason the
+        window and the other timers for up to half a minute -- the same reason the
         ping does not run here.
         """
         gate = GATED_DASHBOARD_ACTIONS.get(action_id)
@@ -2262,7 +2337,15 @@ class NetDnsMonitorApp(rumps.App):
         return a lot of text, and 50 getaddrinfo calls follow it.
         """
         reader = make_query_log_reader(lookback=self.config["log_lookback"])
-        domains = extract_top_domains(reader(), limit=PREWARM_LIMIT)
+        lines = reader()
+        if lines is None:
+            # None is "could not read", which is not the same as "read and found
+            # nothing" -- the message below would blame an empty log.
+            return [
+                "Could not read the unified log (log show failed, timed out, or is "
+                "unavailable); nothing prewarmed."
+            ]
+        domains = extract_top_domains(lines, limit=PREWARM_LIMIT)
         if not domains:
             return [
                 "No queried domains found in the log. Either nothing has resolved "
@@ -2348,10 +2431,12 @@ class NetDnsMonitorApp(rumps.App):
 
         Not a queue-and-drain like the troubleshooting steps: nothing on the
         main thread needs the outcome in order to draw anything, so the result
-        is published straight onto the attribute the console's `:status` and the
-        tests read. `notifier` returns a list of per-channel results and does not
-        raise -- a delivery failure is recorded and swallowed inside it, because
-        a Slack outage must not stop the report being saved.
+        is published straight onto `last_notification_results`. Nothing in the
+        app reads that attribute -- `:status` does not report delivery -- so it
+        exists for the tests and for anyone attaching a debugger. `notifier`
+        returns a list of per-channel results and does not raise -- a delivery
+        failure is recorded and swallowed inside it, because a Slack outage must
+        not stop the report being saved.
         """
 
         def deliver():
@@ -2380,7 +2465,7 @@ class NetDnsMonitorApp(rumps.App):
         """Main thread: append output and record the forensic events."""
         while True:
             try:
-                _action_id, text, events = self._action_results.get_nowait()
+                action_id, text, events = self._action_results.get_nowait()
             except queue.Empty:
                 return
             for event in events:
@@ -2392,6 +2477,14 @@ class NetDnsMonitorApp(rumps.App):
                     result=event["result"],
                 )
             self._append_output(text)
+            if action_id.startswith("router_"):
+                # The Router items live on the menu bar, not the dashboard, so the
+                # pane this was just appended to may not exist. A status that was
+                # earned at an admin dialog must not vanish into a closed window.
+                try:
+                    rumps.notification("Net/DNS Monitor", "Router", text.strip().splitlines()[0])
+                except Exception:  # noqa: BLE001 - the pane already has it
+                    traceback.print_exc()
 
     def _append_output(self, text: str):
         if self._dashboard is not None:
@@ -2686,33 +2779,18 @@ class NetDnsMonitorApp(rumps.App):
         truth, and anything driven off "last report" goes stale the moment the
         network recovers, because recovery produces no report at all.
 
-        Each attribute is snapshotted exactly once, for the reason spelled out
-        in `_refresh_title`: the resolution worker rebinds
-        `last_resolution_findings` from another thread, and a reader that reads
-        it more than once can splice one batch's total onto another's failure
-        count.
+        Snapshotted once, through `_display_snapshot`, for the reason recorded
+        there.
         """
-        findings = self.last_resolution_findings
-        resolution_failed = resolution_total = None
-        if findings:
-            resolution_total = len(findings)
-            resolution_failed = sum(1 for finding in findings if not finding["resolved"])
-
-        ping = self.ping_stats
-        ping_down = ping["down"]
-        flap_gate = self.state_machine.flap_gate
+        resolution_failed, resolution_total, _ping, ping_down, stats, flap_gate = (
+            self._display_snapshot()
+        )
         return build_status_report(
             flap_state=flap_gate.state,
             last_classification=self.last_classification,
             consecutive_failures=flap_gate.consecutive_failures,
             ping_down=ping_down,
-            stats=format_stats(
-                rtt_ms=ping["rtt_ms"],
-                loss_pct=ping["loss_pct"],
-                down_bps=ping["down_bps"],
-                up_bps=ping["up_bps"],
-                ping_down=ping_down,
-            ),
+            stats=stats,
             resolution_failed=resolution_failed,
             resolution_total=resolution_total,
             last_report_path=self.last_report_path,

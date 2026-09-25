@@ -3,6 +3,8 @@ import smtplib
 import ssl
 import urllib.error
 
+import pytest
+
 from netdnsmonitor.notifications import (
     format_notification,
     make_email_notifier,
@@ -127,6 +129,25 @@ def test_slack_notifier_survives_a_truncated_response_body():
 
     result = make_slack_notifier("https://hooks.slack.test/x", post_fn=post_fn)("hello")
     assert result["error"] == "Slack webhook unreachable"
+
+
+@pytest.mark.parametrize(
+    "url", ["http://hooks.slack.test/secret", "file:///etc/passwd", "ftp://hooks.slack.test/x"]
+)
+def test_slack_notifier_refuses_a_webhook_url_that_is_not_https(url):
+    """The webhook URL is the credential. Over http:// it crosses the network in
+    cleartext, and urlopen would honour file:// and ftp:// just as readily.
+    """
+    calls = []
+
+    def post_fn(*args):
+        calls.append(args)
+        return 200, "ok"
+
+    result = make_slack_notifier(url, post_fn=post_fn)("hello")
+    assert result["error"] == "webhook URL is not https"
+    assert calls == []
+    assert "secret" not in str(result)
 
 
 class FakeSMTP:

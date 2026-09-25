@@ -326,7 +326,9 @@ def test_the_wired_prober_evicts_a_dead_learned_domain_on_a_healthy_tick(tmp_pat
         return prober
 
     monkeypatch.setattr("netdnsmonitor.app.make_prober", fake_make_prober)
-    probe = build_state_machine(config).prober()
+    # `spawn` swallows the learner's first scan: it would otherwise run a real
+    # `log show` on a daemon thread from inside the suite.
+    probe = build_state_machine(config, spawn=lambda fn: None).prober()
 
     assert probe["domain_results"]["example.com"] is True
     assert probe["domain_results"]["dead.example.net"] is False

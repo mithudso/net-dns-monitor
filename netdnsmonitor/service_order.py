@@ -17,8 +17,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 # "(1) Wi-Fi" or "(*) M3100" -- the marker is the position, or "*" for a
-# service that exists in the order but is currently disabled.
-_ENTRY_RE = re.compile(r"^\((\d+|\*)\)\s+(.+?)\s*$")
+# service that exists in the order but is currently disabled. The name is
+# captured verbatim, trailing whitespace included: it goes back to networksetup
+# as an argv token, and a trimmed name would pass the permutation guard (both
+# sides of that comparison come through this parse) while naming a service
+# that does not exist. networksetup prints exactly one space after the marker.
+_ENTRY_RE = re.compile(r"^\((\d+|\*)\) (.+)$")
 # "(Hardware Port: Wi-Fi, Device: en0)" -- the device is what IP_BOUND_IF needs.
 _PORT_RE = re.compile(r"^\(Hardware Port:\s*(.*?),\s*Device:\s*(.*?)\s*\)\s*$")
 
@@ -84,6 +88,12 @@ def is_order_intact(services: list[NetworkService], new_order: list[str]) -> boo
     current = [s.name for s in services]
     if not current or len(new_order) != len(current):
         return False
+    # macOS keys services by id, so the live order can hold two services with
+    # one name. A list of names cannot say which is which, and networksetup
+    # takes names -- so no reorder built from such a listing can be trusted
+    # to leave both in place.
+    if len(set(current)) != len(current):
+        return False
     if len(set(new_order)) != len(new_order):
         return False
     # Each name is passed to networksetup as its own argv token, so a service
@@ -93,3 +103,16 @@ def is_order_intact(services: list[NetworkService], new_order: list[str]) -> boo
     if any(name.startswith("-") for name in new_order):
         return False
     return set(new_order) == set(current)
+
+
+def order_argv(services: list[NetworkService], new_order: list[str]) -> Optional[list[str]]:
+    """The one place the `-ordernetworkservices` command line is built.
+
+    Returns None when `is_order_intact` refuses, so a caller cannot reach the
+    argv without passing the guard. Every reorder -- automatic, manual, CLI --
+    goes through here, because this is the command that deletes a service
+    when handed a list with a name missing.
+    """
+    if not is_order_intact(services, new_order):
+        return None
+    return ["networksetup", "-ordernetworkservices", *new_order]

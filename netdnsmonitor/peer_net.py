@@ -17,6 +17,11 @@ a run loop exists or not.
 There is no notion of a leader, no shared state, and no commands. A peer can
 learn another peer's hostname and monitor status and nothing else.
 
+Nothing here is authenticated. A peer's id, hostname, status and connectivity
+flags are whatever the sender chose to put in the datagram, and one peer's
+self-reported state can decide a localization verdict on its own. The verdict is
+a hint for a human, never an input to a repair.
+
 **Liveness is just recency.** A pong updates `last_seen` exactly as an
 announcement does, so there is no separate health flag that could disagree with
 the timestamps. A peer that stops answering ages out of `current` on its own.
@@ -351,7 +356,7 @@ class PeerNetwork:
 
     def announce(self) -> int:
         """Broadcast our presence. Returns how many datagrams went out."""
-        return self._send_to_all(ANNOUNCE, self.broadcast_fn())
+        return len(self._send(ANNOUNCE, [(address, address) for address in self.broadcast_fn()]))
 
     def probe(self, addresses) -> int:
         """Unicast a probe to each known peer address, and remember we asked.
@@ -359,18 +364,40 @@ class PeerNetwork:
         Anything already outstanding from the previous sweep counts as a miss:
         the probe went out, the sweep came round again, nothing answered.
         """
+        addresses = list(addresses)
         with self._lock:
             outstanding = set(self._awaiting_pong)
             self._awaiting_pong = {peer_id for peer_id, _ in addresses}
         for peer_id in outstanding:
             self.registry.note_healthcheck_miss(peer_id)
-        return self._send_to_all(PROBE, [address for _, address in addresses])
+        sent = self._send(PROBE, addresses)
+        # A datagram that never left cannot go unanswered. Left outstanding, a
+        # missing socket or a sendto error would count every peer as silent on
+        # the next sweep. Intersected rather than assigned, so a pong that
+        # already arrived is not put back.
+        with self._lock:
+            self._awaiting_pong &= set(sent)
+        return len(sent)
 
-    def _send_to_all(self, kind: str, addresses) -> int:
+    def _send(self, kind: str, targets) -> list:
+        """One datagram per (key, address). Returns the keys that actually left."""
         if self.socket is None:
-            return 0
+            return []
+        payload = self._payload(kind)
+        sent = []
+        for key, address in targets:
+            try:
+                self.socket.sendto(payload, (address, self.send_port))
+                sent.append(key)
+            except OSError:
+                # A single unroutable interface must not stop the others. Common
+                # and expected: a down interface still lists a broadcast address.
+                continue
+        return sent
+
+    def _payload(self, kind: str) -> bytes:
         state = self.state_fn() or {}
-        payload = build_message(
+        return build_message(
             kind,
             self.registry.self_id,
             self.host,
@@ -379,16 +406,6 @@ class PeerNetwork:
             external_reachable=state.get("external_reachable"),
             dns_ok=state.get("dns_ok"),
         )
-        sent = 0
-        for address in addresses:
-            try:
-                self.socket.sendto(payload, (address, self.send_port))
-                sent += 1
-            except OSError:
-                # A single unroutable interface must not stop the others. Common
-                # and expected: a down interface still lists a broadcast address.
-                continue
-        return sent
 
     # --- receiving ---------------------------------------------------------
 
@@ -484,17 +501,5 @@ class PeerNetwork:
     def _reply_pong(self, address: str) -> None:
         if self.socket is None:
             return
-        state = self.state_fn() or {}
         with contextlib.suppress(OSError):
-            self.socket.sendto(
-                build_message(
-                    PONG,
-                    self.registry.self_id,
-                    self.host,
-                    self.status_fn(),
-                    self.bind_port,
-                    external_reachable=state.get("external_reachable"),
-                    dns_ok=state.get("dns_ok"),
-                ),
-                (address, self.send_port),
-            )
+            self.socket.sendto(self._payload(PONG), (address, self.send_port))

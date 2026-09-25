@@ -43,6 +43,13 @@ RunFn = Callable[..., object]
 
 RESOLVER_DIR = "/etc/resolver"
 
+# Absolute paths, like privileges.py: a menu-bar app's PATH is whatever launchd
+# handed it, and a step that resolves its binary through it is one PATH entry away
+# from running something else under the same name.
+DSCACHEUTIL = "/usr/bin/dscacheutil"
+SCUTIL = "/usr/sbin/scutil"
+NETSTAT = "/usr/sbin/netstat"
+
 GRANT_HINT = 'Use "Grant elevated permissions" in the app window to allow this.'
 
 # A DHCP server must put a lease time in every ACK that grants an address (RFC
@@ -63,6 +70,7 @@ def make_repair_executor(
     failover_fn: Optional[Callable[[str], str]] = None,
     dhcp_granted_fn: Optional[Callable[[str], bool]] = None,
     unavailable_fn: Optional[Callable[[str], str]] = None,
+    covered_interfaces_fn: Optional[Callable[[], list]] = None,
 ):
     """`unavailable_fn(what)` marks the privileged repairs as not part of this
     build (the Mac App Store edition may not ask for root). When it is set, those
@@ -71,6 +79,11 @@ def make_repair_executor(
     """
     is_granted_fn = is_granted_fn or (lambda: False)
     primary_interface_fn = primary_interface_fn or (lambda: None)
+    # `is_granted_fn` answers only for the mDNSResponder restart. The DHCP rules
+    # are separate lines, enumerated at grant time, so a renewal also has to ask
+    # which interfaces those lines name. An empty answer means "unknown" and the
+    # renewal is attempted; the sudo refusal, if any, is then reported honestly.
+    covered_interfaces_fn = covered_interfaces_fn or (lambda: [])
 
     def run(args: list[str]) -> object:
         try:
@@ -80,13 +93,26 @@ def make_repair_executor(
         except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
             return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
 
+    def report_command(args: list[str]) -> str:
+        """A check step's finding: the tool's output, or an explicit failure.
+
+        A non-zero exit with empty stdout used to be reported as "" -- which the
+        report, the LLM bundle and the alert all read as "the tool found nothing",
+        when the truth was that the tool did not run.
+        """
+        result = run(args)
+        output = result.stdout.strip() or result.stderr.strip()
+        if result.returncode != 0:
+            return f"failed: {' '.join(args)} exited {result.returncode} -- {output or 'no output'}"
+        return output or f"no output from {' '.join(args)}"
+
     def flush_dns_cache() -> str:
         if unavailable_fn is not None:
             return unavailable_fn("flushing the DNS cache")
-        flush = run(["dscacheutil", "-flushcache"])
+        flush = run([DSCACHEUTIL, "-flushcache"])
         if flush.returncode != 0:
             return f"failed: {flush.stderr.strip()}"
-        hup = run(["killall", "-HUP", "mDNSResponder"])
+        hup = run(list(privileges.MDNS_HUP))
         if hup.returncode == 0:
             return "ok"
         # dscacheutil succeeds unprivileged, but mDNSResponder is owned by
@@ -134,6 +160,13 @@ def make_repair_executor(
             )
         if dhcp_granted_fn is not None and not dhcp_granted_fn(interface):
             return needs_privilege_stub("renew_dhcp_lease")
+        covered = list(covered_interfaces_fn())
+        if (
+            covered
+            and covered != list(privileges.ALL_INTERFACES_SENTINEL)
+            and interface not in covered
+        ):
+            return needs_privilege_stub(f"renew_dhcp_lease on {interface}")
         # `ipconfig set` de-configures the interface's existing IPv4 service
         # before starting DHCP. On an address set by hand, that swaps the static
         # configuration for DHCP, and on a network with no DHCP server the
@@ -177,16 +210,13 @@ def make_repair_executor(
         )
 
     def check_interface_state() -> str:
-        result = run(["scutil", "--nwi"])
-        return result.stdout.strip() or result.stderr.strip()
+        return report_command([SCUTIL, "--nwi"])
 
     def check_default_route() -> str:
-        result = run(["netstat", "-rn", "-f", "inet"])
-        return result.stdout.strip() or result.stderr.strip()
+        return report_command([NETSTAT, "-rn", "-f", "inet"])
 
     def check_configured_dns_servers() -> str:
-        result = run(["scutil", "--dns"])
-        return result.stdout.strip() or result.stderr.strip()
+        return report_command([SCUTIL, "--dns"])
 
     def check_resolver_overrides() -> str:
         if not resolver_dir_exists_fn(RESOLVER_DIR):
@@ -235,7 +265,17 @@ def make_repair_executor(
         if step.name == "switch_to_backup_network":
             if failover_fn is None:
                 return "disabled: network failover is not configured"
-            return failover_fn(classification or "network")
+            # Not defaulted: "network" is the classification most likely to be
+            # permitted, so filling it in would turn a caller's omission into a
+            # switch the operator never authorised.
+            if not classification:
+                return "refused: the failover step needs the classification it is responding to"
+            try:
+                return failover_fn(classification)
+            except Exception as exc:  # noqa: BLE001 - every step reports as a string
+                # The one path here that does not go through run(). state_machine
+                # has no per-step guard, so an escape aborts the incident unreported.
+                return f"failed: the failover step raised {type(exc).__name__}"
         handler = dispatch.get(step.name)
         if handler is None:
             return f"unknown step: {step.name}"

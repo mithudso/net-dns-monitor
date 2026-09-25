@@ -48,6 +48,7 @@ def mini_text(
     rtt_ms: Optional[float] = None,
     loss_pct: Optional[float] = None,
     reason: Optional[str] = None,
+    ping_down: Optional[bool] = None,
 ) -> str:
     """The one line the panel shows. Pure, so the wording is testable.
 
@@ -60,9 +61,14 @@ def mini_text(
     """
     dot = DOT.get(state, DOT["healthy"])
     if state == "incident":
-        if reason in DOWN_REASONS:
+        if reason not in DOWN_REASONS:
+            return f"{dot}  {str(reason).upper()}"
+        # "DOWN" is keyed to the ping where the caller says so: a DNS-only
+        # incident still has a live round trip, and telling someone the network
+        # is down when only resolution is broken sends them after the wrong
+        # fault. A caller passing neither `reason` nor `ping_down` keeps "DOWN".
+        if ping_down is None or ping_down or reason in ("ping", "network"):
             return f"{dot}  DOWN"
-        return f"{dot}  {str(reason).upper()}"
     if rtt_ms is None:
         return f"{dot}  --"
     text = f"{dot}  {rtt_ms:.0f}ms"

@@ -55,6 +55,36 @@ def test_every_field_has_a_label_and_a_known_kind():
         assert kind in ("str", "int", "float", "bool", "list", "targets"), key
 
 
+def test_every_field_kind_matches_its_default_type():
+    """An "int" field over a float default truncates it on the first save:
+    parse_field("int", "0.5") is 0, and a 0.5s probe timeout becomes no timeout.
+    """
+    accepted = {
+        "int": (int,),
+        "float": (int, float),
+        "bool": (bool,),
+        "str": (str,),
+        "list": (list,),
+        "targets": (list,),
+    }
+    for key, _label, kind in FIELDS:
+        default = DEFAULT_CONFIG[key]
+        if default is None:
+            continue
+        if kind != "bool":
+            assert not isinstance(default, bool), key
+        assert isinstance(default, accepted[kind]), (key, kind, type(default).__name__)
+
+
+def test_no_field_can_carry_a_credential():
+    """The window writes every field straight into config.yaml, which gets shared
+    and synced. Secrets stay in the environment.
+    """
+    banned = ("webhook", "password", "passwd", "api_key", "apikey", "token", "secret")
+    for key, _label, _kind in FIELDS:
+        assert not any(word in key.lower() for word in banned), key
+
+
 # --- parsing ---------------------------------------------------------------
 
 
@@ -172,7 +202,8 @@ def test_a_zero_or_negative_timeout_or_interval_is_refused(key, text):
     with pytest.raises(ValueError) as caught:
         collect({key: text})
     assert label in str(caught.value)
-    assert key in str(caught.value)
+    # A negative is caught earlier, in parse_field, which knows only the label.
+    assert key in str(caught.value) or "0 or more" in str(caught.value)
 
 
 @pytest.mark.parametrize("key", ["peer_port", "smtp_port", "failover_speedtest_port"])
@@ -226,6 +257,55 @@ def test_a_router_address_is_refused_when_it_is_not_an_address():
     assert collect({"router_enabled": "no", "lan_ip": "later"})["lan_ip"] == "later"
 
 
+@pytest.mark.parametrize("text", ["::1", "1.1.1.1:0", "1.1.1.1:99999"])
+def test_a_target_with_an_unusable_port_or_bare_ipv6_host_is_rejected(text):
+    """ "::1" splits into host ":" and port 1, and port 99999 raises OverflowError
+    inside a probe on a background timer.
+    """
+    with pytest.raises(ValueError, match="LAN targets"):
+        parse_field("targets", text, "LAN targets")
+
+
+def test_a_bracketed_ipv6_target_loses_its_brackets():
+    assert parse_field("targets", "[::1]:53") == [["::1", 53]]
+
+
+def test_a_negative_integer_is_rejected_by_name():
+    """`-30` reaches rumps.Timer as an interval."""
+    with pytest.raises(ValueError, match="Ping every"):
+        parse_field("int", "-30", "Ping every (seconds)")
+
+
+def test_a_negative_float_is_rejected_by_name():
+    with pytest.raises(ValueError, match="Ping timeout"):
+        parse_field("float", "-0.5", "Ping timeout")
+
+
+def test_zero_is_still_a_valid_number():
+    """0 carries meaning for several keys ("never re-alert", "use the default")."""
+    assert parse_field("int", "0") == 0
+    assert parse_field("float", "0") == 0.0
+
+
+def test_a_zero_interval_is_refused_before_anything_is_written(tmp_path):
+    """load_config rejects a zero interval, so letting it through collect would
+    write a file the app then refuses to start on. The refusal has to happen in
+    the parse step, where the window already reports "Not saved" and writes
+    nothing.
+    """
+    path = tmp_path / "config.yaml"
+    with pytest.raises(ValueError, match="Probe every"):
+        save_config(str(path), collect({"poll_interval_seconds": "0"}))
+    assert not path.exists()
+
+
+def test_a_zero_timeout_is_refused_before_anything_is_written(tmp_path):
+    path = tmp_path / "config.yaml"
+    with pytest.raises(ValueError, match="Ping timeout"):
+        save_config(str(path), collect({"ping_timeout_seconds": "0"}))
+    assert not path.exists()
+
+
 def test_collect_stops_on_the_first_bad_field_so_nothing_is_half_saved():
     with pytest.raises(ValueError):
         collect({"ping_interval_seconds": "soon", "ping_host": "8.8.8.8"})
@@ -254,14 +334,22 @@ def test_a_save_round_trips_through_load_config(tmp_path):
 def test_a_saved_config_still_loads_with_every_key_intact(tmp_path):
     """A save must not produce a file that load_config then rejects -- that would
     leave the app unable to start, with the only good copy in a backup.
+
+    Presence is not enough: a numeric default that comes back as a different
+    numeric type has been silently truncated by the field's kind.
     """
     path = str(tmp_path / "config.yaml")
     save_config(
         path, collect({key: format_field(kind, DEFAULT_CONFIG[key]) for key, _l, kind in FIELDS})
     )
     reloaded = load_config(path)
-    for key in DEFAULT_CONFIG:
+    expected_type = {"int": int, "float": float, "bool": bool}
+    for key, _l, kind in FIELDS:
         assert key in reloaded
+        if kind in expected_type:
+            assert isinstance(reloaded[key], expected_type[kind]), key
+        if isinstance(DEFAULT_CONFIG[key], float):
+            assert reloaded[key] == DEFAULT_CONFIG[key], key
 
 
 def test_the_previous_file_is_backed_up_with_a_timestamp(tmp_path):
@@ -301,6 +389,24 @@ def test_two_saves_in_the_same_second_keep_the_commented_backup(tmp_path):
     assert first["backup"] != second["backup"]
     assert second["backup"].endswith(".bak-1000-1")
     assert "# original comments" in Path(first["backup"]).read_text(encoding="utf-8")
+
+
+def test_the_first_save_does_not_claim_a_backup_that_was_never_made(tmp_path):
+    """The header used to promise a `.bak-<timestamp>` unconditionally; on a first
+    save, or after a failed backup, that sends someone looking for a file that
+    does not exist.
+    """
+    path = tmp_path / "new" / "config.yaml"
+    result = save_config(str(path), {"ping_host": "1.1.1.1"})
+    assert result["backup"] is None
+    assert "bak-" not in path.read_text(encoding="utf-8")
+
+
+def test_a_successful_backup_is_named_in_the_written_header(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("ping_host: 9.9.9.9\n", encoding="utf-8")
+    result = save_config(str(path), {"ping_host": "1.1.1.1"}, clock=lambda: 1000)
+    assert os.path.basename(result["backup"]) in path.read_text(encoding="utf-8")
 
 
 def test_a_refused_value_writes_nothing(tmp_path):
@@ -486,6 +592,21 @@ def test_a_null_string_shown_blank_does_not_count_as_a_change():
     assert "immediately" in note
 
 
+def test_the_restart_note_names_only_the_keys_that_changed():
+    """The window submits every field on Save, so without the changed subset the
+    note lists every restart key on every save and says nothing useful.
+    """
+    updates = {"ping_failure_threshold": 2, "poll_interval_seconds": 30, "ping_host": "1.1.1.1"}
+    note = restart_note(updates, changed={"ping_failure_threshold", "ping_host"})
+    assert "ping_failure_threshold" in note
+    assert "poll_interval_seconds" not in note
+
+
+def test_a_save_that_changed_nothing_needing_a_restart_says_immediately():
+    updates = {"ping_failure_threshold": 2, "ping_host": "1.1.1.1"}
+    assert "immediately" in restart_note(updates, changed={"ping_host"})
+
+
 # --- the window ------------------------------------------------------------
 
 
@@ -504,6 +625,52 @@ def test_loading_populates_every_field_from_the_config():
     assert window.fields["ping_host"].stringValue() == DEFAULT_CONFIG["ping_host"]
     assert window.fields["peer_discovery_enabled"].stringValue() == "yes"
     assert window.fields["external_targets"].stringValue() == "1.1.1.1:443, 8.8.8.8:443"
+
+
+def test_loading_a_hand_written_target_string_does_not_kill_the_window():
+    """A config written by hand as `external_targets: ["1.1.1.1:443"]` is a list
+    of strings, not pairs. Unpacking it raised inside `load()`, which is called
+    from the menu callback that opens the window.
+    """
+    window = SettingsWindow(on_save=lambda values: "")
+    window.load({**DEFAULT_CONFIG, "external_targets": ["1.1.1.1:443"]})
+    assert window.fields["external_targets"].stringValue() == "1.1.1.1:443"
+
+
+def test_the_window_knows_which_fields_were_edited_since_loading():
+    window = SettingsWindow(on_save=lambda values: "")
+    window.load(DEFAULT_CONFIG)
+    values = {key: f.stringValue() for key, f in window.fields.items()}
+    values["ping_host"] = "1.1.1.1"
+    assert window.changed_keys(values) == {"ping_host"}
+
+
+def _button(window, action):
+    return next(
+        b
+        for b in window.window.contentView().subviews()
+        if str(getattr(b, "identifier", lambda: "")() or "") == action
+    )
+
+
+def test_a_failing_reload_is_reported_in_the_window_not_raised_into_appkit():
+    """Reload re-reads the file through load_config, which raises on a malformed
+    one -- and the status line had already said "Reloaded" before the attempt.
+    """
+
+    def explode(values):
+        raise ValueError("config key 'domains' must be a list of strings")
+
+    window = SettingsWindow(on_save=explode)
+    window._target.invoke_(_button(window, "reload"))
+    assert window.status.stringValue().startswith("Not reloaded")
+    assert "ValueError" in window.status.stringValue()
+
+
+def test_a_successful_reload_reports_what_the_app_said():
+    window = SettingsWindow(on_save=lambda values: "Reloaded from disk.")
+    window._target.invoke_(_button(window, "reload"))
+    assert window.status.stringValue() == "Reloaded from disk."
 
 
 def test_a_parse_error_is_shown_in_the_window_rather_than_raised():

@@ -290,7 +290,9 @@ def test_store_build_keeps_the_switch_step_on_the_ladder_so_the_report_says_why(
         consent=ConsentStore(path=str(tmp_path / "consent.json")),
     )
     assert "network" in machine.failover_classifications
-    outcome = machine.repair_executor(LadderStep("switch_to_backup_network", "repair", True))
+    outcome = machine.repair_executor(
+        LadderStep("switch_to_backup_network", "repair", True), "network"
+    )
     assert outcome == unavailable("network_order_write", "switching to the backup network")
 
 
@@ -556,6 +558,8 @@ def test_store_build_with_the_router_enabled_builds_no_router_and_probes_no_priv
         wan_interface="en5",
         lan_interface="en6",
         open_dashboard_at_launch=False,
+        # The console has its own unavailable note; this test is about the router.
+        auto_open_console=False,
     )
     app._install_activation_observer = lambda: None
 

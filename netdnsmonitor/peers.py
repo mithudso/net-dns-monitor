@@ -34,6 +34,7 @@ its own peer. Nothing from a packet is ever used as a path, a command, or a
 format string.
 """
 
+import ipaddress
 import json
 import os
 import threading
@@ -159,8 +160,11 @@ class PeerRegistry:
         the lock.
         """
         while self.peers and len(self.peers) >= self.max_peers:
-            oldest = min(self.peers.values(), key=lambda p: p.get("last_seen", ""))
-            self.peers.pop(oldest["id"], None)
+            # Popped by key, not by the entry's own `id`: the record file is
+            # hand-editable, and an entry whose id disagrees with its key would
+            # otherwise never be removed and this loop never ends.
+            oldest = min(self.peers, key=lambda key: self.peers[key].get("last_seen", ""))
+            self.peers.pop(oldest)
 
     # --- reading -----------------------------------------------------------
 
@@ -199,16 +203,17 @@ class PeerRegistry:
         the file is meant to be readable on its own, and re-deriving it requires
         knowing what "now" was when it was written.
         """
-        grouped = self.buckets()
-        return {
-            "self_id": self.self_id,
-            "written_at": self.clock().isoformat(),
-            "counts": {name: len(entries) for name, entries in grouped.items()},
-            "peers": {
-                name: [dict(peer, bucket=name) for peer in entries]
-                for name, entries in grouped.items()
-            },
-        }
+        with self._lock:
+            grouped = self.buckets()
+            return {
+                "self_id": self.self_id,
+                "written_at": self.clock().isoformat(),
+                "counts": {name: len(entries) for name, entries in grouped.items()},
+                "peers": {
+                    name: [dict(peer, bucket=name) for peer in entries]
+                    for name, entries in grouped.items()
+                },
+            }
 
     def load(self, record: dict) -> None:
         """Restore known peers from a previous run's record.
@@ -240,7 +245,7 @@ class PeerRegistry:
                 self.peers[peer_id] = {
                     "id": peer_id,
                     "host": sanitise(entry.get("host")),
-                    "address": sanitise(entry.get("address"), 64),
+                    "address": _numeric_address(entry.get("address")),
                     "status": sanitise(entry.get("status"), 32),
                     "first_seen": sanitise(entry.get("first_seen"), 64),
                     "last_seen": sanitise(entry.get("last_seen"), 64),
@@ -321,6 +326,20 @@ class PeerRegistry:
                     seen.add(address)
                     ordered.append((peer["id"], address))
         return ordered
+
+
+def _numeric_address(value) -> str:
+    """A literal IP address, or "" for anything else.
+
+    The record file is hand-editable and `address` goes straight to sendto(),
+    where a hostname means a blocking name lookup on the timer thread.
+    """
+    address = sanitise(value, 64)
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        return ""
+    return address
 
 
 def _as_tristate(value):

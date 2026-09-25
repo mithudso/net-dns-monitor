@@ -16,6 +16,7 @@ import pytest
 from netdnsmonitor.forensic_log import (
     DOWN,
     ESCALATION,
+    MAX_OBSERVATIONS_PER_EPISODE,
     OBSERVATION,
     RECHECK,
     STEP,
@@ -205,6 +206,62 @@ def test_a_rendering_failure_does_not_raise_out_of_note(tmp_path):
     assert rec.note(UP, "ping") is None
 
 
+def test_a_failed_episode_document_leaves_a_trace(tmp_path, capsys):
+    """The document is the deliverable. Swallowing the failure without a word
+    means the next person finds an episode missing and no reason why.
+    """
+
+    def boom(path, text):
+        raise OSError("disk full")
+
+    rec = ForensicRecorder(
+        journal_path=str(tmp_path / "forensic.jsonl"),
+        episodes_dir=str(tmp_path / "episodes"),
+        clock=FakeClock(),
+        writer=boom,
+    )
+    rec.note(DOWN, "ping")
+    rec.note(UP, "ping")
+    assert "disk full" in capsys.readouterr().err
+
+
+def test_a_non_string_value_is_journaled_not_fatal(tmp_path):
+    """note() promises never to raise, and the journal append is the one write
+    that happens on every event. A caller that passes bytes -- raw command output
+    -- must cost a lossy rendering, not the monitor.
+    """
+    rec = make_recorder(tmp_path)
+    rec.note(DOWN, "ping", reason="No reply")
+    rec.note(STEP, "flap_gate", detail="check", result=b"raw bytes")
+
+    events = journal_lines(tmp_path)
+    assert events[1]["result"] == "b'raw bytes'"
+    assert rec.is_open
+
+
+def test_observations_are_capped_in_the_document_but_not_the_journal(tmp_path):
+    """A 490s outage produced 2,583 observations and a 937 KB markdown file that
+    nobody can read. The journal keeps every one; the document keeps the first
+    `MAX_OBSERVATIONS_PER_EPISODE` and says how many more there were.
+    """
+    rec = make_recorder(tmp_path)
+    rec.note(DOWN, "ping", reason="No reply")
+    for index in range(MAX_OBSERVATIONS_PER_EPISODE + 2):
+        rec.note(OBSERVATION, "ping", detail=f"rtt {index}")
+    paths = rec.note(UP, "ping")
+
+    episode = json.loads(Path(paths["json_path"]).read_text(encoding="utf-8"))
+    observations = [e for e in episode["events"] if e["kind"] == OBSERVATION]
+    assert len(observations) == MAX_OBSERVATIONS_PER_EPISODE
+    assert episode["observations_omitted"] == 2
+    body = Path(paths["markdown_path"]).read_text(encoding="utf-8")
+    assert "2 more observations" in body
+    # Every event, capped or not, is in the journal and attributed to the episode.
+    events = journal_lines(tmp_path)
+    assert len(events) == MAX_OBSERVATIONS_PER_EPISODE + 4
+    assert all(e["episode_started_at"] == events[0]["at"] for e in events)
+
+
 # --- timestamps ------------------------------------------------------------
 
 
@@ -233,6 +290,23 @@ def test_a_multi_minute_outage_reads_in_minutes(tmp_path):
     rec.note(DOWN, "ping")
     paths = rec.note(UP, "ping")
     assert "3m 5s" in Path(paths["markdown_path"]).read_text(encoding="utf-8")
+
+
+def test_a_wall_clock_that_stepped_backwards_is_not_reported_as_a_negative_duration(tmp_path):
+    """The clock is wall time on purpose (see the module docstring), and wall
+    time moves: NTP steps it, DST does not but a manual change can. "-70s" reads
+    as a rendering bug; the document should say what actually happened. The JSON
+    keeps the raw arithmetic for tooling.
+    """
+    rec = make_recorder(tmp_path, clock=FakeClock(step_seconds=-70))
+    rec.note(DOWN, "ping")
+    paths = rec.note(UP, "ping")
+    body = Path(paths["markdown_path"]).read_text(encoding="utf-8")
+    assert "unknown" in body
+    assert "-70s" not in body
+    assert "wall clock" in body
+    episode = json.loads(Path(paths["json_path"]).read_text(encoding="utf-8"))
+    assert episode["duration_seconds"] == -70
 
 
 # --- the document itself ---------------------------------------------------

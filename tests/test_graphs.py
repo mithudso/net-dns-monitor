@@ -7,9 +7,20 @@ comments so a regression shows up as a number that moved rather than a vague
 "looks different".
 """
 
+import math
+import os
+
 import AppKit
+import pytest
 
 from netdnsmonitor.graphs import format_bits, latest_label, render_series_graph, scale
+
+# GitHub's headless macOS runner has no window server, so NSImage lockFocus
+# draws almost nothing (measured opaque fraction ~0.0002 vs ~0.015 on a desktop
+# session). Absolute-ink assertions are only meaningful with a real display.
+needs_display = pytest.mark.skipif(
+    os.environ.get("CI") == "true", reason="headless CI runner does not rasterise NSImage drawing"
+)
 
 FLAT = [60.0] * 60
 SPIKY = [60.0 if index % 2 else 300.0 for index in range(60)]
@@ -75,6 +86,43 @@ def test_values_above_the_ceiling_are_clamped_into_the_plot():
     assert project(1e9) <= 100.0
 
 
+def test_a_nan_sample_does_not_poison_the_scale():
+    """max() of a series holding NaN is NaN: every point then projects to the
+    top edge and the axis reads "nan". A non-finite sample is not a measurement.
+    """
+    _, hi, project = scale([float("nan"), 60.0], 100)
+    assert math.isfinite(hi) and hi > 60
+    assert project(60.0) < 100
+    _, hi_inf, _ = scale([float("inf"), 60.0], 100)
+    assert math.isfinite(hi_inf)
+
+
+# --- headline ----------------------------------------------------------------
+
+
+def test_the_headline_is_a_dash_when_the_newest_sample_is_a_gap():
+    """ "60ms" on a graph whose right edge is an outage claims the network is
+    fine right now; the last *measured* value is the one from before it broke.
+    """
+    fmt = lambda v: f"{v:.0f}"  # noqa: E731
+    assert latest_label([60.0, None], fmt, "ms") == "--"
+    assert latest_label([], fmt, "ms") == "--"
+    assert latest_label([60.0, float("nan")], fmt, "ms") == "--"
+
+
+def test_the_headline_is_the_newest_value_when_it_was_measured():
+    assert latest_label([None, 60.0], lambda v: f"{v:.0f}", "ms") == "60ms"
+
+
+def test_a_series_ending_in_a_gap_still_renders():
+    render_series_graph([60.0] * 10 + [None] * 5, title="Latency", unit="ms")
+
+
+def test_a_nan_sample_renders_as_a_gap_rather_than_raising():
+    image = render_series_graph([60.0] * 20 + [float("nan")] * 10 + [60.0] * 30)
+    assert column_has_ink(image, 0.45)
+
+
 # --- rendering -------------------------------------------------------------
 
 
@@ -82,6 +130,7 @@ def test_a_graph_is_the_requested_size():
     assert tuple(render_series_graph(FLAT, size=(400, 80)).size()) == (400.0, 80.0)
 
 
+@needs_display
 def test_a_series_is_actually_drawn():
     # Measured: ~0.015 of sampled pixels for a flat 60ms line.
     assert opaque_fraction(render_series_graph(FLAT, title="Latency", unit="ms")) > 0.005
@@ -133,6 +182,7 @@ def test_a_single_sample_does_not_divide_by_zero_on_the_x_step():
     render_series_graph([61.0], title="Latency")
 
 
+@needs_display
 def test_a_gap_is_drawn_as_a_gap_not_interpolated_across():
     """A straight line through an outage hides the one thing the graph exists to
     show. The gap also gets a faint marker, so this asserts the *marked* column
@@ -143,6 +193,10 @@ def test_a_gap_is_drawn_as_a_gap_not_interpolated_across():
     assert opaque_fraction(gapped) != opaque_fraction(ungapped)
     # The outage region is still marked, so the column is not simply blank.
     assert column_has_ink(gapped, 0.45)
+    # But only faintly: the marker is 0.18 alpha (measured max 0.28 in the
+    # column). A None drawn as 0 would put the opaque line (1.0) through here,
+    # and the assertion above alone would not notice.
+    assert not column_has_ink(gapped, 0.45, min_alpha=0.5)
 
 
 def test_the_throughput_formatter_is_used_for_the_axis():

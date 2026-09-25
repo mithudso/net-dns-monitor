@@ -273,16 +273,18 @@ def test_every_path_returns_a_complete_verdict(external, dns, peers):
     assert result["confidence"] in ("low", "medium", "high")
 
 
-def test_evidence_records_what_was_actually_asked():
+def test_evidence_records_what_was_actually_known():
     """The verdict is a judgement; the evidence is what it was based on. A reader
-    six months later needs the second one to trust the first.
+    six months later needs the second one to trust the first -- and nothing here
+    sends a probe, so the count is of peers supplied, not peers asked.
     """
     result = localize(
         our_external_reachable=False,
         our_dns_ok=True,
         peers=[peer(external=True), peer(answered=False, host="off")],
     )
-    assert result["evidence"]["peers_asked"] == 2
+    assert result["evidence"]["peers_known"] == 2
+    assert "peers_asked" not in result["evidence"]
     assert result["evidence"]["peers_answered"] == 1
     assert result["evidence"]["peers_reporting_state"] == 1
     assert result["evidence"]["our_external_reachable"] is False
@@ -333,7 +335,7 @@ def test_a_lone_peer_that_went_quiet_is_not_a_high_confidence_verdict():
 
     result = localize(False, False, reg.localization_view(fresh_seconds=15))
 
-    assert result["evidence"]["peers_asked"] == 1
+    assert result["evidence"]["peers_known"] == 1
     assert result["verdict"] == LOCAL_MACHINE
     assert result["confidence"] != "high"
     assert "asleep or switched off" in result["reason"]

@@ -255,7 +255,7 @@ def promote_service(run_fn, services, name: str) -> str:
         return (
             f"failed: '{name}' is DISABLED, so promoting it would change the order "
             "and route nothing. Enable it first: "
-            f"netdns run enable --value service='{name}' --yes"
+            f"python3 -m netdnsmonitor.cli run enable --value service='{name}' --yes"
         )
     new_order = promote(services, name)
     if new_order is None:
@@ -263,9 +263,9 @@ def promote_service(run_fn, services, name: str) -> str:
     return apply_service_order(run_fn, services, new_order)
 
 
-def interface_rows(run_fn, prober, meter=None, measure: bool = False) -> list[dict]:
+def interface_rows(run_fn, prober, meter=None, measure: bool = False, services=None) -> list[dict]:
     rows = []
-    for service in list_services(run_fn):
+    for service in list_services(run_fn) if services is None else services:
         reachable = prober(service.device)
         rows.append(
             {
@@ -306,10 +306,11 @@ def cmd_status(
     out,
     context: Optional[tuple] = None,
     probe_fn: Optional[Callable[[], dict]] = None,
+    prober_factory: Callable = make_prober,
 ) -> int:
     _, _, failover, _ = context or build_context(config)
     if probe_fn is None:
-        probe_fn = make_prober(
+        probe_fn = prober_factory(
             external_targets=[tuple(t) for t in config["external_targets"]],
             internal_targets=[tuple(t) for t in config["internal_targets"]],
             domains=list(config.get("domains") or [])
@@ -404,25 +405,38 @@ def cmd_ladder(
     out,
     executor_factory: Callable = make_repair_executor,
     failover_configured: Optional[bool] = None,
+    executor: Optional[Callable] = None,
 ) -> int:
-    if failover_configured is None:
-        failover_configured = build_failover(config) is not None
-    executor = executor_factory(
-        # The same privilege probes app.py passes. The executor's defaults
-        # describe an ungranted machine, so without these a user who had
-        # installed the grant was told it "has not been granted".
-        is_granted_fn=privileges.is_granted,
-        primary_interface_fn=privileges.primary_interface,
-        # Per interface, as app.py passes it: a grant made before a dock or USB
-        # adapter appeared does not cover the interface that now holds the route.
-        dhcp_granted_fn=_dhcp_granted,
-        # A hand-run diagnostic does not move the machine to another network;
-        # `netdns failover backup` is the command that does, and says so.
-        failover_fn=_ladder_does_not_switch if failover_configured else None,
-    )
+    injected = executor is not None
+    if executor is None:
+        if failover_configured is None:
+            failover_configured = build_failover(config) is not None
+        executor = executor_factory(
+            # The same privilege probes app.py passes. The executor's defaults
+            # describe an ungranted machine, so without these a user who had
+            # installed the grant was told it "has not been granted".
+            is_granted_fn=privileges.is_granted,
+            primary_interface_fn=privileges.primary_interface,
+            # Per interface, as app.py passes it: a grant made before a dock or
+            # USB adapter appeared does not cover the interface that now holds
+            # the route.
+            dhcp_granted_fn=_dhcp_granted,
+            # A hand-run diagnostic does not move the machine to another
+            # network; `netdns failover backup` is the command that does.
+            failover_fn=_ladder_does_not_switch if failover_configured else None,
+        )
     classification = classify(False, False) if args.layer == "network" else classify(True, False)
     failed = False
     for step in ladder_for(classification):
+        # An injected executor has no failover wired in, so letting the step
+        # reach it would report "not configured" on a machine where it is. This
+        # command never switches networks; say so and name the command that does.
+        if injected and step.name == "switch_to_backup_network":
+            out(
+                f"{step.name}: SKIPPED (this command never switches networks; "
+                "use `netdns failover backup`)"
+            )
+            continue
         if step.kind != "check" and not args.repair:
             out(f"{step.name}: SKIPPED (repair; pass --repair to run it)")
             continue
@@ -501,7 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="netdns",
+        prog="python3 -m netdnsmonitor.cli",
         description="Network and DNS monitor: diagnose, benchmark, fail over.",
         parents=[top_level],
     )
@@ -563,7 +577,7 @@ def main(
     try:
         config = load_config_fn(os.path.expanduser(args.config))
     except (ValueError, OSError, yaml.YAMLError) as exc:
-        print(f"config error: {exc}", file=sys.stderr)
+        print(f"config error: {args.config}: {exc}", file=sys.stderr)
         return 2
     try:
         return args.func(args, config, out)

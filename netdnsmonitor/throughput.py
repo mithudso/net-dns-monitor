@@ -39,6 +39,10 @@ DEFAULT_PATH = "/__down?bytes=2000000"
 DEFAULT_PORT = 443
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_MAX_BYTES = 2_000_000
+# How much longer than the meter's own timeout measure_all waits for it:
+# connect plus TLS on a slow hotspot can run a measurement slightly past its
+# budget, and cutting it off there would report a working link as unmeasured.
+CONNECT_SLACK_SECONDS = 1.0
 
 MeasureFn = Callable[..., Optional[float]]
 # One pre-resolved literal, or several (one per family, from resolve_addresses).
@@ -94,6 +98,10 @@ def resolve_addresses(
     result: list[list[str]] = []
 
     def lookup() -> None:
+        # IPv4 first. The backup path being measured may be v4-only (a phone
+        # hotspot usually is), and the resolver's first answer is often AAAA;
+        # connecting to that literal from a v4-only interface fails and reads
+        # as an interface that cannot be measured.
         try:
             infos = getaddrinfo_fn(host, None, proto=socket.IPPROTO_TCP)
         except OSError:
@@ -289,8 +297,10 @@ def make_throughput_meter(
     machine, so tests inject one.
     """
 
-    # Resolved once and reused: the lookup is the same for every interface, and
-    # paying it per candidate is both slower and a second chance to block.
+    # A successful lookup is reused for every interface, since it is the same
+    # for all of them. A failed one is deliberately not cached: it happened
+    # during the outage this feature serves, and remembering it would switch
+    # benchmarking off for the rest of the session.
     cache: dict = {}
 
     def meter(device: Optional[str]) -> Optional[float]:
@@ -320,6 +330,7 @@ def make_throughput_meter(
                 port=port,
                 timeout=timeout,
                 max_bytes=max_bytes,
+                address=address,
             )
         except Exception:  # noqa: BLE001 - a benchmark must never take down a caller
             return None
@@ -332,6 +343,7 @@ def measure_all(
     meter: Callable[[Optional[str]], Optional[float]],
     timeout: float = DEFAULT_TIMEOUT,
     grace: float = 1.0,
+    slack: Optional[float] = None,
 ) -> dict:
     """Benchmark several interfaces against ONE shared deadline.
 
@@ -341,8 +353,10 @@ def measure_all(
     round costs roughly one timeout, and a device that has not answered by the
     deadline is reported as unmeasured rather than waited for.
 
-    `grace` is slack past `timeout` for work outside a measurement's own
-    budget, such as the meter's one-time lookup.
+    `grace` (alias `slack`) is time past `timeout` for work outside a
+    measurement's own budget, such as the meter's one-time lookup. `timeout`
+    must be the meter's own timeout: shorter reports a still-running
+    measurement as unmeasured, longer waits for nothing.
     """
     results: dict = {}
     workers = []
@@ -355,6 +369,8 @@ def measure_all(
         workers.append(worker)
         worker.start()
 
+    if slack is not None:
+        grace = slack
     deadline = time.monotonic() + timeout + max(0.0, grace)
     for worker in workers:
         worker.join(max(0.0, deadline - time.monotonic()))

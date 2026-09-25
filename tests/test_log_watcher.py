@@ -1,6 +1,7 @@
 import subprocess
 from types import SimpleNamespace
 
+from netdnsmonitor.domain_learner import extract_failed_domains
 from netdnsmonitor.log_watcher import NO_EVIDENCE_PREFIX, make_log_watcher
 
 SAMPLE_LOG = "\n".join(
@@ -141,3 +142,45 @@ def test_bounds_the_log_show_call_and_captures_its_output():
     assert captured.get("timeout") == 10
     assert captured.get("capture_output") is True
     assert captured.get("text") is True
+
+
+def test_the_timeout_is_injectable_and_defaults_to_ten_seconds():
+    captured = {}
+
+    def run_fn(args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    make_log_watcher(run_fn=run_fn, timeout=30)()
+    assert captured["timeout"] == 30
+
+
+def test_the_excerpt_list_is_capped_and_says_how_much_was_dropped():
+    """424 error-like lines at 5m, 3,942 at 30m -- and the whole list goes into
+    the escalation prompt. Keep the newest, and say what was cut rather than
+    silently handing the model a truncated log.
+    """
+    stdout = "\n".join(
+        f"2026-07-13 09:{i // 60:02d}:{i % 60:02d} mDNSResponder: error {i}" for i in range(600)
+    )
+    run_fn = lambda args, **kwargs: SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    excerpts = make_log_watcher(run_fn=run_fn, max_lines=500)()
+    assert len(excerpts) == 501
+    assert "omitted" in excerpts[0]
+    assert "100" in excerpts[0]
+    assert excerpts[-1].endswith("error 599")
+    assert excerpts[1].endswith("error 100")
+    assert extract_failed_domains(excerpts[:1]) == []
+
+
+def test_a_result_without_stdout_or_returncode_is_reported_not_a_crash():
+    """The other `log show` reader (system_log) reads both through getattr, for
+    the same reason: a run_fn whose result carries neither must not raise from
+    inside an incident tick.
+    """
+    run_fn = lambda args, **kwargs: SimpleNamespace()
+    excerpts = make_log_watcher(run_fn=run_fn)()
+    # No returncode counts as a failed read, which is reported, not raised.
+    assert len(excerpts) == 1
+    assert excerpts[0].startswith(NO_EVIDENCE_PREFIX)

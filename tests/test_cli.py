@@ -8,6 +8,7 @@ test_cli_console.py next to the REPL that shares them.
 """
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -492,7 +493,7 @@ def test_an_ungranted_repair_makes_the_ladder_exit_nonzero():
 def test_a_partial_flush_makes_the_ladder_exit_nonzero():
     def run(argv, **kwargs):
         # dscacheutil succeeds; the HUP and the elevated retry both fail.
-        code = 0 if argv[0] == "dscacheutil" else 1
+        code = 0 if os.path.basename(argv[0]) == "dscacheutil" else 1
         return SimpleNamespace(returncode=code, stdout="", stderr="not permitted")
 
     factory = recording_factory(run)

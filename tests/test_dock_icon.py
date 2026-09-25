@@ -12,7 +12,14 @@ assertion would be testing where the kerning happened to fall.
 
 import pytest
 
-from netdnsmonitor.dock_icon import NO_DATA_TEXT, PING_DOWN_TEXT, build_status_icon, dock_text
+from netdnsmonitor.dock_icon import (
+    NO_DATA_TEXT,
+    PING_DOWN_TEXT,
+    _reset_for_tests,
+    build_status_icon,
+    dock_text,
+    set_dock_icon,
+)
 
 
 def _rep(image):
@@ -152,3 +159,37 @@ def test_ping_down_wins_over_a_stale_round_trip_time():
 
 def test_dock_text_before_the_first_ping_is_a_placeholder():
     assert dock_text() == (NO_DATA_TEXT, "")
+
+
+# --- set_dock_icon -----------------------------------------------------------
+
+
+def test_an_identical_tile_is_not_pushed_twice():
+    """setApplicationIconImage_ costs ~2s on the main thread. 61.2 and 61.4
+    both draw "61ms", so the second reading must not reach the Dock at all.
+    """
+    _reset_for_tests()
+    pushed = []
+    set_dock_icon("healthy", rtt_ms=61.2, apply=pushed.append)
+    set_dock_icon("healthy", rtt_ms=61.4, apply=pushed.append)
+    assert len(pushed) == 1
+    set_dock_icon("healthy", rtt_ms=62.0, apply=pushed.append)
+    assert len(pushed) == 2
+    assert all(tuple(image.size()) == (256, 256) for image in pushed)
+
+
+def test_a_failed_push_is_retried_next_time():
+    """A push that raised must not be remembered as the tile on show, or the
+    Dock stays stale until the reading happens to change.
+    """
+    _reset_for_tests()
+    attempts = []
+
+    def flaky(image):
+        attempts.append(image)
+        if len(attempts) == 1:
+            raise RuntimeError("no dock this time")
+
+    set_dock_icon("incident", ping_down=True, apply=flaky)
+    set_dock_icon("incident", ping_down=True, apply=flaky)
+    assert len(attempts) == 2

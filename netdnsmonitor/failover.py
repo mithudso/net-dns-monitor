@@ -45,7 +45,7 @@ from netdnsmonitor.interface_probe import make_interface_prober
 from netdnsmonitor.report_storage import _atomic_write
 from netdnsmonitor.service_order import (
     find_service,
-    is_order_intact,
+    order_argv,
     parse_service_order,
     promote,
 )
@@ -130,7 +130,8 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
 
     Returns a string starting 'ok:', 'failed:' or 'NEEDS_PRIVILEGE:'.
     """
-    if not is_order_intact(services, new_order):
+    argv = order_argv(services, new_order)
+    if argv is None:
         return (
             "failed: refused to apply a service order that is not a permutation of the current one"
         )
@@ -310,8 +311,8 @@ class NetworkFailover:
         self,
         preferred_service: str,
         backup_service: Optional[str] = None,
-        store: FailoverStore = None,
-        interface_prober: Callable[[Optional[str]], Optional[bool]] = None,
+        store: Optional[FailoverStore] = None,
+        interface_prober: Optional[Callable[[Optional[str]], Optional[bool]]] = None,
         run_fn: Callable[[list[str]], object] = default_run,
         backup_services: Optional[list[str]] = None,
         throughput_meter: Optional[Callable[[Optional[str]], Optional[float]]] = None,
@@ -328,6 +329,8 @@ class NetworkFailover:
         # With auto off and both service names set, the menu bar button still
         # works and nothing ever moves on its own -- which is how you try this
         # feature before trusting it to act unattended.
+        if store is None or interface_prober is None:
+            raise ValueError("NetworkFailover needs a store and an interface prober")
         self.auto_enabled = auto_enabled
         self.preferred_service = preferred_service
         # One backup or several. The singular form stays accepted because it is
@@ -556,14 +559,17 @@ class NetworkFailover:
     def _switch_now(self, target: str, service: Optional[str]) -> str:
         services = self._list_services()
         if not services:
+            self.store.record_attempt(self.time_fn())
             return "failed: could not read the current network service order"
         if find_service(services, self.preferred_service) is None:
+            self.store.record_attempt(self.time_fn())
             return f"failed: service '{self.preferred_service}' not found; available: " + ", ".join(
                 s.name for s in services
             )
 
         missing = [n for n in self.backup_services if find_service(services, n) is None]
         if self.backup_services and len(missing) == len(self.backup_services):
+            self.store.record_attempt(self.time_fn())
             return (
                 "failed: backup service(s) not found: "
                 f"{', '.join(repr(n) for n in missing)}; available: "
@@ -712,21 +718,29 @@ class NetworkFailover:
             self._lock.release()
 
     def _attempt(self, *, classification: str, allow: str) -> str:
+        # Each early failure arms the cooldown: nothing about "the listing
+        # cannot be read" or "the preferred service is not in it" changes
+        # between ticks, so without it the same doomed attempt re-runs its
+        # subprocess every 30 seconds.
         services = self._list_services()
         if not services:
+            self.store.record_attempt(self.time_fn())
             return "failed: could not read the current network service order"
 
         preferred = find_service(services, self.preferred_service)
         available = ", ".join(s.name for s in services)
         if preferred is None:
+            self.store.record_attempt(self.time_fn())
             return (
                 f"failed: preferred service '{self.preferred_service}' not found; "
                 f"available: {available}"
             )
         if not self.backup_services:
+            self.store.record_attempt(self.time_fn())
             return "failed: no backup services configured"
         missing = [n for n in self.backup_services if find_service(services, n) is None]
         if len(missing) == len(self.backup_services):
+            self.store.record_attempt(self.time_fn())
             return (
                 "failed: backup service(s) not found: "
                 f"{', '.join(repr(n) for n in missing)}; available: {available}"

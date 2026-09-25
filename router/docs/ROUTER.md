@@ -1,5 +1,11 @@
 # Router Architecture
 
+> **Retired 2026-09-22.** This Mac left the `192.168.4.0/24` network and is no
+> longer a router. The live daemons, pf anchors, and interface config were
+> snapshotted to `/Users/mitch/Archive/old-network-2026-09-22/` (see its
+> `INVENTORY.md`), and are removed by that directory's `retire.sh`. This
+> document and the scripts beside it are kept as the record of the stack.
+
 ## Overview
 Turns macOS into a strict hardware router. Bypasses Apple's GUI Internet Sharing which hijacks ports.
 

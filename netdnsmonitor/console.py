@@ -17,6 +17,7 @@ of what gets typed: a timeout, a process-group kill so the timeout means
 something, no stdin so nothing can hang on a prompt, and an output cap.
 """
 
+import codecs
 import contextlib
 import os
 import shlex
@@ -38,6 +39,15 @@ DEFAULT_TIMEOUT_SECONDS = 20.0
 # lines, and it is the byte count that wedges the text view.
 MAX_OUTPUT_BYTES = 64 * 1024
 
+# A command's shell can exit while a child it started in the background still
+# holds the output pipe. Waiting for that child would hold the console line --
+# and the worker thread the window is waiting on -- until the child ends on its
+# own, so after this short grace the whole process group is killed. The
+# consequence is deliberate: a `&` job does not outlive its console line, which
+# is the same contract the timeout already states.
+ORPHAN_GRACE_SECONDS = 0.5
+READER_JOIN_SECONDS = 5.0
+
 # The window clears its own text storage; `handle` only says that it should.
 CLEAR = "__CLEAR__"
 
@@ -46,11 +56,106 @@ Net/DNS console -- arbitrary shell, run as your user in your environment.
 `:help` for the built-ins, `:status` for what the monitor currently thinks,
 `q` to close this window (the monitor keeps running)."""
 
+SUGGESTED_HELP = """\
+Suggested commands and quick usage examples:
+
+  DNS & Resolution:
+    scutil --dns                              Show system DNS configuration and resolvers
+    dig @8.8.8.8 example.com                  Query Google DNS directly, bypassing local cache
+    dig +trace example.com                    Trace DNS resolution from root servers
+    dscacheutil -statistics                   View DNS responder cache statistics
+    dscacheutil -flushcache                   Flush DNS cache (partial unprivileged)
+
+  Interfaces & Routing:
+    scutil --nwi                              Show active network interfaces & default routes
+    ifconfig                                  Display network adapter details, IPs, and flags
+    netstat -rn -f inet                       Display IPv4 kernel routing table
+    route get default                         Show default gateway route details
+    networksetup -listallnetworkservices      List all configured macOS network services
+
+  Reachability & Sockets:
+    ping -c 4 1.1.1.1                         Ping Cloudflare DNS (4 ICMP packets)
+    traceroute 8.8.8.8                        Trace network hops to destination
+    curl -Iv https://api.anthropic.com        Test TLS handshake & HTTP response headers
+    nc -zv 1.1.1.1 443                        Check TCP socket connection to port 443
+    lsof -i -P -n                             List open network sockets and listening ports"""
+
+TOOLS_HELP = """\
+Helpful Troubleshooting and Diagnostic Network Tools:
+
+  1. DNS Diagnostic Tools:
+     - scutil --dns                         Inspect macOS resolver configuration & search domains.
+     - dig @<server> <domain>               Query specific DNS server (e.g. 1.1.1.1 or 8.8.8.8).
+     - dig +trace <domain>                  Walk DNS hierarchy from root servers to authoritative name server.
+     - nslookup <domain>                    Simple host name lookup tool.
+     - dscacheutil -statistics              Check DNS cache hit/miss statistics.
+     - dscacheutil -flushcache              Flush local DNS directory service cache.
+
+  2. Interface & Routing Tools:
+     - scutil --nwi                         Show Network Information (active interfaces and default IPv4/IPv6 gateways).
+     - netstat -rn -f inet                  Print IPv4 routing table.
+     - route get default                    Show default route details (interface and gateway address).
+     - ifconfig                             Inspect status, MAC address, IP address, and MTU of network interfaces.
+     - networksetup -listallnetworkservices List all hardware network interfaces on macOS.
+
+  3. Reachability & Path Diagnostics:
+     - ping -c 4 <ip_or_host>               Test ICMP echo reachability (use -c to avoid hanging).
+     - traceroute <ip_or_host>              Trace hop-by-hop packet path to isolate network drops.
+     - curl -Iv <url>                       Detailed HTTP/HTTPS request, TLS certificate check, and response headers.
+     - nc -zv <host> <port>                 Netcat TCP port connectivity test.
+
+  4. Socket & Traffic Monitoring Tools:
+     - lsof -i -P -n                        List processes holding open network sockets (numeric ports/IPs).
+     - netstat -an                          Display active sockets and listening ports.
+     - tcpdump -n -i en0 -c 20              Capture live packets on interface en0 (first 20 packets)."""
+
+SCRIPTS_HELP = """\
+Scripts Catalog & Module Entry Points (from SCRIPTS.md):
+
+  1. Menu Bar Application (`app.py`):
+     python3 -m netdnsmonitor.app
+     - Description: Runs the menu bar app. Polls targets, classifies failures, runs triage ladder, escalates to Claude, writes reports, and sends alerts. Blocks forever.
+
+  2. Test Suite (`pytest`):
+     python3 -m pytest -q
+     - Description: Runs the 187-test offline test suite covering the entire decision surface.
+
+  3. One-shot Prober (`prober.py`):
+     python3 -c "from netdnsmonitor.prober import make_prober; p = make_prober(external_targets=[('1.1.1.1',443)], internal_targets=[], domains=['api.anthropic.com']); print(p())"
+     - Description: Scriptable instant reachability & DNS probe. Returns aggregated boolean status dictionary.
+
+  4. One-shot Ladder & Repair (`ladder.py` / `repair_executor.py`):
+     python3 -c "from netdnsmonitor.classifier import classify; from netdnsmonitor.ladder import ladder_for; from netdnsmonitor.repair_executor import make_repair_executor; ex = make_repair_executor(); c = classify(True, False); print([f'{s.name}: {ex(s)[:40]}' for s in ladder_for(c) if s.kind == 'check'])"
+     - Description: Runs offline diagnostic ladder steps for a given classification by hand.
+
+  5. One-shot Log Watcher (`log_watcher.py`):
+     python3 -c "from netdnsmonitor.log_watcher import make_log_watcher; print(len(make_log_watcher(lookback='5m')()))"
+     - Description: Tails macOS `log show` for DNS/network subsystem entries and extracts error-like lines.
+
+  6. One-shot Failed Domain Extractor (`domain_learner.py`):
+     python3 -c "from netdnsmonitor.log_watcher import make_log_watcher; from netdnsmonitor.domain_learner import extract_failed_domains; print(extract_failed_domains(make_log_watcher(lookback='5m')()))"
+     - Description: Extracts failed hostnames from unified log entries for auto-learning.
+
+  7. One-shot Public DNS Query (`dns_query.py`):
+     python3 -c "from netdnsmonitor.dns_query import query_public_dns; print(query_public_dns('api.anthropic.com', server='1.1.1.1'))"
+     - Description: Bypasses system resolver to perform raw UDP DNS query to a public resolver (e.g. 1.1.1.1 or 8.8.8.8).
+
+  8. One-shot Notification Formatter (`notifications.py`):
+     python3 -c "from netdnsmonitor.notifications import format_notification; r = {'classification': 'dns', 'started_at': '2026-08-05T20:31:00+00:00', 'duration_seconds': 12.0, 'resolved': False, 'summary': 'DNS issue', 'repair_outcome': 'partial', 'escalation': None}; print(format_notification(r, '/tmp/report.md'))"
+     - Description: Renders exact notification text without sending Slack/email alerts.
+
+  9. Offline State Machine (`state_machine.py`):
+     python3 -c "from netdnsmonitor.state_machine import StateMachine; m = StateMachine(prober=lambda: {'external_reachable': True, 'dns_ok': False, 'domain_results': {'api.anthropic.com': False}}, repair_executor=lambda s: 'simulated', escalator=lambda b: {}, log_watcher=lambda: [], failure_threshold=1, success_threshold=1, sensitive_strings=[]); print(m.tick())"
+     - Description: Runs the full detect -> classify -> ladder -> recheck -> escalate -> report pipeline offline with fakes."""
+
 HELP = f"""\
 Type any shell command and press Return. Pipes, redirects and quoting all work;
 the line goes to /bin/sh exactly as typed.
 
   :help | ?          this text
+  :suggested         suggested commands & quick usage examples
+  :scripts           description and list of all scripts & usage from SCRIPTS.md
+  :tools             list of helpful troubleshooting and diagnostic network tools
   :status            live monitor state (flap gate, last incident, last report)
   :history           lines you have run this session
   :pwd               current directory
@@ -68,9 +173,8 @@ Limits that apply to every command, so that a mistyped one cannot wedge the app:
     with a readable error instead of hanging until the timeout.
   * output is capped at {MAX_OUTPUT_BYTES // 1024} KB. Redirect to a file for more.
 
-Useful here: `scutil --dns`, `scutil --nwi`, `dig @8.8.8.8 example.com`,
-`networksetup -listallnetworkservices`, `ifconfig`, `netstat -rn`,
-`dscacheutil -statistics`, `route get default`."""
+Useful commands: `:suggested` lists commands, `:tools` lists diagnostic tools,
+`:scripts` lists module entry points from SCRIPTS.md."""
 
 
 @dataclass
@@ -154,9 +258,14 @@ def _kill_process_group(process) -> None:
     is why the process is started with `start_new_session=True` in the first
     place: it gives the child a process group of its own to kill, so a stray
     signal cannot reach the menu bar app that spawned it.
+
+    The group id is the shell's pid, not looked up with `getpgid`: once `wait`
+    has reaped the shell, `getpgid` on it raises ProcessLookupError even though
+    the group still exists and still holds the orphan. The pid cannot be reused
+    while the group it names is alive, so it stays the right target.
     """
     try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
         with contextlib.suppress(OSError):
             process.kill()
@@ -175,18 +284,28 @@ def _drain(stream, sink: dict, cap: int) -> None:
     every over-long command into a 20-second wait instead of finishing when it
     would have.
 
-    `cap` counts characters here, not bytes -- the stream is in text mode. It is
-    a coarse ceiling to keep memory flat, not the reported limit; `truncate`
-    applies the exact byte cap afterwards.
+    The pipe is binary and read with `read1`, which returns whatever is there
+    now. A text-mode `read(n)` blocks until it has n characters *or EOF*, and
+    EOF on this pipe comes only when every process holding its write end has
+    gone -- so `sh -c 'sleep 60' & echo started` parks the reader on the
+    grandchild's copy of the pipe and the `started` that was printed is
+    reported as no output. The incremental decoder keeps a multibyte character
+    split across two reads from becoming two replacement characters.
+
+    `cap` counts decoded characters, not bytes. It is a coarse ceiling to keep
+    memory flat, not the reported limit; `truncate` applies the exact byte cap
+    afterwards.
     """
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
     try:
         while True:
-            chunk = stream.read(8192)
-            if not chunk:
-                break
-            if sink["size"] < cap:
+            raw = stream.read1(8192)
+            chunk = decoder.decode(raw, not raw)
+            if chunk and sink["size"] < cap:
                 sink["parts"].append(chunk[: cap - sink["size"]])
             sink["size"] += len(chunk)
+            if not raw:
+                break
     except (ValueError, OSError):
         # The pipe was closed under us by the kill path; whatever was collected
         # before that is still worth showing.
@@ -207,8 +326,6 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
             start_new_session=True,
         )
     except (OSError, ValueError) as exc:
@@ -262,19 +379,15 @@ def _collect(process, timeout: float) -> CommandResult:
 
     # `wait` reaps the child; joining the readers is what stops a half-read
     # pipe from being reported as empty output on a command that did produce
-    # some before it was killed.
+    # some before it was killed. A reader still alive after the grace is held
+    # open by a background child of the shell, and only killing the group
+    # releases it.
     for reader in readers:
-        reader.join(timeout=0.5)
+        reader.join(timeout=ORPHAN_GRACE_SECONDS)
     if any(reader.is_alive() for reader in readers):
-        # The shell has exited but something still holds its pipes: a
-        # background job (`ping 1.1.1.1 &`). `wait` returned for the shell, so
-        # none of the guards above fired, and the readers would block on that
-        # orphan forever -- one leaked process, two threads and two fds per
-        # line. It is still in the shell's group, so the group kill reaches it.
-        with contextlib.suppress(OSError):
-            os.killpg(process.pid, signal.SIGKILL)
-    for reader in readers:
-        reader.join(timeout=5)
+        _kill_process_group(process)
+        for reader in readers:
+            reader.join(timeout=READER_JOIN_SECONDS)
 
     return CommandResult(
         stdout="".join(sinks["stdout"]["parts"]),
@@ -381,6 +494,12 @@ def handle(
         return "", state
     if lowered in (":help", ":h", "?", ":?"):
         return HELP, state
+    if lowered in (":scripts", ":script"):
+        return SCRIPTS_HELP, state
+    if lowered in (":tools", ":tool"):
+        return TOOLS_HELP, state
+    if lowered in (":suggested", ":suggest", ":commands", ":cmd", ":cmds"):
+        return SUGGESTED_HELP, state
     if lowered == ":clear":
         return CLEAR, state
     if lowered == ":pwd":
@@ -389,8 +508,8 @@ def handle(
         if not state.history:
             return "(nothing yet)", state
         width = len(str(len(state.history)))
-        return "\n".join(
-            f"{i:>{width}}  {entry}" for i, entry in enumerate(state.history, 1)
+        return truncate(
+            "\n".join(f"{i:>{width}}  {entry}" for i, entry in enumerate(state.history, 1))
         ), state
     if lowered == ":status":
         if status is None:

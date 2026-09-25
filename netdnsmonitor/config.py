@@ -5,6 +5,7 @@ user should choose, not a silent default (see the plan's probing-strategy
 section).
 """
 
+import copy
 import ipaddress
 import math
 import os
@@ -182,6 +183,8 @@ DEFAULT_CONFIG = {
     "learned_domains_path": ("~/Library/Application Support/net-dns-monitor/learned_domains.json"),
     "max_learned_domains": 20,
     "domain_learn_interval_seconds": 300,
+    # Automatically open console window below log viewer on right-hand side on startup.
+    "auto_open_console": True,
     # Notifications. Secrets are NOT here: the Slack webhook URL comes from
     # SLACK_WEBHOOK_URL and the SMTP password from SMTP_PASSWORD, so a config
     # file that gets shared or synced carries no credential.
@@ -312,6 +315,7 @@ POSITIVE_KEYS = (
     "ping_interval_seconds",
     "ping_timeout_seconds",
     "resolution_interval_seconds",
+    "domain_learn_interval_seconds",
     "resolution_batch_deadline_seconds",
     "resolution_timeout_seconds",
     "ui_refresh_seconds",
@@ -462,6 +466,16 @@ def validate_config(config: dict) -> None:
                 f"character-by-character by the code that consumes it.",
             )
 
+    # A mapping iterates its keys and an int does not iterate at all; neither is
+    # "a list of strings". None is left to normalize_config.
+    for key in LIST_KEYS:
+        value = config.get(key)
+        if value is not None and not isinstance(value, (str, list, tuple)):
+            raise ConfigError(
+                key,
+                f"config key '{key}' must be a list of strings, got {type(value).__name__}",
+            )
+
     # Items must be strings too. YAML reads an unquoted `-1009` as an int, and
     # an int in log_view_noise_patterns raises TypeError on `in` inside the log
     # filter, so the dashboard never opens and log announcements are lost.
@@ -564,7 +578,10 @@ def validate_config(config: dict) -> None:
 
 
 def load_config(path: str) -> dict:
-    config = dict(DEFAULT_CONFIG)
+    # deepcopy, not dict(): the list defaults would otherwise be the same
+    # objects in every load, and an append to one config's `domains` would
+    # show up in the next.
+    config = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
             user_config = yaml.safe_load(f) or {}
@@ -582,7 +599,12 @@ def load_config(path: str) -> dict:
         config.update(user_config)
 
     normalize_config(config)
-    validate_config(config)
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        # Name the file as well as the key: the app can be launched from the
+        # Dock, where nothing else says which config was read.
+        raise ConfigError(exc.key, f"{exc} (in {path})") from None
 
     for path_key in PATH_KEYS:
         config[path_key] = os.path.expanduser(config[path_key])

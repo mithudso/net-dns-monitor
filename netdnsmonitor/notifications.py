@@ -69,7 +69,10 @@ def _post_json(url: str, payload: bytes, timeout: float) -> tuple[int, str]:
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.status, response.read().decode("utf-8", "replace")
+        # Bounded: the caller only ever looks at the first few bytes of the
+        # body, and an endpoint that drips an endless response would otherwise
+        # hold this worker (and the memory) for as long as it liked.
+        return response.status, response.read(65536).decode("utf-8", "replace")
 
 
 def make_slack_notifier(
@@ -77,6 +80,12 @@ def make_slack_notifier(
     post_fn: Callable[[str, bytes, float], tuple[int, str]] = _post_json,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> Callable[[str], dict]:
+    # The URL is the credential. Over http:// it would cross the network in
+    # cleartext, and urlopen honours file:// and ftp:// just as readily -- so
+    # anything but https is refused up front, as data, before a single post.
+    if not webhook_url.startswith("https://"):
+        return lambda _text: {"channel": "slack", "error": "webhook URL is not https"}
+
     def notify(text: str) -> dict:
         # Slack parses <!channel>, <@user> and <url|label> inside `text`, and
         # the Claude analysis in this text derives from untrusted log lines.
@@ -133,6 +142,14 @@ def make_email_notifier(
         message["From"] = sender
         message["To"] = ", ".join(recipients)
         message.set_content(text)
+
+        # login() over a plain connection puts SMTP_PASSWORD on the wire in
+        # cleartext. Refused before connecting, so no socket is opened either.
+        if username and password and not use_starttls:
+            return {
+                "channel": "email",
+                "error": "refusing to send SMTP credentials without STARTTLS",
+            }
 
         factory = smtp_factory or smtplib.SMTP
         try:

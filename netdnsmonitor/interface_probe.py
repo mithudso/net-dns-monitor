@@ -14,6 +14,7 @@ route. The mechanism that does work is the IP_BOUND_IF socket option, which
 pins the socket to an interface index.
 """
 
+import functools
 import socket
 import time
 from typing import Callable, Optional
@@ -47,8 +48,14 @@ def default_device_index(device: str) -> Optional[int]:
         return None
 
 
-def default_bound_connect(device: str, host: str, port: int, timeout: float) -> bool:
-    index = default_device_index(device)
+def default_bound_connect(
+    device: str,
+    host: str,
+    port: int,
+    timeout: float,
+    index_fn: DeviceIndexFn = default_device_index,
+) -> bool:
+    index = index_fn(device)
     if index is None:
         return False
     # The bind option is family-specific. The ordinary prober uses
@@ -67,9 +74,12 @@ def default_bound_connect(device: str, host: str, port: int, timeout: float) -> 
         sock.settimeout(timeout)
         sock.connect((host, port))
         return True
-    except OSError:
+    except (OSError, OverflowError, TypeError, ValueError):
         # A down interface fails here immediately with ENETUNREACH rather than
-        # blocking, so this path costs nothing on the common case.
+        # blocking, so this path costs nothing on the common case. The other
+        # three are what connect() raises for a port that came out of YAML as
+        # 70000 or as the string "53": a config fault, but one that must read
+        # as "did not answer" rather than escape into the failover policy.
         return False
     finally:
         sock.close()
@@ -88,9 +98,19 @@ def make_interface_prober(
     device is absent, there is nothing to probe against, or the timeout left
     no budget to try even one target).
     """
+    # The injected index_fn has to reach the connect side too, or the default
+    # connect consults the real interface table while probe() consulted the
+    # fake -- and the two disagree exactly when a test is pretending an
+    # adapter is absent.
+    if connect_fn is default_bound_connect:
+        connect_fn = functools.partial(default_bound_connect, index_fn=index_fn)
 
     def probe(device: Optional[str]) -> Optional[bool]:
         if not device or not targets:
+            return None
+        # A non-positive budget asks nothing; False would say "dead" about a
+        # link nobody probed. `probe_timeout_seconds` is user-settable YAML.
+        if timeout <= 0:
             return None
         if index_fn(device) is None:
             return None

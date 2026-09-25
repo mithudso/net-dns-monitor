@@ -20,7 +20,14 @@ ERROR_MARKERS = ("error", "fail", "timed out", "timeout", "unreachable", "refuse
 # line the unified log produced. domain_learner skips lines with this prefix.
 NO_EVIDENCE_PREFIX = "[net-dns-monitor]"
 
+# A 30m `log_lookback` measured 10.15s on this machine; 5m measured 2.25s.
 LOG_SHOW_TIMEOUT_SECONDS = 10
+TIMEOUT_SECONDS = LOG_SHOW_TIMEOUT_SECONDS
+
+# 424 error-like lines at 5m, 3,942 at 30m -- and the whole list goes into the
+# escalation prompt, where it overflows the context and the reply comes back as
+# an error nobody reads. Keep the newest.
+MAX_LINES = 500
 
 RunFn = Callable[..., object]
 
@@ -28,6 +35,8 @@ RunFn = Callable[..., object]
 def make_log_watcher(
     run_fn: RunFn = subprocess.run,
     lookback: str = "5m",
+    timeout: float = TIMEOUT_SECONDS,
+    max_lines: int = MAX_LINES,
 ):
     predicate = (
         'process == "mDNSResponder" OR eventMessage CONTAINS "DNS" '
@@ -56,18 +65,27 @@ def make_log_watcher(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=LOG_SHOW_TIMEOUT_SECONDS,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            return no_evidence(f"timed out after {LOG_SHOW_TIMEOUT_SECONDS}s (lookback {lookback})")
+            return no_evidence(f"timed out after {timeout}s (lookback {lookback})")
         except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
             return no_evidence(f"failed: {type(exc).__name__}")
-        if result.returncode != 0:
-            return no_evidence(f"exited {result.returncode}")
-        return [
+        # getattr: this runs inside an incident tick, and a result object without
+        # these attributes must not raise there.
+        if getattr(result, "returncode", 1) != 0:
+            return no_evidence(f"exited {getattr(result, 'returncode', '?')}")
+        stdout = getattr(result, "stdout", "") or ""
+        lines = [
             line
-            for line in result.stdout.splitlines()
+            for line in stdout.splitlines()
             if any(marker in line.lower() for marker in ERROR_MARKERS)
         ]
+        if len(lines) > max_lines:
+            return [
+                f"[net-dns-monitor] {len(lines) - max_lines} earlier error-like lines "
+                "omitted; narrow log_lookback for the full set"
+            ] + lines[-max_lines:]
+        return lines
 
     return watcher
