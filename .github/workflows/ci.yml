@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # 3.13 is the supported floor (CLAUDE.md), the interpreter the app is
           # frozen against, and the one constraints.txt was generated from.
@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
