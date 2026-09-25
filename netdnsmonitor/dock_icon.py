@@ -23,7 +23,7 @@ Drawing notes, both of which are easy to get subtly wrong:
   straight off the edge of the image otherwise.
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 STATUS_COLOR_NAMES = {
     "healthy": "systemGreenColor",
@@ -115,24 +115,36 @@ def build_status_icon(
 _applied: Optional[tuple] = None
 
 
-def set_dock_icon(status: str, rtt_ms: Optional[float] = None, ping_down: bool = False) -> None:
+def _push_to_dock(image) -> None:
+    import AppKit
+
+    AppKit.NSApplication.sharedApplication().setApplicationIconImage_(image)
+
+
+def set_dock_icon(
+    status: str,
+    rtt_ms: Optional[float] = None,
+    ping_down: bool = False,
+    apply: Optional[Callable] = None,
+) -> None:
     """Cosmetic only -- a failure here must never take the monitor down.
 
     Skips the call entirely when the tile would be identical to the one already
     showing. See `_applied`: the underlying AppKit call is expensive and
-    synchronous, so "the number has not changed" is worth checking.
+    synchronous, so "the number has not changed" is worth checking. `apply` is
+    the seam for that check: it receives the built image, and defaults to the
+    real Dock call.
     """
     global _applied
     try:
-        import AppKit
-
         text, unit = dock_text(rtt_ms=rtt_ms, ping_down=ping_down)
         wanted = (status, text, unit)
         if wanted == _applied:
             return
-        AppKit.NSApplication.sharedApplication().setApplicationIconImage_(
-            build_status_icon(status, text=text, unit=unit)
-        )
+        push = apply or _push_to_dock
+        push(build_status_icon(status, text=text, unit=unit))
+        # Recorded only after the push succeeds, so a failed push is retried on
+        # the next tick rather than remembered as showing.
         _applied = wanted
     except Exception:  # noqa: BLE001 - cosmetic, never fatal
         pass

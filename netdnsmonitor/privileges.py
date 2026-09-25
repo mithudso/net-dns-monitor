@@ -121,6 +121,11 @@ _INTERFACE_RE = re.compile(r"^en\d+\Z")
 # reason as above.
 _USER_RE = re.compile(r"^[A-Za-z0-9._-]+\Z")
 
+# The run-as part of a `sudo -l` entry: `(root)`, `(ALL)`, `(ALL : ALL)`,
+# `(_jenkins, root)`. Searched rather than anchored so a tag between the run-as
+# and NOPASSWD (`(root) SETENV: NOPASSWD: ...`) does not hide it.
+_RUNAS_RE = re.compile(r"\(([^)]*)\)")
+
 # Stands in for "every interface", when a blanket `NOPASSWD: ALL` rule is what grants
 # this rather than the file this app writes.
 ALL_INTERFACES_SENTINEL = ("(all, via a blanket NOPASSWD rule)",)
@@ -187,11 +192,15 @@ def dhcp_interfaces(run_fn: RunFn = subprocess.run) -> list[str]:
 
 
 def primary_interface(run_fn: RunFn = subprocess.run) -> Optional[str]:
-    """Whichever interface currently carries the default route.
+    """The Ethernet or Wi-Fi interface that carries the default route, if one does.
 
     Read-only and unprivileged. Used to decide which interface a DHCP renewal
     should target; the grant covers all of them, so the answer only has to be
     right, not authorised.
+
+    Returns None both when there is no default route and when the route is on an
+    interface this grant cannot cover -- a full-tunnel VPN's utun, a bridge. The
+    two are not distinguished, so a None must not be reported as "no route".
     """
     try:
         result = run_fn(
@@ -311,6 +320,13 @@ def _install_script(body: str) -> str:
             f'echo {encoded} | /usr/bin/base64 -D > "$tmp"',
             '/usr/sbin/chown root:wheel "$tmp"',
             '/bin/chmod 0440 "$tmp"',
+            # `set -e` does not notice a failing non-final member of the decode
+            # pipeline above, and `visudo -cf` accepts an empty file. A truncated
+            # decode would therefore validate, be moved into place, and be announced
+            # as "Granted" for a file that permits nothing. The byte count is the
+            # one thing about the decoded file this script can know in advance.
+            f'if [ "$(/usr/bin/wc -c < "$tmp")" -ne {len(body.encode("utf-8"))} ];'
+            f' then /bin/rm -f "$tmp"; echo {INVALID_SUDOERS} >&2; exit 4; fi',
             # Validated before it is anywhere sudo will read it. A syntax error
             # here would otherwise break sudo for every user on the machine.
             'if ! /usr/sbin/visudo -cf "$tmp" >/dev/null 2>&1; then /bin/rm -f "$tmp";'
@@ -367,8 +383,10 @@ def status_command() -> list[str]:
     Both failures are the same shape and it is the expensive one: the window
     reports a privilege the machine does not have, `flush_dns_cache` takes its
     granted branch, and the outcome then blames a sudoers rule that was never
-    installed. Reading the rule out of the listing cannot drift that way -- the
-    only thing that puts that exact line in the output is the grant.
+    installed. Reading the rule out of the listing cannot drift that way: the
+    policy-only `%admin ALL=(ALL) ALL` carries no NOPASSWD tag, so
+    `parse_granted_commands` never collects it, while a blanket `NOPASSWD: ALL`
+    is accepted on purpose because it genuinely does permit the command.
 
     `-n` so a missing grant fails instead of blocking on a password prompt nobody
     is there to answer. `-k` so a cached credential does not decide the answer.
@@ -389,17 +407,35 @@ def parse_granted_commands(stdout: str) -> list[str]:
     Only NOPASSWD lines are of interest: a password-gated entry is exactly what
     this module does not count as granted. Commas separate several specs on one
     line, which is how sudo renders a rule listing more than one command.
+
+    Only lines whose run-as includes root (or ALL) are collected. `(_jenkins)
+    NOPASSWD: ALL` permits anything -- as _jenkins -- and nothing as root, so
+    `sudo -n killall ...` would still be refused.
     """
     specs: list[str] = []
     for line in (stdout or "").splitlines():
-        _, marker, rest = line.partition("NOPASSWD:")
-        if not marker:
+        prefix, marker, rest = line.partition("NOPASSWD:")
+        if not marker or not _runas_permits_root(prefix):
             continue
         for spec in rest.split(","):
             collapsed = " ".join(spec.split())
             if collapsed:
                 specs.append(collapsed)
     return specs
+
+
+def _runas_permits_root(prefix: str) -> bool:
+    """May the entry whose text precedes `NOPASSWD:` run as root?
+
+    sudo prints the run-as for every entry it lists; the no-match branch is a
+    fallback for a listing format this parser has not seen, and it errs towards
+    the default run-as, which is root.
+    """
+    match = _RUNAS_RE.search(prefix)
+    if match is None:
+        return True
+    users = match.group(1).split(":")[0].split(",")
+    return any(user.strip() in ("root", "ALL") for user in users)
 
 
 def granted_commands_now(run_fn: RunFn = subprocess.run) -> list[str]:
@@ -439,13 +475,29 @@ def covers(specs: Iterable[str], command: Iterable[str]) -> bool:
     This does not reopen the false positive that `status_command` guards against: macOS's
     shipped `%admin ALL=(ALL) ALL` carries no `NOPASSWD:` prefix, so it never reaches this
     function -- `parse_granted_commands` only collects specs from NOPASSWD lines.
+
+    A spec naming the bare command with no arguments also counts: sudoers(5) says a Cmnd
+    without arguments matches that command run with any arguments.
     """
-    return "ALL" in specs or " ".join(command) in specs
+    argv = list(command)
+    joined = " ".join(argv)
+    return any(spec == "ALL" or spec == joined or spec == argv[0] for spec in specs)
 
 
 def is_granted(run_fn: RunFn = subprocess.run) -> bool:
     """Is the mDNSResponder restart actually granted, by rule and not by policy?"""
-    return covers(granted_commands_now(run_fn), MDNS_HUP)
+    return is_granted_from(granted_commands_now(run_fn))
+
+
+def is_granted_from(specs: Iterable[str]) -> bool:
+    """Same question as `is_granted`, from an already-fetched listing.
+
+    The app parses one `sudo -l` listing and asks two questions of it. It must ask
+    this one here rather than compare the joined argv against the spec list itself:
+    exact matching is what `covers` replaced, and bypassing it reports a blanket
+    NOPASSWD rule as "not granted" in the window while the repairs run under it.
+    """
+    return covers(specs, MDNS_HUP)
 
 
 def granted_interfaces_from(specs: Iterable[str]) -> list[str]:
@@ -573,9 +625,11 @@ def revoke(run_fn: RunFn = subprocess.run) -> dict:
     outcome = _run_privileged(revoke_command(), run_fn)
     if outcome["ok"]:
         outcome["message"] = (
-            f"Revoked. {SUDOERS_PATH} is gone; nothing runs as root without a "
-            "prompt any more. Flushing DNS will go back to reporting a partial "
-            "result, and DHCP renewal to reporting that it needs privilege."
+            f"Revoked. {SUDOERS_PATH} is gone. Nothing this app installed runs as "
+            "root without a prompt any more; an unrelated NOPASSWD rule elsewhere "
+            "in sudoers, if there is one, is not affected. Flushing DNS will go "
+            "back to reporting a partial result, and DHCP renewal to reporting "
+            "that it needs privilege."
         )
     return outcome
 
@@ -607,7 +661,7 @@ def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]
             "Re-grant to include it."
         )
     else:
-        renew = "unknown -- nothing currently carries the default route"
+        renew = "unknown -- no Ethernet or Wi-Fi interface carries the default route"
 
     rows = [
         ("Elevated permissions", "granted" if granted else "not granted"),

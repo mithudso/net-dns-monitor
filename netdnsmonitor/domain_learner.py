@@ -2,7 +2,10 @@
 machine: any domain the unified log shows *failing* DNS resolution is, by
 definition, a domain this user actually tried to reach and could not. That is
 a better source than browser history (which would mean reading another app's
-data) and it needs no user action.
+data) and it needs no user action. On a stock macOS install this finds nothing:
+the unified log masks hostnames (`<mask.hash: …>` or an opaque token), measured
+758 error-like lines → 0 learnable. `domains` is the real probe list; this is
+opportunistic. See docs/known-issues.md.
 
 Two hazards this module exists to contain:
 
@@ -18,14 +21,17 @@ Two hazards this module exists to contain:
    reverse-lookup zones, no bare labels, length-capped, lowercased, and the
    store is capped so a log flood cannot grow the probe list without bound.
 
-Learned domains stay on disk locally. They are never sent anywhere: the
-outbound paths (LLM escalation, Slack/email) carry booleans and summaries,
-and anything the user marks sensitive is redacted on the way out.
+Learned domains stay on disk locally, but they do leave the machine: the
+per-domain probe results are keyed by domain name and travel in the LLM
+escalation bundle, so a learned name is visible to the LLM. `sensitive_strings`
+redaction is the only guard on that path, and it must rewrite dict keys as
+well as values for it to cover these names.
 """
 
 import json
 import os
 import re
+import threading
 import time
 from typing import Callable, Optional
 
@@ -41,7 +47,6 @@ FAILURE_MARKERS = (
     "unable to resolve",
     "resolution failed",
     "dns query failed",
-    "query for",
     "getaddrinfo failed",
     "getaddrinfo error",
     "lookup failed",
@@ -54,9 +59,16 @@ FAILURE_MARKERS = (
 # phrasing vetoes the failure markers above.
 SUCCESS_MARKERS = ("completed", "succeeded", " success", "resolved to", "answer received")
 
+# The leading lookbehind replaces `\b`: `\b` lets the engine restart a label match
+# at every dot inside a long dotted run, which made a 10 KB "a.a.a..." line take
+# a second on the main thread and a 50 KB one over fifteen. Anchoring the start to
+# "not preceded by a hostname character" gives each position one attempt.
+# re.ASCII because IGNORECASE alone folds "İ", "ı", "ſ" and "K" (Kelvin sign) into
+# ASCII letters; a lookalike name would pass here, then fail idna encoding in the
+# probe worker.
 _HOSTNAME_RE = re.compile(
-    r"\b((?:[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})\.?\b",
-    re.IGNORECASE,
+    r"(?<![a-z0-9_.-])((?:[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})\.?\b",
+    re.IGNORECASE | re.ASCII,
 )
 
 _REJECTED_SUFFIXES = (".arpa", ".in-addr.arpa", ".ip6.arpa")
@@ -64,9 +76,12 @@ _REJECTED_SUFFIXES = (".arpa", ".in-addr.arpa", ".ip6.arpa")
 # Unified-log scaffolding lives in brackets: "[com.apple.mdns:resolver]", "[Q65460]",
 # "[com.apple.WiFiManager:]". Those are subsystem labels and query IDs, never a queried
 # hostname -- but "com.apple.mdns" has the exact shape of a domain, and was being
-# learned as one, probed, pruned, then learned again on the next scan. Strip bracketed
-# spans before looking for hostnames.
-_BRACKETED_RE = re.compile(r"\[[^\]]*\]")
+# learned as one, probed, pruned, then learned again on the next scan. Angle brackets
+# are the log's redaction placeholders -- "<mask.hash: '...'>", "<private>" -- and
+# "mask.hash" has the same domain shape and the same phantom lifecycle. Strip both
+# kinds of span before looking for hostnames. The character classes exclude the
+# opening bracket too, so an unclosed one cannot make the match scan to the line end.
+_BRACKETED_RE = re.compile(r"\[[^\[\]]*\]|<[^<>]*>")
 
 # Reverse-DNS bundle identifiers survive the bracket strip when they appear in free
 # text (com.apple.foo, org.mozilla.bar) and are not resolvable names. A real hostname
@@ -77,6 +92,11 @@ _REVERSE_DNS_FIRST_LABELS = ("com", "org", "net", "io", "co", "edu", "gov", "uk"
 def is_probeable_domain(candidate: str) -> bool:
     domain = candidate.strip().strip(".").lower()
     if not domain or len(domain) > 253 or "." not in domain:
+        return False
+    # lower() can *lengthen* a non-ASCII name ("İ" becomes two code points), and
+    # the result is not something encode("idna") accepts; a probe of it would
+    # raise UnicodeError in the worker.
+    if not domain.isascii():
         return False
     if domain.endswith(_REJECTED_SUFFIXES):
         return False
@@ -121,6 +141,9 @@ class LearnedDomainStore:
         self.path = os.path.expanduser(path)
         self.max_domains = max_domains
         self._domains: list[str] = []
+        # add() runs on the log-scan thread while remove() runs on the tick;
+        # both replace or extend _domains and both save.
+        self._lock = threading.Lock()
         self.load()
 
     def load(self) -> list[str]:
@@ -167,23 +190,25 @@ class LearnedDomainStore:
     def add(self, candidates: list[str]) -> list[str]:
         """Add valid, unseen domains up to the cap. Returns what was added."""
         added = []
-        for candidate in candidates:
-            domain = candidate.strip().strip(".").lower()
-            if len(self._domains) >= self.max_domains:
-                break
-            if domain in self._domains or not is_probeable_domain(domain):
-                continue
-            self._domains.append(domain)
-            added.append(domain)
-        if added:
-            self.save()
+        with self._lock:
+            for candidate in candidates:
+                domain = candidate.strip().strip(".").lower()
+                if len(self._domains) >= self.max_domains:
+                    break
+                if domain in self._domains or not is_probeable_domain(domain):
+                    continue
+                self._domains.append(domain)
+                added.append(domain)
+            if added:
+                self.save()
         return added
 
     def remove(self, domains: list[str]) -> list[str]:
-        removed = [d for d in domains if d in self._domains]
-        if removed:
-            self._domains = [d for d in self._domains if d not in removed]
-            self.save()
+        with self._lock:
+            removed = [d for d in domains if d in self._domains]
+            if removed:
+                self._domains = [d for d in self._domains if d not in removed]
+                self.save()
         return removed
 
 
@@ -203,7 +228,8 @@ def prune_dead_domains(
     collapses on the default config: with `domains: []` every probed name is a
     learned failure, so "some other probed domain resolved" is false by
     construction and one dead name would pin a permanent false incident. That
-    is why app.py always probes a control domain. With no anchors given we
+    is why app.py probes a control domain by default (`control_domain`; a user
+    who nulls it with `domains: []` disables pruning entirely). With no anchors given we
     fall back to "some other probed domain resolved", which is still right
     whenever the user configured domains of their own.
     """
@@ -226,26 +252,45 @@ def prune_dead_domains(
     return store.remove(dead)
 
 
+def _spawn_daemon_thread(fn: Callable[[], None]) -> None:
+    threading.Thread(target=fn, daemon=True).start()
+
+
 def make_domain_learner(
     log_watcher: Callable[[], list[str]],
     store: LearnedDomainStore,
     configured_domains: list[str],
     interval_seconds: float = 300.0,
     clock: Callable[[], float] = time.monotonic,
+    spawn: Callable[[Callable[[], None]], None] = _spawn_daemon_thread,
 ) -> Callable[[], list[str]]:
     """Returns the callable the prober asks for its domain list each tick.
 
     The log scan is rate-limited to interval_seconds because `log show` is a
     subprocess costing whole seconds -- running it every poll would make the
-    monitor itself the heaviest thing on the machine.
+    monitor itself the heaviest thing on the machine. It is also handed to
+    `spawn` rather than run inline: `domains()` is called from the rumps timer,
+    and those whole seconds would otherwise freeze the menu bar once per
+    interval. Domains learned by a scan show up on the *next* tick.
     """
     last_scan: dict[str, Optional[float]] = {"at": None}
+    in_flight = {"scan": False}
+
+    def scan() -> None:
+        try:
+            store.add(extract_failed_domains(log_watcher()))
+        except Exception:  # noqa: BLE001 - a failed scan is no domains, never a dead thread
+            pass
+        finally:
+            in_flight["scan"] = False
 
     def domains() -> list[str]:
         now = clock()
-        if last_scan["at"] is None or (now - last_scan["at"]) >= interval_seconds:
+        due = last_scan["at"] is None or (now - last_scan["at"]) >= interval_seconds
+        if due and not in_flight["scan"]:
             last_scan["at"] = now
-            store.add(extract_failed_domains(log_watcher()))
+            in_flight["scan"] = True
+            spawn(scan)
         configured = [d.strip().strip(".").lower() for d in configured_domains]
         merged = list(configured)
         for domain in store.domains:

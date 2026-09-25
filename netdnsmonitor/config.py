@@ -5,6 +5,7 @@ user should choose, not a silent default (see the plan's probing-strategy
 section).
 """
 
+import copy
 import os
 
 import yaml
@@ -239,11 +240,48 @@ DEFAULT_CONFIG = {
     # has supplied the judgement the brakes stand in for.
     "failover_max_switches_per_hour": 4,
     "failover_state_path": ("~/Library/Application Support/net-dns-monitor/failover.json"),
+    # --- router ----------------------------------------------------------
+    # Off by default: the router shares this machine's WAN link out over a LAN
+    # interface and runs a DHCP server on it. Interface names are BSD device
+    # names as `ifconfig` lists them.
+    "router_enabled": False,
+    "wan_interface": "en3",
+    "lan_interface": "en0",
+    "lan_ip": "192.168.10.1",
+    "lan_netmask": "255.255.255.0",
+    "dhcp_start": "192.168.10.100",
+    "dhcp_end": "192.168.10.200",
 }
+
+# Every timer interval in the app. Zero or negative reaches rumps.Timer as an
+# interval and spins the run loop; zero also collapses the learn-interval clamp
+# below to 0.0.
+INTERVAL_KEYS = (
+    "poll_interval_seconds",
+    "ping_interval_seconds",
+    "ui_refresh_seconds",
+    "peer_announce_seconds",
+    "log_view_poll_seconds",
+    "resolution_interval_seconds",
+    "domain_learn_interval_seconds",
+)
+
+# Deadlines that must be a real positive number: ping.py raises on every
+# heartbeat for a bad ping_timeout_seconds, and make_log_reader coerces
+# log_view_timeout_seconds at start-up, neither naming the key or the file.
+# probe_timeout_seconds and failover_probe_timeout_seconds are deliberately
+# NOT here -- 0 means "use the default" for the failover budget.
+TIMEOUT_KEYS = (
+    "ping_timeout_seconds",
+    "log_view_timeout_seconds",
+)
 
 
 def load_config(path: str) -> dict:
-    config = dict(DEFAULT_CONFIG)
+    # deepcopy, not dict(): the list defaults would otherwise be the same
+    # objects in every load, and an append to one config's `domains` would
+    # show up in the next.
+    config = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
             user_config = yaml.safe_load(f) or {}
@@ -273,12 +311,13 @@ def load_config(path: str) -> dict:
     # string it is iterated character by character, every character becomes a
     # suppression pattern, and the log pane silently shows nothing at all.
     for list_key in ("domains", "sensitive_strings", "log_view_noise_patterns"):
-        if isinstance(config[list_key], str):
+        if not isinstance(config[list_key], list):
             raise ValueError(
-                f"config key '{list_key}' must be a list of strings, not the "
-                f"single string {config[list_key]!r} -- wrap it in a list, e.g. "
+                f"config key '{list_key}' must be a list of strings, not "
+                f"{config[list_key]!r} -- wrap a single entry in a list, e.g. "
                 f"[{config[list_key]!r}]. A bare string is iterated "
-                f"character-by-character by the code that consumes it."
+                f"character-by-character by the code that consumes it; a "
+                f"mapping yields its keys."
             )
 
     for path_key in (
@@ -295,7 +334,23 @@ def load_config(path: str) -> dict:
         "learned_domains_path",
         "failover_state_path",
     ):
+        if not isinstance(config[path_key], str):
+            # expanduser's own TypeError names neither the key nor the file.
+            raise ValueError(
+                f"config key {path_key!r} in {path} must be a path string, got {config[path_key]!r}"
+            )
         config[path_key] = os.path.expanduser(config[path_key])
+
+    for interval_key in INTERVAL_KEYS + TIMEOUT_KEYS:
+        value = config[interval_key]
+        # bool is an int subclass, so `true` would otherwise pass as 1.
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+            raise ValueError(
+                f"config key {interval_key!r} in {path} must be a number greater "
+                f"than 0, got {value!r}. A zero or negative interval spins the "
+                f"rumps timer and disables the learn-interval clamp; a zero or "
+                f"negative timeout is refused by the code that uses it."
+            )
 
     # A learn interval at or below the poll interval re-adds a dead domain on
     # every tick, so the flap gate's success counter can never reset and one

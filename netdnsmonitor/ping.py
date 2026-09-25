@@ -19,7 +19,7 @@ So a filtered ICMP path degrades the heartbeat display and can raise a
 spurious alert; it cannot trigger a repair. `ping_host` is configurable for
 exactly that case.
 
-`/sbin/ping` by absolute path. Absolute paths for every external tool this project runs, here and elsewhere.
+`/sbin/ping` by absolute path.
 The rationale is *not* that a bare name would fail: launchd hands this job
 PATH=/usr/bin:/bin:/usr/sbin:/sbin (measured on the running agent), so `ping`,
 `netstat`, `ifconfig`, `log`, `open` and `osascript` all resolve there perfectly
@@ -61,7 +61,7 @@ def _parse_rtt_ms(stdout: str) -> Optional[float]:
         return None
     try:
         return float(match.group(1))
-    except ValueError:  # pragma: no cover - the pattern already restricts this
+    except ValueError:  # pragma: no cover - [0-9.]+ admits "." and "1..2"; ping prints %.3f
         return None
 
 
@@ -73,23 +73,50 @@ def ping_once(
     """Send a single echo request and report the outcome.
 
     Returns {"ok": bool, "rtt_ms": float|None, "error": str|None}. Never
-    raises: the sole caller is a worker thread started from a rumps timer, and
-    an escaping exception there kills the heartbeat for the rest of the
-    process's life while the menu bar keeps showing the last good reading.
+    raises for a network outcome: the heartbeat caller is a worker thread
+    started from a rumps timer, and an escaping exception there kills the
+    heartbeat for the rest of the process's life while the menu bar keeps
+    showing the last good reading. A host or timeout that cannot be turned
+    into an argv at all raises ValueError instead -- that is a configuration
+    fault, not a network reading, and reporting it as "no reply" would send
+    someone after a network that was never asked. Both callers (the heartbeat
+    worker's guard and the console's ping_now) print it and carry on.
 
     A reply whose time can't be parsed is still a success -- rtt is display
     only, and treating it as a failure would fire the network-failed alert on a
     network that answered.
     """
+    # `ping_host` is user-settable YAML that lands in argv unquoted. A value
+    # starting with "-" is consumed by ping as a flag; an embedded NUL raises
+    # from subprocess; anything unprintable is not a name. `--` is not the
+    # answer here because BSD ping does not honour it consistently.
+    if (
+        not isinstance(host, str)
+        or not host
+        or host[0] == "-"
+        or " " in host
+        or not host.isprintable()
+    ):
+        raise ValueError(f"ping_host must be a host name or address, got {host!r}")
     # BSD ping reads `-t 0` as "no timeout", the opposite of a short one, so
-    # round up rather than truncate.
-    hard_timeout = max(1, math.ceil(timeout_seconds))
+    # round up rather than truncate. NaN, inf, a string and None all fail
+    # here rather than inside the argv build, where the message would name
+    # math.ceil instead of the config key.
+    try:
+        if not timeout_seconds > 0:
+            raise ValueError
+        hard_timeout = max(1, math.ceil(timeout_seconds))
+        wait_ms = int(timeout_seconds * 1000)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            f"ping_timeout_seconds must be a positive finite number, got {timeout_seconds!r}"
+        ) from None
     args = [
         PING_BIN,
         "-c",
         "1",
         "-W",
-        str(int(timeout_seconds * 1000)),
+        str(wait_ms),
         "-t",
         str(hard_timeout),
         host,

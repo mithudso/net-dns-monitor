@@ -19,6 +19,7 @@ throughput line share no sensible scale; on one pair of axes either the latency 
 a flat line at the bottom or the throughput is off the top.
 """
 
+import math
 from typing import Optional
 
 MARGIN_LEFT = 44  # room for the y-axis labels
@@ -35,6 +36,24 @@ COLOR_NAMES = {
 }
 
 
+def _measured(value) -> bool:
+    # `is not None` alone lets NaN and inf through: max() of a series holding a
+    # NaN is NaN, every point then projects to the top edge and the axis reads
+    # "nan". A non-finite sample is not a measurement.
+    return value is not None and math.isfinite(value)
+
+
+def latest_label(values: list, formatter, unit: str) -> str:
+    """The headline number for a series, or "--" when the newest sample is a gap.
+
+    Reads the *last* slot, not the last measured value: during an outage the
+    latest measured value is the one from before it broke, and "60ms" on a
+    graph whose right edge is a gap claims the network is fine right now.
+    """
+    latest = values[-1] if values else None
+    return "--" if not _measured(latest) else f"{formatter(latest)}{unit}"
+
+
 def scale(values: list, height: float) -> tuple:
     """Return (lo, hi, project) for a series, where project(value) -> y offset.
 
@@ -42,7 +61,7 @@ def scale(values: list, height: float) -> tuple:
     between 60 and 64ms would otherwise fill the whole graph and read as wild
     instability. A graph of network measurements is only honest with zero on it.
     """
-    real = [v for v in values if v is not None]
+    real = [v for v in values if _measured(v)]
     hi = max(real) if real else 1.0
     if hi <= 0:
         hi = 1.0
@@ -83,7 +102,7 @@ def render_series_graph(
 
         _draw_text(AppKit, title, 8.5, MARGIN_LEFT, height - MARGIN_TOP + 2, "secondaryLabelColor")
 
-        real = [v for v in values if v is not None]
+        real = [v for v in values if _measured(v)]
         if not real:
             # A placeholder rather than an empty box: "no data yet" and "flat at
             # zero" are different states and must not look identical.
@@ -125,7 +144,7 @@ def render_series_graph(
         gap_color = AppKit.NSColor.systemRedColor().colorWithAlphaComponent_(0.18)
         gap_color.setFill()
         for index, value in enumerate(values):
-            if value is None:
+            if not _measured(value):
                 x = origin_x + index * step
                 AppKit.NSRectFillUsingOperation(
                     NSMakeRect(x - step / 2, origin_y, max(1.0, step), plot_height),
@@ -138,7 +157,7 @@ def render_series_graph(
         path.setLineWidth_(1.5)
         pen_down = False
         for index, value in enumerate(values):
-            if value is None:
+            if not _measured(value):
                 # Lift the pen. The next real point starts a new subpath, which is
                 # what makes the gap a gap rather than a line across it.
                 pen_down = False
@@ -154,7 +173,7 @@ def render_series_graph(
         # The latest value, spelled out -- reading a number off a line is guesswork.
         _draw_text(
             AppKit,
-            f"{formatter(real[-1])}{unit}",
+            latest_label(values, formatter, unit),
             9.0,
             origin_x + plot_width - 52,
             height - MARGIN_TOP + 2,

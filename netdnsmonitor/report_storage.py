@@ -44,7 +44,7 @@ def _atomic_write(path: str, text: str) -> None:
         report_storage.py, line 22, in save_report
         UnicodeEncodeError: 'ascii' codec can't encode character '\\u201c'
 
-    Commit 7d09658 pinned `encoding="utf-8"` on the three subprocess *read*
+    Commit 123fe13 pinned `encoding="utf-8"` on the three subprocess *read*
     sites after the mirror-image UnicodeDecodeError crash; these were the
     write sites it missed.
 
