@@ -16,7 +16,7 @@ PyYAML==6.0.3
 # Directly imported -- AppKit/Foundation in app.py and dock_icon.py -- but
 # previously present only transitively via rumps. Declared so a future rumps
 # dependency change cannot silently remove it.
-pyobjc-framework-Cocoa==12.2.1
+pyobjc-framework-Cocoa==12.2.2
 
 # Test and tooling deps live in requirements-dev.txt. pytest used to be listed
 # here, which meant start.sh pip-installed it onto every end user's machine.
