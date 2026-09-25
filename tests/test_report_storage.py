@@ -4,9 +4,11 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from netdnsmonitor.classifier import Classification
 from netdnsmonitor.report import build_report, render_markdown
-from netdnsmonitor.report_storage import save_report
+from netdnsmonitor.report_storage import _atomic_write, save_report
 
 
 def _report():
@@ -84,9 +86,9 @@ def test_markdown_file_is_the_complete_rendering_not_a_truncated_prefix(tmp_path
 
 
 def test_a_failed_render_leaves_the_previous_report_intact(tmp_path):
-    """The point of writing via a temp file and `os.replace`: a destination is
-    only ever replaced by content that was written in full. Without it, a
-    second save that dies mid-write truncates the good report already on disk.
+    """Pins that both payloads are built *before* either destination is opened.
+    The render raises before `mkstemp` ever runs, so this says nothing about the
+    temp-then-replace path -- the next test covers that half.
     """
     report = _report()
     paths = save_report(report, str(tmp_path))
@@ -105,6 +107,22 @@ def test_a_failed_render_leaves_the_previous_report_intact(tmp_path):
         save_report(broken, str(tmp_path))
 
     assert Path(paths["markdown_path"]).read_bytes() == good
+
+
+def test_a_write_that_fails_after_the_temp_file_opens_leaves_the_destination_intact(tmp_path):
+    """The point of writing via a temp file and `os.replace`: a destination is
+    only ever replaced by content that was written in full. A `bytes` payload
+    fails inside the text-mode `write`, after `mkstemp` and before `os.replace`,
+    which is the window a plain `open(path, "w")` would have truncated in.
+    """
+    target = tmp_path / "report.md"
+    target.write_text("the good report", encoding="utf-8")
+
+    with pytest.raises(TypeError):
+        _atomic_write(str(target), b"not text")
+
+    assert target.read_text(encoding="utf-8") == "the good report"
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
 
 
 def test_no_temp_files_are_left_behind(tmp_path):

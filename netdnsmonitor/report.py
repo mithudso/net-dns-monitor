@@ -3,6 +3,7 @@ human-readable Markdown rendering, suitable for handing to IT without them
 having to re-run any diagnostics themselves.
 """
 
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -44,6 +45,19 @@ def build_report(
     }
 
 
+def _fenced(text: str) -> list[str]:
+    # Four backticks, because the escalation analysis is model output and may
+    # itself contain a three-backtick fence.
+    return ["````", text, "````"]
+
+
+def _pretty(value: object) -> str:
+    try:
+        return json.dumps(value, indent=2, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def render_markdown(report: dict) -> str:
     lines = [
         "# Network/DNS Incident Report",
@@ -59,12 +73,20 @@ def render_markdown(report: dict) -> str:
         report["summary"],
         "",
         "## Probe Results",
-        str(report["probe_results"]),
+        *_fenced(_pretty(report["probe_results"])),
         "",
         "## Ladder Steps",
     ]
+    # One heading per step with the outcome fenced: `scutil --dns` and
+    # `netstat -rn` are multi-line, and a dict repr collapses them into `\n`
+    # escapes in the one document meant to let IT read that output.
     for step in report["ladder_results"]:
-        lines.append(f"- {step}")
+        name = step.get("name", "?")
+        kind = step.get("kind")
+        lines += ["", f"### {name} ({kind})" if kind else f"### {name}"]
+        if step.get("reason"):
+            lines.append(f"_{step['reason']}_")
+        lines += _fenced(str(step.get("outcome")))
     lines += [
         "",
         "## Log Excerpts",
@@ -74,9 +96,14 @@ def render_markdown(report: dict) -> str:
     lines += [
         "",
         "## Repair Outcome",
-        str(report["repair_outcome"]),
+        *_fenced(str(report["repair_outcome"])),
         "",
         "## Escalation",
-        str(report["escalation"]),
     ]
+    escalation = report["escalation"]
+    if isinstance(escalation, dict):
+        for key, value in escalation.items():
+            lines += [f"**{key}:**", *_fenced(str(value))]
+    else:
+        lines.append(str(escalation))
     return "\n".join(lines)

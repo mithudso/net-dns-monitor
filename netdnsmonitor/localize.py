@@ -11,8 +11,10 @@ Three signals from us (`external_reachable`, `dns_ok`, and whether any peer
 answers at all) and two from the peer (`external_reachable`, `dns_ok`) resolve it:
 
   peer unreachable                  -> LOCAL_MACHINE
-      Nothing on the LAN answers, including a machine that was answering
-      minutes ago. Our own link is the thing that changed.
+      Every peer heard from within the current window has now gone silent.
+      Our own link is the thing that changed. Peers older than that window
+      are excluded by PeerRegistry.localization_view() -- they prove nothing
+      about now.
 
   peer fine, we can't get out       -> LOCAL_MACHINE
       The LAN works, the peer's internet works, ours doesn't. Route, firewall,
@@ -85,7 +87,9 @@ def localize(
     evidence = {
         "our_external_reachable": our_external_reachable,
         "our_dns_ok": our_dns_ok,
-        "peers_asked": len(peers or []),
+        # "known", not "asked": nothing here sends a probe, and the count
+        # includes peers with no address that could not have been asked.
+        "peers_known": len(supplied),
         "peers_answered": len(reachable),
         "peers_reporting_state": len(informative),
     }
@@ -100,11 +104,15 @@ def localize(
         )
 
     if not peers:
+        # "Heard from", not "known": the registry keeps month-old records, and
+        # this branch is reached with sixteen of them on file. Telling that
+        # reader no peer is known sends them to install a monitor they have.
         return _verdict(
             INCONCLUSIVE,
             "low",
-            "No peer is known on this network, so there is nothing to compare against. "
-            "Run the monitor on a second machine to make this answerable.",
+            "No peer on this network has been heard from within the current window, "
+            "so there is nothing to compare against. A second machine running the "
+            "monitor, and reachable, would make this answerable.",
             evidence,
         )
 

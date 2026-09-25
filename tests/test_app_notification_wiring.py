@@ -171,7 +171,7 @@ def test_build_notifier_enables_slack_when_the_webhook_env_var_is_set():
     }
     # A closed local port, not a hostname: refuses instantly and needs no DNS,
     # so this stays a wiring test rather than a network test.
-    notifier = build_notifier(config, env={"SLACK_WEBHOOK_URL": "http://127.0.0.1:1/hook"})
+    notifier = build_notifier(config, env={"SLACK_WEBHOOK_URL": "https://127.0.0.1:1/hook"})
     results = notifier("text")  # delivery must fail as data, never raise
     assert len(results) == 1
     assert results[0]["channel"] == "slack"
@@ -222,8 +222,13 @@ def test_build_domains_source_learns_failed_domains_from_the_log(tmp_path):
         "max_learned_domains": 20,
         "domain_learn_interval_seconds": 300,
     }
+    # The scan runs inline here rather than on the learner's worker thread, so
+    # the assertion is about the wiring and not about a race the thread would win
+    # on a fast machine and lose on a loaded one.
     source, store = build_domains_source(
-        config, log_watcher=lambda: ["query for broken.example.net timed out"]
+        config,
+        log_watcher=lambda: ["query for broken.example.net timed out"],
+        spawn=lambda fn: fn(),
     )
     assert source() == ["mine.example.com", "example.com", "broken.example.net"]
     assert store.domains == ["broken.example.net"]
@@ -281,7 +286,9 @@ def test_the_wired_prober_evicts_a_dead_learned_domain_on_a_healthy_tick(tmp_pat
         return prober
 
     monkeypatch.setattr("netdnsmonitor.app.make_prober", fake_make_prober)
-    probe = build_state_machine(config).prober()
+    # `spawn` swallows the learner's first scan: it would otherwise run a real
+    # `log show` on a daemon thread from inside the suite.
+    probe = build_state_machine(config, spawn=lambda fn: None).prober()
 
     assert probe["domain_results"]["example.com"] is True
     assert probe["domain_results"]["dead.example.net"] is False

@@ -40,6 +40,9 @@ def _no_real_privilege_calls(monkeypatch):
     """
     monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: [])
     monkeypatch.setattr(privileges, "is_granted", lambda *a, **k: False)
+    # The executor's `covered_interfaces_fn` seam is wired to this in production;
+    # unstubbed it is a real `sudo -l` from inside the DHCP-renewal test below.
+    monkeypatch.setattr(privileges, "granted_interfaces", lambda *a, **k: [])
     monkeypatch.setattr(privileges, "dhcp_interfaces", lambda *a, **k: ["en0", "en9"])
     monkeypatch.setattr(privileges, "primary_interface", lambda *a, **k: "en9")
     monkeypatch.setattr(
@@ -355,6 +358,21 @@ def test_the_window_shows_a_permissions_section(tmp_path):
     stats = str(app._dashboard.stats_view.string())
     assert "PERMISSIONS" in stats
     assert "not granted" in stats
+
+
+def test_a_blanket_nopasswd_rule_is_granted_in_the_window_too(tmp_path, monkeypatch):
+    """`privileges.is_granted` already counts `(ALL) NOPASSWD: ALL`, so the repairs
+    run. The window derives its own answer from the same listing and must agree:
+    "Elevated permissions: not granted" beside "Interfaces the grant covers: (all,
+    via a blanket NOPASSWD rule)" tells someone the machine is in two states at once.
+    """
+    monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: ["ALL"])
+    app = build_app(tmp_path)
+    app._refresh_privilege_status()
+    finish(app)
+    assert app.privileges_granted is True
+    app.open_dashboard()
+    assert "not granted" not in str(app._dashboard.stats_view.string())
 
 
 def test_the_permissions_section_names_what_is_still_impossible(tmp_path):

@@ -111,6 +111,61 @@ def test_unclassified_probe_result_escalates_without_a_ladder():
     assert report["escalation"] == {"analysis": "fake llm response"}
 
 
+def test_a_half_probed_healthy_reading_is_not_counted_as_a_failure():
+    """Not probed is not failed. With `control_domain: null` and the shipped
+    `domains: []` the prober returns dns_ok=None on every tick while the
+    network is reachable; scoring that UNCLASSIFIED reading as a failure
+    declared an incident on a healthy network, ran an empty ladder, and
+    escalated -- and the gate could never recover because no tick ever
+    counted as a success.
+    """
+    sm, prober, repair, escalate = make_sm([{"external_reachable": True, "dns_ok": None}] * 4)
+    assert [sm.tick() for _ in range(4)] == [None, None, None, None]
+    assert sm.flap_gate.state == "healthy"
+    assert repair.executed_steps == []
+    assert escalate.received_bundles == []
+
+
+def test_a_half_probed_failing_reading_still_counts_as_a_failure():
+    """The other half of the truth table: a field that positively read False
+    is evidence of a fault even when the other field was not probed.
+    """
+    sm, prober, repair, escalate = make_sm(
+        [
+            {"external_reachable": False, "dns_ok": None},
+            {"external_reachable": False, "dns_ok": None},
+            {"external_reachable": False, "dns_ok": None},
+        ]
+    )
+    sm.tick()
+    assert sm.tick() is not None
+    assert sm.flap_gate.state == "incident"
+
+
+def test_a_half_probed_healthy_recheck_does_not_escalate():
+    """The same rule on the recheck: a (True, None) reading after the ladder
+    is evidence of nothing, so it can neither claim the incident resolved nor
+    justify a paid escalation. A (None, None) recheck still escalates -- see
+    the test above.
+    """
+    escalator = FakeEscalator()
+    sm, prober, repair, escalate = make_sm(
+        [
+            {"external_reachable": True, "dns_ok": False},
+            {"external_reachable": True, "dns_ok": False},
+            {"external_reachable": True, "dns_ok": None},  # recheck: half probed
+        ],
+        escalator=escalator,
+    )
+    sm.tick()
+    report = sm.tick()
+    assert report is not None
+    assert report["escalation"] is None
+    assert escalate.received_bundles == []
+    assert report["recheck_ok"] is None
+    assert report["resolved"] is False
+
+
 def test_redacted_bundle_sent_to_escalator_strips_sensitive_strings():
     escalator = FakeEscalator()
     sm, prober, repair, escalate = make_sm(

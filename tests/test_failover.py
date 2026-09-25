@@ -43,6 +43,7 @@ class FakeRunner:
         list_fails_after_apply=False,
         enable_result=None,
         obey_enable=True,
+        list_fails_after_enable=False,
     ):
         self.order = list(order or ORDER)
         self.disabled = set(DISABLED)
@@ -53,6 +54,10 @@ class FakeRunner:
         # The nastiest case: the reorder lands, then the read-back fails -- the
         # system has been mutated and we cannot see it.
         self.list_fails_after_apply = list_fails_after_apply
+        # Same shape for the enable: the first listing after
+        # -setnetworkserviceenabled fails, once.
+        self.list_fails_after_enable = list_fails_after_enable
+        self.enable_pending_readback = False
         self.applied = False
         self.obey = obey  # False = exit 0 but ignore the request
         self.calls = []
@@ -61,6 +66,9 @@ class FakeRunner:
         self.calls.append(args)
         if args[:2] == ["networksetup", "-listnetworkserviceorder"]:
             if self.list_fails or (self.list_fails_after_apply and self.applied):
+                return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+            if self.list_fails_after_enable and self.enable_pending_readback:
+                self.enable_pending_readback = False
                 return SimpleNamespace(returncode=1, stdout="", stderr="boom")
             return SimpleNamespace(returncode=0, stdout=self._listing(), stderr="")
         if args[:2] == ["networksetup", "-ordernetworkservices"]:
@@ -73,6 +81,7 @@ class FakeRunner:
         if args[:2] == ["networksetup", "-setnetworkserviceenabled"]:
             if self.enable_result is not None:
                 return self.enable_result
+            self.enable_pending_readback = True
             if self.obey_enable:
                 name, state = args[2], args[3]
                 self.disabled.discard(name) if state == "on" else self.disabled.add(name)
@@ -902,3 +911,189 @@ def test_a_named_backup_absent_from_the_order_is_reported_as_such(store):
     assert outcome.startswith("failed:")
     assert "not in the service order" in outcome
     assert runner.applied_orders == []
+
+
+def test_switch_now_restores_the_preferred_link_from_a_third_service_at_the_head(store):
+    """A hand-promoted third service is "not on a backup", which is not the same
+    thing as being on the preferred link. Refusing the restore there, with a
+    message saying we are already home, strands the machine on neither side.
+    """
+    runner = failed_over(store)
+    runner.order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
+    outcome = build(store, runner, prober=lambda dev: True).switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert runner.order == ORDER
+
+
+def test_an_enable_whose_read_back_fails_is_not_claimed(store):
+    """The enable exited 0 but the listing could not be re-read, so whether the
+    service is on is unknown. An unknown must not become "also enabled the
+    service" in an ok: outcome, and nothing may be reordered on top of it.
+    """
+    runner = FakeRunner(list_fails_after_enable=True, obey_enable=False)
+    failover = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "confirm" in outcome
+    assert runner.applied_orders == []
+
+
+def test_a_failover_written_by_another_process_is_seen_and_undone(tmp_path):
+    """`netdns failover backup` writes the same state file from its own
+    process. The app's store was loaded at startup, so without re-reading the
+    file that failover is invisible: the app never fails back, and its next
+    save() overwrites the record with nothing.
+    """
+    path = str(tmp_path / "failover.json")
+    runner = FakeRunner()
+    app_store = FailoverStore(path)  # constructed before the CLI acts
+    build(FailoverStore(path), runner).attempt_failover("network")
+
+    failover = build(app_store, runner, prober=lambda dev: True)
+    for _ in range(3):
+        outcome = failover.attempt_failback()
+    assert outcome.startswith("ok:")
+    assert runner.order == ORDER
+    assert FailoverStore(path).original_order is None
+
+
+def test_a_re_disable_that_silently_does_nothing_is_not_claimed(store):
+    """networksetup can exit 0 on the "off" without the service going off; the
+    outcome must say so, and the record of the enable must survive so it is
+    not forgotten as done.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.enabled_by_us == "M3100"
+
+    runner.obey_enable = False  # the "off" is accepted and ignored
+    back = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
+        prober=lambda dev: True,
+    )
+    for _ in range(3):
+        outcome = back.attempt_failback()
+    assert outcome.startswith("ok:")
+    assert "could not re-disable 'M3100'" in outcome
+    assert "disabled 'M3100' again" not in outcome
+    assert store.enabled_by_us == "M3100"
+
+
+def test_a_named_manual_target_that_was_not_verified_says_so(store):
+    """The unnamed manual path already carries the warning; naming the target
+    is an instruction, not evidence that the path works.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+        prober=lambda dev: None,
+    )
+    outcome = failover.switch_now("backup", service="iPhone USB")
+    assert outcome.startswith("ok:")
+    assert "not verified" in outcome
+    assert runner.order[0] == "iPhone USB"
+
+
+def test_self_heal_forgets_the_enable_along_with_the_order(store):
+    """Once the user has put the order back by hand, the restore point is
+    gone. A remembered enable would then be undone by some later, unrelated
+    failback -- turning off a service the user may have kept on deliberately.
+    Leaving it on is the safer error.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.enabled_by_us == "M3100"
+
+    runner.order = list(ORDER)  # user restored the order by hand
+    assert failover.attempt_failback() is None
+    assert store.original_order is None
+    assert store.enabled_by_us is None
+
+
+def test_a_pre_policy_failure_arms_the_cooldown(store):
+    """A listing that cannot be read, or a preferred service that is not in it,
+    fails the same way on every tick. Without the cooldown, that is a
+    networksetup subprocess on the timer thread every 30 seconds until fixed.
+    """
+    runner = FakeRunner(list_fails=True)
+    build(store, runner, cooldown_seconds=300.0).attempt_failover("network")
+    assert store.last_switch_at == 1_000_000.0
+    assert store.switch_times == []
+
+
+def test_failback_during_the_cooldown_spends_nothing(store):
+    """The policy would refuse anyway; the point is not to pay a subprocess and
+    a probe to hear it say so.
+    """
+    now = [1_000_000.0]
+    runner = failed_over(store)
+    probes = []
+    failover = build(
+        store,
+        runner,
+        prober=lambda dev: probes.append(dev) or True,
+        cooldown_seconds=300.0,
+        time_fn=lambda: now[0],
+    )
+    runner.calls.clear()
+    now[0] += 60
+    assert failover.attempt_failback() is None
+    assert runner.calls == []
+    assert probes == []
+
+
+def test_a_manual_switch_that_fails_before_policy_arms_the_cooldown(store):
+    """Same discipline as the automatic path: a failure that nothing about the
+    next tick will change must space out the retry, and spend no budget.
+    """
+    runner = FakeRunner(list_fails=True)
+    build(store, runner, cooldown_seconds=300.0).switch_now("backup")
+    assert store.last_switch_at == 1_000_000.0
+    assert store.switch_times == []
+
+    store.last_switch_at = None
+    runner = FakeRunner()
+    build(store, runner, preferred_service="Ethernet").switch_now("backup")
+    assert store.last_switch_at == 1_000_000.0
+
+    store.last_switch_at = None
+    build(store, FakeRunner(), backup_service="AirPort").switch_now("backup")
+    assert store.last_switch_at == 1_000_000.0
+    assert store.switch_times == []
+
+
+def test_failover_refuses_to_be_built_without_a_store_or_a_prober():
+    with pytest.raises(ValueError):
+        NetworkFailover(preferred_service="AX88179B", interface_prober=lambda dev: True)
+    with pytest.raises(ValueError):
+        NetworkFailover(preferred_service="AX88179B", store=FailoverStore("/dev/null/nope"))

@@ -29,8 +29,9 @@ Only a real measured elapsed time counts as a stall.
 
 Ordering is least-recently-checked first
 ----------------------------------------
-The stall list never shrinks -- the log is append-only and "ever stalled" is
-permanent, so nothing ever leaves the set -- and a single cycle is
+The stall list never shrinks -- compaction keeps each domain's slowest
+completed record, so "ever stalled" is permanent and nothing ever leaves the
+set -- and a single cycle is
 deadline-bounded, so a fixed order would starve the tail of the list forever.
 Least-recently-checked-first rotates coverage across cycles. (Never shrinking
 is not the same as growing without bound; see the seeding section below for
@@ -42,12 +43,11 @@ at least `resolution_max_workers` domains hang past the batch deadline, every
 record in a cycle is an abandonment, no `checked_at` advances anywhere, every
 sort key freezes at once, and the name tiebreak below re-picks the same head of
 the list every cycle -- the alphabetical freeze this section treats as the
-thing to avoid. That is a real ceiling, not a hypothesis: 91 domains against 10
-workers on this machine, and the set is mostly `.local` and `in-addr.arpa`
-names, which are the ones that hang. It has not been reached yet (no
-`outcome: "abandoned"` record exists in the log so far). Nothing here can
-prevent it either -- the fix would have to cap how much of the list a single
-cycle claims, which is the caller's decision, not the selector's.
+thing to avoid. That is a real ceiling, not a hypothesis: the set is mostly
+`.local` and `in-addr.arpa` names, which are the ones that hang, and
+`resolution_max_workers` defaults to 10. Nothing here can prevent it either --
+the fix would have to cap how much of the list a single cycle claims, which is
+the caller's decision, not the selector's.
 
 That rotation is why abandoned records are skipped *before* the
 `checked_at` bookkeeping and not just before the elapsed-time test.
@@ -60,11 +60,13 @@ truncated tail would be abandoned again every cycle and never measured. Only a
 completed lookup advances `checked_at`, so an abandoned domain keeps its older
 timestamp and sorts to the front of the next cycle.
 
-The log is append-only and already 3.4MB / 16k lines, so it is streamed line
-by line and only one aggregate per domain is retained -- never the full record
-list. That existing history is a leftover of the retired query-log top-N path
--- the log's first cycle holds exactly 50 records, the old `resolution_top_n`
-default -- which is why there is anything here to read at all.
+The log is append-only between compactions (`resolution_log` rewrites it once
+it passes `COMPACT_AT_LINES`, keeping one record per domain) and grows without
+bound in between, so it is streamed line by line and only one aggregate per
+domain is retained -- never the full record list. A log that predates 5c647c4
+holds history left over from the retired query-log top-N path -- its first
+cycle is exactly 50 records, the old `resolution_top_n` default -- and that
+leftover is the only thing that gives this selector anything to read.
 
 This selector needs seeding, and does not seed itself
 -----------------------------------------------------
@@ -72,10 +74,10 @@ It is a pure reader, and the only writer of the same log is the resolution job
 that consumes its output, so the two form a closed loop. With no log on disk
 this returns [], an empty domain list resolves to no findings, and no findings
 append nothing: the log is never created and every later cycle repeats that
-same no-op. On this machine the loop is already primed by the history above,
-but a fresh install has nothing to prime it, and
-`query_log.extract_top_domains` -- which used to -- is no longer wired into
-`app.py`.
+same no-op. Only pre-existing history primes the loop; a machine whose log is
+absent -- a fresh install, or one where nothing ever wrote it -- stays at []
+forever, and `query_log.extract_top_domains` -- which used to seed it -- is no
+longer wired into `app.py`.
 
 So the set is closed as well as non-shrinking: a domain that is not already in
 the log can never enter it, because only domains already selected here are

@@ -48,11 +48,19 @@ MIN_LINK_ROW_FIELDS = 10
 
 
 def parse_interface_counters(
-    netstat_output: str,
+    netstat_output: Optional[str],
     prefixes: tuple[str, ...] = INTERFACE_PREFIXES,
-) -> tuple[int, int]:
-    """Total (bytes in, bytes out) across the physical interfaces."""
+) -> Optional[tuple[int, int]]:
+    """Total (bytes in, bytes out) across the physical interfaces, or None
+    when no such interface was found in the output.
+
+    None, not (0, 0): zero is a reading that says "no bytes ever", and the
+    meter diffs it against the previous total -- a tens-of-gigabytes negative
+    delta, which reads as a counter reset, or the whole accumulated total
+    rendered as one cycle's rate when the row comes back.
+    """
     total_in = total_out = 0
+    matched = False
     for line in (netstat_output or "").splitlines():
         fields = line.split()
         if len(fields) < MIN_LINK_ROW_FIELDS:
@@ -67,18 +75,22 @@ def parse_interface_counters(
         if not name.startswith(prefixes):
             continue
         try:
-            total_in += int(fields[IBYTES_FROM_END])
-            total_out += int(fields[OBYTES_FROM_END])
+            row_in = int(fields[IBYTES_FROM_END])
+            row_out = int(fields[OBYTES_FROM_END])
         except ValueError:
             # One unexpected line must not take down a heartbeat that runs
             # every 5 seconds for the life of the process.
             continue
-    return total_in, total_out
+        total_in += row_in
+        total_out += row_out
+        matched = True
+    return (total_in, total_out) if matched else None
 
 
 def read_interface_counters(run_fn: RunFn = subprocess.run) -> Optional[tuple[int, int]]:
-    """Run netstat and parse it. None on any failure -- the caller renders a
-    blank throughput reading rather than dying, since this is display data.
+    """Run netstat and parse it. None on any failure, and None when the output
+    held no physical interface -- the caller renders a blank throughput
+    reading rather than dying, since this is display data.
     """
     try:
         result = run_fn(

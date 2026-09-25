@@ -4,8 +4,11 @@ recheck -> escalate to Claude if still unresolved -> build the report.
 
 The recheck step is what closes the loop: without re-probing after a repair
 attempt, "repair" can't know whether it worked, and escalation timing would
-be ambiguous. Escalation fires only after the ladder has run and the recheck
-still shows the incident unresolved -- never on first detection.
+be ambiguous. Escalation fires only after the ladder has been given its chance
+and the recheck still shows the incident unresolved -- never on first
+detection. An unclassified probe has no ladder to run, so that path escalates
+with zero steps attempted; the report records the empty ladder_results rather
+than implying a repair was tried.
 
 All external effects (probing, running repair actions, calling the LLM) are
 injected callables, so this orchestration logic is testable without any real
@@ -59,6 +62,22 @@ class StateMachine:
         probe = self.prober()
         self.last_probe = probe
         classification = classify(probe.get("external_reachable"), probe.get("dns_ok"))
+        # Not probed is not failed (non-negotiable 2). A probe that positively
+        # confirmed one field and did not read the other is evidence of nothing,
+        # so it must not move the gate in either direction:
+        #   (True, None) / (None, True)    -> skip; the gate is left as it was
+        #   (False, None) / (None, False)  -> failure; the False half is real
+        #   (None, None)                   -> falls through as a failure: a
+        #                                     prober that read neither field is
+        #                                     broken, and that is worth escalating
+        # Scoring the first row as a failure declared an incident on a healthy
+        # network the moment `control_domain` was null with the shipped
+        # `domains: []`, and the gate could never recover, because no tick ever
+        # counted as a success.
+        if classification == Classification.UNCLASSIFIED and any(
+            probe.get(field) for field in ("external_reachable", "dns_ok")
+        ):
+            return None
         ok = classification == Classification.HEALTHY
 
         prev_state = self.flap_gate.state
@@ -93,13 +112,24 @@ class StateMachine:
         recheck_classification = classify(
             recheck_probe.get("external_reachable"), recheck_probe.get("dns_ok")
         )
-        recheck_ok = recheck_classification == Classification.HEALTHY
+        # The same rule as tick(): a recheck that confirmed one field and did
+        # not read the other is evidence of nothing. It can neither claim the
+        # incident resolved (so the report carries recheck_ok=None, not True)
+        # nor justify a paid escalation on a network that may be fine. A
+        # recheck that read neither field still escalates -- that is a broken
+        # prober, and the report records it as unresolved.
+        recheck_inconclusive = recheck_classification == Classification.UNCLASSIFIED and any(
+            recheck_probe.get(field) for field in ("external_reachable", "dns_ok")
+        )
+        recheck_ok: Optional[bool] = (
+            None if recheck_inconclusive else recheck_classification == Classification.HEALTHY
+        )
 
         escalation = None
-        if should_escalate(
+        if not recheck_inconclusive and should_escalate(
             ladder_completed=True,
             repair_attempted_or_na=True,
-            recheck_ok=recheck_ok,
+            recheck_ok=bool(recheck_ok),
         ):
             log_excerpts = self.log_watcher()
             bundle = {

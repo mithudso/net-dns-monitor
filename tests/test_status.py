@@ -292,6 +292,20 @@ def test_status_report_includes_classification_during_an_incident():
     assert "dns" in build_status_report("incident", "dns")
 
 
+def test_status_report_does_not_borrow_a_stale_classification_for_a_ping_failure():
+    """Same rule as build_title: last_classification is set only on the
+    healthy->incident edge and never cleared, so a ping-only incident printing
+    it would point the reader at a subsystem from an unrelated incident.
+    """
+    text = build_status_report("healthy", "dns", ping_down=True)
+    assert "dns" not in text
+    assert "classification: ping" in text
+
+
+def test_status_report_omits_classification_while_merely_flaky():
+    assert "classification" not in build_status_report("healthy", "dns", consecutive_failures=1)
+
+
 def test_status_report_says_so_when_no_report_has_been_written():
     assert "(none this session)" in build_status_report("healthy")
 
@@ -371,6 +385,33 @@ def test_the_live_side_is_marked_and_the_other_is_not():
     assert on_preferred[1].startswith("●") and on_preferred[2].startswith("○")
     on_backup = build_failover_lines(snapshot(active_side="backup"))
     assert on_backup[1].startswith("○") and on_backup[2].startswith("●")
+
+
+def test_a_third_service_carrying_traffic_marks_neither_configured_side():
+    """`active_side` falls back to "preferred" for any head of the service
+    order that is not the backup, so keying the preferred marker off it lit
+    the preferred row while the Active line named a different service.
+    """
+    lines = build_failover_lines(
+        snapshot(active_side="preferred", active_service="Thunderbolt Bridge")
+    )
+    assert lines[0].startswith("Active: Thunderbolt Bridge")
+    assert lines[1].startswith("○")
+    assert lines[2].startswith("○")
+
+
+def test_the_backup_row_follows_the_one_actually_carrying_traffic():
+    second = {"name": "iPhone USB", "device": "en8", "found": True, "reachable": True}
+    lines = build_failover_lines(
+        snapshot(
+            active_side="backup",
+            active_service="iPhone USB",
+            backups=[dict(BACKUP_ROW), second],
+        )
+    )
+    assert lines[2].startswith("●")
+    assert "iPhone USB" in lines[2]
+    assert "Backup (of 2)" in lines[2]
 
 
 def test_rows_name_the_device():

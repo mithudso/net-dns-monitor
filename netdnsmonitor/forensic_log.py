@@ -29,14 +29,17 @@ recovery would lose exactly the outages worth investigating.
 values in here would produce timestamps like `847293.44`. This takes an injected
 `clock` returning timezone-aware datetimes, matching report.py.
 
-Writes go through report_storage._atomic_write, which already carries this
+Episode documents go through report_storage._atomic_write, which carries this
 project's two hard-won lessons: explicit UTF-8 (launchd sets no LANG, so the
 process encoding is ASCII and any curly quote raises) and write-to-temp then
-os.replace (so a failed write cannot truncate an existing record).
+os.replace (so a failed write cannot truncate an existing record). The journal
+is a plain UTF-8 append: an append cannot truncate what is already there, and
+the worst a crash mid-write leaves is one torn last line.
 """
 
 import json
 import os
+import traceback
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -50,6 +53,11 @@ STEP = "step"
 OBSERVATION = "observation"
 RECHECK = "recheck"
 ESCALATION = "escalation"
+
+# Observations arrive every heartbeat for the length of the outage: a 490s
+# outage produced 2,583 of them and a 937 KB markdown file. The journal keeps
+# every one; the document keeps this many and says how many more there were.
+MAX_OBSERVATIONS_PER_EPISODE = 500
 
 
 def _utc_now() -> datetime:
@@ -71,6 +79,7 @@ class ForensicRecorder:
         self.clock = clock
         self.writer = writer
         self._episode: Optional[dict] = None
+        self._observations_included = 0
 
     @property
     def is_open(self) -> bool:
@@ -112,11 +121,20 @@ class ForensicRecorder:
                 "trigger_detector": detector,
                 "trigger_reason": reason,
                 "events": [],
+                "observations_not_included": 0,
             }
+            self._observations_included = 0
 
         if self._episode is not None:
-            self._episode["events"].append(event)
             event["episode_started_at"] = self._episode["started_at"]
+            if kind == OBSERVATION and self._observations_included >= MAX_OBSERVATIONS_PER_EPISODE:
+                # Still journaled below, still attributed to the episode; only
+                # the document stops growing.
+                self._episode["observations_not_included"] += 1
+            else:
+                self._episode["events"].append(event)
+                if kind == OBSERVATION:
+                    self._observations_included += 1
 
         self._append_journal(event)
 
@@ -140,7 +158,9 @@ class ForensicRecorder:
         try:
             os.makedirs(os.path.dirname(self.journal_path) or ".", exist_ok=True)
             with open(self.journal_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(event) + "\n")
+                # default=str: a caller passing bytes (raw command output) must
+                # cost a lossy value, not a TypeError out of note().
+                f.write(json.dumps(event, default=str) + "\n")
         except OSError:
             # An unwritable journal must not take the monitor down. Deliberately
             # not printed: this would be called every 5 seconds during an
@@ -153,24 +173,29 @@ class ForensicRecorder:
             stamp = episode["started_at"].replace(":", "-")
             json_path = os.path.join(self.episodes_dir, f"{stamp}-episode.json")
             markdown_path = os.path.join(self.episodes_dir, f"{stamp}-episode.md")
-            self.writer(json_path, json.dumps(episode, indent=2))
+            self.writer(json_path, json.dumps(episode, indent=2, default=str))
             self.writer(markdown_path, render_episode_markdown(episode))
             return {"json_path": json_path, "markdown_path": markdown_path}
         except Exception:  # noqa: BLE001 - note() promises never to raise
             # Broader than OSError on purpose. This runs from the heartbeat
-            # drain and the incident pipeline; an unserialisable event or a
-            # rendering bug must cost the document, not the monitor. The episode
-            # has already been cleared, so the next outage still records.
+            # drain and the incident pipeline; a rendering bug must cost the
+            # document, not the monitor (serialisation itself cannot raise --
+            # both dumps use default=str). The episode has already been
+            # cleared, so the next outage still records. The trace is printed
+            # because the document is the deliverable: an episode that silently
+            # never appeared is a hole nobody can explain later.
+            traceback.print_exc()
             return None
 
 
-def _duration_seconds(started_at: str, ended_at: str) -> float:
+def _duration_seconds(started_at: str, ended_at: str) -> Optional[float]:
     try:
         return (
             datetime.fromisoformat(ended_at) - datetime.fromisoformat(started_at)
         ).total_seconds()
     except ValueError:
-        return 0.0
+        # None renders as "unknown"; 0.0 would claim an instant recovery.
+        return None
 
 
 KIND_HEADINGS = {
@@ -218,6 +243,14 @@ def render_episode_markdown(episode: dict) -> str:
         lines.append(f"- **Result:** {event.get('result') or 'no result recorded'}")
         lines.append("")
 
+    not_included = episode.get("observations_not_included") or 0
+    if not_included:
+        lines.append(
+            f"{not_included} further observations were journaled in the forensic "
+            "journal but not included here."
+        )
+        lines.append("")
+
     lines.append("## Steps taken")
     lines.append("")
     if steps:
@@ -255,6 +288,13 @@ def _cell(value: Optional[str]) -> str:
 def _format_duration(seconds: Optional[float]) -> str:
     if seconds is None:
         return "unknown"
+    if seconds < 0:
+        # Wall clock on purpose (see the module docstring), and wall clocks get
+        # stepped. "-70s" reads as a rendering bug; say what happened instead.
+        return (
+            f"unknown (recovery stamped {abs(seconds):.0f}s before the outage "
+            "began -- the wall clock moved)"
+        )
     if seconds < 60:
         return f"{seconds:.0f}s"
     minutes, secs = divmod(int(seconds), 60)

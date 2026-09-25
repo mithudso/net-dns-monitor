@@ -61,7 +61,10 @@ def _post_json(url: str, payload: bytes, timeout: float) -> tuple[int, str]:
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.status, response.read().decode("utf-8", "replace")
+        # Bounded: the caller only ever looks at the first few bytes of the
+        # body, and an endpoint that drips an endless response would otherwise
+        # hold this worker (and the memory) for as long as it liked.
+        return response.status, response.read(65536).decode("utf-8", "replace")
 
 
 def make_slack_notifier(
@@ -69,6 +72,12 @@ def make_slack_notifier(
     post_fn: Callable[[str, bytes, float], tuple[int, str]] = _post_json,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> Callable[[str], dict]:
+    # The URL is the credential. Over http:// it would cross the network in
+    # cleartext, and urlopen honours file:// and ftp:// just as readily -- so
+    # anything but https is refused up front, as data, before a single post.
+    if not webhook_url.startswith("https://"):
+        return lambda _text: {"channel": "slack", "error": "webhook URL is not https"}
+
     def notify(text: str) -> dict:
         payload = json.dumps({"text": text}).encode("utf-8")
         try:
@@ -117,6 +126,14 @@ def make_email_notifier(
         message["To"] = ", ".join(recipients)
         message.set_content(text)
 
+        # login() over a plain connection puts SMTP_PASSWORD on the wire in
+        # cleartext. Refused before connecting, so no socket is opened either.
+        if username and password and not use_starttls:
+            return {
+                "channel": "email",
+                "error": "refusing to send SMTP credentials without STARTTLS",
+            }
+
         factory = smtp_factory or smtplib.SMTP
         try:
             client = factory(host, port, timeout=timeout)
@@ -127,7 +144,11 @@ def make_email_notifier(
                 client.starttls()
             if username and password:
                 client.login(username, password)
-            client.send_message(message)
+            # send_message raises only when the server refused EVERY recipient;
+            # a partial refusal comes back as a dict of the refused addresses,
+            # and swallowing it would report a delivery to people who never got
+            # the message.
+            refused = client.send_message(message) or {}
         except smtplib.SMTPAuthenticationError:
             # Never echo the exception: it can carry the credential back.
             return {"channel": "email", "error": "SMTP authentication rejected"}
@@ -144,7 +165,16 @@ def make_email_notifier(
                 # failure here has nowhere useful to go.
                 with contextlib.suppress(Exception):
                     client.close()
-        return {"channel": "email", "delivered": True, "recipients": list(recipients)}
+        delivered_to = [r for r in recipients if r not in refused]
+        if not delivered_to:
+            return {"channel": "email", "error": "SMTP refused every recipient"}
+        # Addresses only: the server's refusal text is not copied out.
+        return {
+            "channel": "email",
+            "delivered": True,
+            "recipients": delivered_to,
+            "refused": sorted(refused),
+        }
 
     return notify
 

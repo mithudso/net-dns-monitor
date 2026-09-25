@@ -370,3 +370,17 @@ failover_probe_targets: []
 # probe_timeout_seconds". Only ever spent once the machine has failed over or is
 # in an incident: a healthy tick that never failed over runs no probes at all.
 failover_probe_timeout_seconds: 0
+
+# --- Router ----------------------------------------------------------------
+# Off by default. When on, this machine shares its WAN link out over the LAN
+# interface and runs a DHCP server on it. Interface names are BSD device names
+# as `ifconfig` lists them; the router window in the menu bar offers a picker.
+# The Router is built once at launch, so changing any of these here needs
+# `net-dns-monitor-service restart`.
+router_enabled: false
+wan_interface: "en3"
+lan_interface: "en0"
+lan_ip: "192.168.10.1"
+lan_netmask: "255.255.255.0"
+dhcp_start: "192.168.10.100"
+dhcp_end: "192.168.10.200"
