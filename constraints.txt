@@ -42,7 +42,7 @@ pydantic==2.13.5
 pydantic-core==2.46.5
 pygments==2.21.0
 pyobjc-core==12.2.2
-pyobjc-framework-cocoa==12.2.1
+pyobjc-framework-cocoa==12.2.2
 pytest==9.1.1
 pyyaml==6.0.3
 ruff==0.16.1
