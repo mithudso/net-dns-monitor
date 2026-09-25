@@ -39,6 +39,21 @@ def test_reaching_success_threshold_resolves_the_incident():
     assert gate.record(ok=True) == "healthy"
 
 
+def test_a_second_incident_can_be_declared_after_a_recovery():
+    """Recovery has to re-arm the gate: the failure counter is reset by the
+    successes, and the healthy->incident edge must fire again on the next
+    streak, or every outage after the first goes unreported.
+    """
+    gate = FlapGate(failure_threshold=2, success_threshold=2)
+    gate.record(ok=False)
+    assert gate.record(ok=False) == "incident"
+    gate.record(ok=True)
+    assert gate.record(ok=True) == "healthy"
+    assert gate.consecutive_failures == 0
+    gate.record(ok=False)
+    assert gate.record(ok=False) == "incident"
+
+
 def test_failure_and_success_thresholds_are_not_interchangeable():
     """Every other test in this file uses 2/2, which makes the two thresholds
     indistinguishable: comparing consecutive_successes against

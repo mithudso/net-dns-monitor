@@ -3,7 +3,10 @@ en0 measured 3.8 Mbps against Cloudflare's endpoint, and every inactive
 interface returned None rather than 0.0.
 """
 
+import socket
 import time
+
+import pytest
 
 from netdnsmonitor.failover_policy import Candidate, best_candidate, rank_candidates
 from netdnsmonitor.throughput import (
@@ -16,13 +19,29 @@ from netdnsmonitor.throughput import (
 # --- meter ------------------------------------------------------------------
 
 
+def resolved(host, timeout):
+    return "192.0.2.1"
+
+
 def test_meter_returns_the_measurement():
-    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2)
+    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2, resolve_fn=resolved)
     assert meter("en0") == 94.2
 
 
+def test_meter_does_not_touch_the_resolver(monkeypatch):
+    """The lookup enters through `resolve_fn`; with a fake injected, the suite
+    must never reach the real resolver. Guarded at the socket boundary because
+    that is the only place an accidental real lookup would show.
+    """
+    calls = []
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: calls.append(a) or [])
+    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 1.0, resolve_fn=resolved)
+    assert meter("en0") == 1.0
+    assert calls == []
+
+
 def test_no_device_is_not_measured():
-    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2)
+    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2, resolve_fn=resolved)
     assert meter(None) is None
     assert meter("") is None
 
@@ -30,7 +49,9 @@ def test_no_device_is_not_measured():
 def test_an_empty_host_disables_measurement_entirely():
     """Ranking then falls back to reachability rather than inventing numbers."""
     calls = []
-    meter = make_throughput_meter(host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0)
+    meter = make_throughput_meter(
+        host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0, resolve_fn=resolved
+    )
     assert meter("en0") is None
     assert calls == []
 
@@ -39,7 +60,76 @@ def test_a_raising_measurement_is_not_measured_rather_than_an_error():
     def boom(dev, **kw):
         raise OSError("interface went away mid-benchmark")
 
-    assert make_throughput_meter(measure_fn=boom)("en0") is None
+    assert make_throughput_meter(measure_fn=boom, resolve_fn=resolved)("en0") is None
+
+
+def test_a_measure_function_that_rejects_its_arguments_is_unmeasured_not_an_error():
+    def old_shape(dev, host, path, port, timeout, max_bytes):
+        return 1.0
+
+    assert make_throughput_meter(measure_fn=old_shape, resolve_fn=resolved)("en0") is None
+
+
+def test_an_unresolvable_host_is_unmeasured_and_the_measurement_is_skipped():
+    calls = []
+    meter = make_throughput_meter(
+        measure_fn=lambda dev, **kw: calls.append(dev) or 1.0, resolve_fn=lambda h, t: None
+    )
+    assert meter("en0") is None
+    assert calls == []
+
+
+def test_the_host_is_resolved_once_across_interfaces():
+    lookups = []
+    meter = make_throughput_meter(
+        measure_fn=lambda dev, **kw: 1.0,
+        resolve_fn=lambda h, t: lookups.append(h) or "192.0.2.1",
+    )
+    meter("en0")
+    meter("en1")
+    assert lookups == ["speed.cloudflare.com"]
+
+
+def test_a_failed_lookup_is_retried_on_the_next_measurement():
+    """Caching the failure would switch benchmarking off for the rest of the
+    session after one resolver blip -- during exactly the outage it serves.
+    """
+    answers = iter([None, "192.0.2.1"])
+    meter = make_throughput_meter(
+        measure_fn=lambda dev, **kw: 1.0, resolve_fn=lambda h, t: next(answers)
+    )
+    assert meter("en0") is None
+    assert meter("en0") == 1.0
+
+
+def test_resolution_time_is_charged_to_the_measurement_budget():
+    seen = {}
+
+    def slow_resolve(host, timeout):
+        time.sleep(0.05)
+        return "192.0.2.1"
+
+    def capture(dev, **kw):
+        seen.update(kw)
+        return 1.0
+
+    make_throughput_meter(timeout=1.0, measure_fn=capture, resolve_fn=slow_resolve)("en0")
+    assert seen["timeout"] < 1.0
+    assert seen["timeout"] > 0.5
+
+
+def test_a_lookup_that_ate_the_whole_budget_leaves_nothing_to_measure():
+    calls = []
+
+    def slow_resolve(host, timeout):
+        time.sleep(0.02)
+        return "192.0.2.1"
+
+    meter = make_throughput_meter(
+        timeout=0.01, measure_fn=lambda dev, **kw: calls.append(dev) or 1.0, resolve_fn=slow_resolve
+    )
+    assert meter("en0") is None
+    assert calls == []
 
 
 def test_measurement_parameters_reach_the_measure_function():
@@ -51,16 +141,23 @@ def test_measurement_parameters_reach_the_measure_function():
         return 1.0
 
     meter = make_throughput_meter(
-        host="h", path="/p", port=8443, timeout=9.0, max_bytes=5, measure_fn=capture
+        host="h",
+        path="/p",
+        port=8443,
+        timeout=9.0,
+        max_bytes=5,
+        measure_fn=capture,
+        resolve_fn=resolved,
     )
     meter("en3")
-    seen.pop("address", None)  # resolved once by the meter, not a caller concern
+    assert seen.pop("address") == "192.0.2.1"
+    # Whatever the lookup cost comes off the top, so the meter sees the rest.
+    assert seen.pop("timeout") == pytest.approx(9.0, abs=0.5)
     assert seen == {
         "device": "en3",
         "host": "h",
         "path": "/p",
         "port": 8443,
-        "timeout": 9.0,
         "max_bytes": 5,
     }
 
@@ -202,8 +299,10 @@ def test_measure_all_reports_a_slow_interface_as_unmeasured_not_a_wait():
         time.sleep(30)
         return 1.0
 
-    results = measure_all(["stuck"], never, timeout=0.2)
+    started = time.monotonic()
+    results = measure_all(["stuck"], never, timeout=0.05, slack=0.05)
     assert results == {"stuck": None}
+    assert time.monotonic() - started < 1.0, "the wait is the deadline, not the meter"
 
 
 def test_measure_all_with_no_devices_is_empty():

@@ -5,8 +5,11 @@ flag that actually bounds the call) were measured against /sbin/ping on this
 machine and are recorded in ping.py's docstring.
 """
 
+import math
 import subprocess
 from types import SimpleNamespace
+
+import pytest
 
 from netdnsmonitor.ping import PING_BIN, ping_once
 
@@ -44,7 +47,7 @@ def test_successful_ping_reports_ok_and_the_round_trip_time():
 
 
 def test_uses_the_absolute_ping_path_not_a_bare_name():
-    """Every external tool this project runs is named by absolute path.
+    """The binary is named by absolute path.
 
     Not because a bare name would fail -- launchd's PATH does include /sbin, so
     `ping` would resolve -- but so the path cannot be changed underneath the app
@@ -64,8 +67,11 @@ def test_sends_exactly_one_echo_request_and_bounds_the_run():
     """
     run_fn, calls = fake_run_factory()
     ping_once("8.8.8.8", timeout_seconds=3.0, run_fn=run_fn)
-    args = calls[0][0]
+    args, kwargs = calls[0]
     assert args == [PING_BIN, "-c", "1", "-W", "3000", "-t", "3", "8.8.8.8"]
+    # The subprocess timeout is the last line of defence for a ping that
+    # ignores -t; it has to sit just above -t, not be unset.
+    assert kwargs["timeout"] == 5
 
 
 def test_sub_second_timeout_still_gets_at_least_one_second_of_t():
@@ -74,9 +80,30 @@ def test_sub_second_timeout_still_gets_at_least_one_second_of_t():
     """
     run_fn, calls = fake_run_factory()
     ping_once("8.8.8.8", timeout_seconds=0.4, run_fn=run_fn)
-    args = calls[0][0]
+    args, kwargs = calls[0]
     assert args[args.index("-t") + 1] == "1"
     assert args[args.index("-W") + 1] == "400"
+    assert kwargs["timeout"] == 3
+
+
+@pytest.mark.parametrize("host", ["-f", "", "8.8.8.8 -f", "8.8.8.8\x00", 8])
+def test_a_host_that_cannot_be_an_argv_word_is_refused_not_pinged(host):
+    """`ping_host` is user-settable YAML that lands in argv unquoted: "-f" is
+    consumed as a flag, a NUL escapes as a ValueError from subprocess, and an
+    int is a TypeError. All of them are a configuration fault, not "no reply".
+    """
+    run_fn, calls = fake_run_factory()
+    with pytest.raises(ValueError, match="ping_host"):
+        ping_once(host, run_fn=run_fn)
+    assert calls == []
+
+
+@pytest.mark.parametrize("timeout", [math.nan, math.inf, -1, 0, "2", None])
+def test_a_timeout_that_is_not_a_positive_number_is_refused_not_pinged(timeout):
+    run_fn, calls = fake_run_factory()
+    with pytest.raises(ValueError, match="ping_timeout_seconds"):
+        ping_once("8.8.8.8", timeout_seconds=timeout, run_fn=run_fn)
+    assert calls == []
 
 
 def test_no_reply_reports_failure():

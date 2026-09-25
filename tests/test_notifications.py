@@ -2,6 +2,8 @@ import http.client
 import smtplib
 import urllib.error
 
+import pytest
+
 from netdnsmonitor.notifications import (
     format_notification,
     make_email_notifier,
@@ -90,6 +92,25 @@ def test_slack_notifier_survives_a_truncated_response_body():
     assert result["error"] == "Slack webhook unreachable"
 
 
+@pytest.mark.parametrize(
+    "url", ["http://hooks.slack.test/secret", "file:///etc/passwd", "ftp://hooks.slack.test/x"]
+)
+def test_slack_notifier_refuses_a_webhook_url_that_is_not_https(url):
+    """The webhook URL is the credential. Over http:// it crosses the network in
+    cleartext, and urlopen would honour file:// and ftp:// just as readily.
+    """
+    calls = []
+
+    def post_fn(*args):
+        calls.append(args)
+        return 200, "ok"
+
+    result = make_slack_notifier(url, post_fn=post_fn)("hello")
+    assert result["error"] == "webhook URL is not https"
+    assert calls == []
+    assert "secret" not in str(result)
+
+
 class FakeSMTP:
     def __init__(self, host, port, timeout=None):
         self.host = host
@@ -140,6 +161,95 @@ def test_email_notifier_sends_with_starttls_login_and_timeout():
     assert client.quit_called is True
     assert client.sent[0]["To"] == "it@example.com"
     assert "incident text" in client.sent[0].get_content()
+
+
+def test_email_notifier_reports_a_partially_refused_send_as_partial():
+    """smtplib's send_message returns the recipients the server refused and
+    raises only when it refused all of them. Reporting `delivered` to every
+    address after a partial refusal claims a delivery that did not happen.
+    """
+
+    class PartialRefusalSMTP(FakeSMTP):
+        def send_message(self, message):
+            self.sent.append(message)
+            return {"gone@example.com": (550, b"no such user")}
+
+    notify = make_email_notifier(
+        host="smtp.test",
+        port=587,
+        recipients=["it@example.com", "gone@example.com"],
+        sender="mon@example.com",
+        smtp_factory=lambda h, p, timeout=None: PartialRefusalSMTP(h, p, timeout),
+    )
+    result = notify("text")
+    assert result["delivered"] is True
+    assert result["recipients"] == ["it@example.com"]
+    assert result["refused"] == ["gone@example.com"]
+    assert "no such user" not in str(result)
+
+
+def test_email_notifier_reports_an_error_when_every_recipient_is_refused():
+    class RefuseAllSMTP(FakeSMTP):
+        def send_message(self, message):
+            return {"it@example.com": (550, b"no such user")}
+
+    notify = make_email_notifier(
+        host="smtp.test",
+        port=587,
+        recipients=["it@example.com"],
+        sender="mon@example.com",
+        smtp_factory=lambda h, p, timeout=None: RefuseAllSMTP(h, p, timeout),
+    )
+    result = notify("text")
+    assert result.get("delivered") is None
+    assert "refused" in result["error"]
+
+
+def test_email_notifier_refuses_to_send_credentials_without_starttls():
+    """`login()` over a plain connection puts SMTP_PASSWORD on the wire in
+    cleartext. Refusing is reported as data; nothing is connected.
+    """
+    created = []
+
+    def factory(host, port, timeout=None):
+        client = FakeSMTP(host, port, timeout)
+        created.append(client)
+        return client
+
+    notify = make_email_notifier(
+        host="smtp.test",
+        port=25,
+        recipients=["it@example.com"],
+        sender="mon@example.com",
+        username="mon",
+        password="pw",
+        use_starttls=False,
+        smtp_factory=factory,
+    )
+    result = notify("text")
+    assert "STARTTLS" in result["error"]
+    assert "pw" not in result["error"]
+    assert created == []
+
+
+def test_email_notifier_without_credentials_may_skip_starttls():
+    created = []
+
+    def factory(host, port, timeout=None):
+        client = FakeSMTP(host, port, timeout)
+        created.append(client)
+        return client
+
+    notify = make_email_notifier(
+        host="smtp.test",
+        port=25,
+        recipients=["it@example.com"],
+        sender="mon@example.com",
+        use_starttls=False,
+        smtp_factory=factory,
+    )
+    assert notify("text")["delivered"] is True
+    assert created[0].started_tls is False
 
 
 def test_email_notifier_skips_when_no_recipients_configured():

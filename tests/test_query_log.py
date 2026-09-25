@@ -68,26 +68,37 @@ def test_query_log_reader_invokes_log_show_with_lookback_window():
     reader = make_query_log_reader(run_fn=run_fn, lookback="1h")
     lines = reader()
     args = captured["args"]
-    assert args[:2] == ["log", "show"]
+    # Absolute path, as log_watcher.py: a frozen .app does not inherit the
+    # shell's PATH, and a bare `log` there is FileNotFoundError.
+    assert args[:2] == ["/usr/bin/log", "show"]
     # Flag/value pair, not bare membership -- see test_log_watcher.py for why.
     assert args[args.index("--last") + 1] == "1h"
     assert any("example.com" in line for line in lines)
 
 
-def test_query_log_reader_returns_empty_list_when_command_fails():
+def test_query_log_reader_returns_none_when_command_fails():
+    """None, not []: the one consumer (`app._prewarm_dns`) turns [] into "no
+    queried domains found", which is a statement about the network. A failed
+    or refused `log show` is a statement about the read, and must stay one.
+    """
     run_fn = lambda args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="denied")
     reader = make_query_log_reader(run_fn=run_fn)
-    assert reader() == []
+    assert reader() is None
 
 
-def test_query_log_reader_returns_empty_list_on_subprocess_timeout():
+def test_query_log_reader_returns_none_on_subprocess_timeout():
     import subprocess
 
     def timing_out(args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args, timeout=10)
 
     reader = make_query_log_reader(run_fn=timing_out)
-    assert reader() == []
+    assert reader() is None
+
+
+def test_query_log_reader_returns_an_empty_list_only_for_an_empty_log():
+    run_fn = lambda args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr="")
+    assert make_query_log_reader(run_fn=run_fn)() == []
 
 
 def test_requests_explicit_utf8_decoding_instead_of_relying_on_locale():
@@ -102,15 +113,15 @@ def test_requests_explicit_utf8_decoding_instead_of_relying_on_locale():
     assert captured["errors"] == "replace"
 
 
-def test_returns_empty_list_on_unicode_decode_error_instead_of_raising():
+def test_returns_none_on_unicode_decode_error_instead_of_raising():
     def bad_decode(args, **kwargs):
         raise UnicodeDecodeError("ascii", b"\xe2", 0, 1, "ordinal not in range(128)")
 
     reader = make_query_log_reader(run_fn=bad_decode)
-    assert reader() == []
+    assert reader() is None
 
 
-def test_returns_empty_list_when_the_log_binary_is_missing_instead_of_raising():
+def test_returns_none_when_the_log_binary_is_missing_instead_of_raising():
     """The OSError arm of the except clause. See the matching test in
     test_log_watcher.py.
     """
@@ -119,7 +130,7 @@ def test_returns_empty_list_when_the_log_binary_is_missing_instead_of_raising():
         raise FileNotFoundError(2, "No such file or directory", "log")
 
     reader = make_query_log_reader(run_fn=missing_binary)
-    assert reader() == []
+    assert reader() is None
 
 
 def test_bounds_the_log_show_call_and_captures_its_output():
