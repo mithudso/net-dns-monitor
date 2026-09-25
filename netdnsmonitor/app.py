@@ -694,6 +694,10 @@ class NetDnsMonitorApp(rumps.App):
         if self.config["open_dashboard_at_launch"]:
             # activate=False: ordered front without stealing focus at login.
             self.open_dashboard(activate=False)
+        if self.config.get("auto_open_console", True):
+            # open_console is guarded: a failure to build the window costs the
+            # console, never the launch tick.
+            self.open_console()
 
     def _install_activation_observer(self):
         """Open the dashboard when the app is brought to the front.

@@ -270,7 +270,25 @@ class ConsoleWindowController:
         self.input_field.setAction_("submit:")
         content.addSubview_(self.input_field)
 
-        self.window.center()
+        positioned = False
+        try:
+            from AppKit import NSScreen
+
+            screen = NSScreen.mainScreen()
+            if screen is not None:
+                vf = screen.visibleFrame()
+                win_w = min(820.0, vf.size.width * 0.48)
+                win_h = min(520.0, vf.size.height * 0.46)
+                win_x = vf.origin.x + vf.size.width - win_w - 20.0
+                win_y = vf.origin.y + 20.0
+                self.window.setFrame_display_(NSMakeRect(win_x, win_y, win_w, win_h), True)
+                positioned = True
+        except Exception:  # noqa: BLE001
+            pass
+
+        if not positioned:
+            self.window.center()
+
         self.window.makeKeyAndOrderFront_(None)
         self.window.makeFirstResponder_(self.input_field)
 

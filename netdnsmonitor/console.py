@@ -53,11 +53,106 @@ Net/DNS console -- arbitrary shell, run as your user in your environment.
 `:help` for the built-ins, `:status` for what the monitor currently thinks,
 `q` to close this window (the monitor keeps running)."""
 
+SUGGESTED_HELP = """\
+Suggested commands and quick usage examples:
+
+  DNS & Resolution:
+    scutil --dns                              Show system DNS configuration and resolvers
+    dig @8.8.8.8 example.com                  Query Google DNS directly, bypassing local cache
+    dig +trace example.com                    Trace DNS resolution from root servers
+    dscacheutil -statistics                   View DNS responder cache statistics
+    dscacheutil -flushcache                   Flush DNS cache (partial unprivileged)
+
+  Interfaces & Routing:
+    scutil --nwi                              Show active network interfaces & default routes
+    ifconfig                                  Display network adapter details, IPs, and flags
+    netstat -rn -f inet                       Display IPv4 kernel routing table
+    route get default                         Show default gateway route details
+    networksetup -listallnetworkservices      List all configured macOS network services
+
+  Reachability & Sockets:
+    ping -c 4 1.1.1.1                         Ping Cloudflare DNS (4 ICMP packets)
+    traceroute 8.8.8.8                        Trace network hops to destination
+    curl -Iv https://api.anthropic.com        Test TLS handshake & HTTP response headers
+    nc -zv 1.1.1.1 443                        Check TCP socket connection to port 443
+    lsof -i -P -n                             List open network sockets and listening ports"""
+
+TOOLS_HELP = """\
+Helpful Troubleshooting and Diagnostic Network Tools:
+
+  1. DNS Diagnostic Tools:
+     - scutil --dns                         Inspect macOS resolver configuration & search domains.
+     - dig @<server> <domain>               Query specific DNS server (e.g. 1.1.1.1 or 8.8.8.8).
+     - dig +trace <domain>                  Walk DNS hierarchy from root servers to authoritative name server.
+     - nslookup <domain>                    Simple host name lookup tool.
+     - dscacheutil -statistics              Check DNS cache hit/miss statistics.
+     - dscacheutil -flushcache              Flush local DNS directory service cache.
+
+  2. Interface & Routing Tools:
+     - scutil --nwi                         Show Network Information (active interfaces and default IPv4/IPv6 gateways).
+     - netstat -rn -f inet                  Print IPv4 routing table.
+     - route get default                    Show default route details (interface and gateway address).
+     - ifconfig                             Inspect status, MAC address, IP address, and MTU of network interfaces.
+     - networksetup -listallnetworkservices List all hardware network interfaces on macOS.
+
+  3. Reachability & Path Diagnostics:
+     - ping -c 4 <ip_or_host>               Test ICMP echo reachability (use -c to avoid hanging).
+     - traceroute <ip_or_host>              Trace hop-by-hop packet path to isolate network drops.
+     - curl -Iv <url>                       Detailed HTTP/HTTPS request, TLS certificate check, and response headers.
+     - nc -zv <host> <port>                 Netcat TCP port connectivity test.
+
+  4. Socket & Traffic Monitoring Tools:
+     - lsof -i -P -n                        List processes holding open network sockets (numeric ports/IPs).
+     - netstat -an                          Display active sockets and listening ports.
+     - tcpdump -n -i en0 -c 20              Capture live packets on interface en0 (first 20 packets)."""
+
+SCRIPTS_HELP = """\
+Scripts Catalog & Module Entry Points (from SCRIPTS.md):
+
+  1. Menu Bar Application (`app.py`):
+     python3 -m netdnsmonitor.app
+     - Description: Runs the menu bar app. Polls targets, classifies failures, runs triage ladder, escalates to Claude, writes reports, and sends alerts. Blocks forever.
+
+  2. Test Suite (`pytest`):
+     python3 -m pytest -q
+     - Description: Runs the 187-test offline test suite covering the entire decision surface.
+
+  3. One-shot Prober (`prober.py`):
+     python3 -c "from netdnsmonitor.prober import make_prober; p = make_prober(external_targets=[('1.1.1.1',443)], internal_targets=[], domains=['api.anthropic.com']); print(p())"
+     - Description: Scriptable instant reachability & DNS probe. Returns aggregated boolean status dictionary.
+
+  4. One-shot Ladder & Repair (`ladder.py` / `repair_executor.py`):
+     python3 -c "from netdnsmonitor.classifier import classify; from netdnsmonitor.ladder import ladder_for; from netdnsmonitor.repair_executor import make_repair_executor; ex = make_repair_executor(); c = classify(True, False); print([f'{s.name}: {ex(s)[:40]}' for s in ladder_for(c) if s.kind == 'check'])"
+     - Description: Runs offline diagnostic ladder steps for a given classification by hand.
+
+  5. One-shot Log Watcher (`log_watcher.py`):
+     python3 -c "from netdnsmonitor.log_watcher import make_log_watcher; print(len(make_log_watcher(lookback='5m')()))"
+     - Description: Tails macOS `log show` for DNS/network subsystem entries and extracts error-like lines.
+
+  6. One-shot Failed Domain Extractor (`domain_learner.py`):
+     python3 -c "from netdnsmonitor.log_watcher import make_log_watcher; from netdnsmonitor.domain_learner import extract_failed_domains; print(extract_failed_domains(make_log_watcher(lookback='5m')()))"
+     - Description: Extracts failed hostnames from unified log entries for auto-learning.
+
+  7. One-shot Public DNS Query (`dns_query.py`):
+     python3 -c "from netdnsmonitor.dns_query import query_public_dns; print(query_public_dns('api.anthropic.com', server='1.1.1.1'))"
+     - Description: Bypasses system resolver to perform raw UDP DNS query to a public resolver (e.g. 1.1.1.1 or 8.8.8.8).
+
+  8. One-shot Notification Formatter (`notifications.py`):
+     python3 -c "from netdnsmonitor.notifications import format_notification; r = {'classification': 'dns', 'started_at': '2026-08-05T20:31:00+00:00', 'duration_seconds': 12.0, 'resolved': False, 'summary': 'DNS issue', 'repair_outcome': 'partial', 'escalation': None}; print(format_notification(r, '/tmp/report.md'))"
+     - Description: Renders exact notification text without sending Slack/email alerts.
+
+  9. Offline State Machine (`state_machine.py`):
+     python3 -c "from netdnsmonitor.state_machine import StateMachine; m = StateMachine(prober=lambda: {'external_reachable': True, 'dns_ok': False, 'domain_results': {'api.anthropic.com': False}}, repair_executor=lambda s: 'simulated', escalator=lambda b: {}, log_watcher=lambda: [], failure_threshold=1, success_threshold=1, sensitive_strings=[]); print(m.tick())"
+     - Description: Runs the full detect -> classify -> ladder -> recheck -> escalate -> report pipeline offline with fakes."""
+
 HELP = f"""\
 Type any shell command and press Return. Pipes, redirects and quoting all work;
 the line goes to /bin/sh exactly as typed.
 
   :help | ?          this text
+  :suggested         suggested commands & quick usage examples
+  :scripts           description and list of all scripts & usage from SCRIPTS.md
+  :tools             list of helpful troubleshooting and diagnostic network tools
   :status            live monitor state (flap gate, last incident, last report)
   :history           lines you have run this session
   :pwd               current directory
@@ -73,9 +168,8 @@ Limits that apply to every command, so that a mistyped one cannot wedge the app:
     with a readable error instead of hanging until the timeout.
   * output is capped at {MAX_OUTPUT_BYTES // 1024} KB. Redirect to a file for more.
 
-Useful here: `scutil --dns`, `scutil --nwi`, `dig @8.8.8.8 example.com`,
-`networksetup -listallnetworkservices`, `ifconfig`, `netstat -rn`,
-`dscacheutil -statistics`, `route get default`."""
+Useful commands: `:suggested` lists commands, `:tools` lists diagnostic tools,
+`:scripts` lists module entry points from SCRIPTS.md."""
 
 
 @dataclass
@@ -329,6 +423,12 @@ def handle(
         return "", state
     if lowered in (":help", ":h", "?", ":?"):
         return HELP, state
+    if lowered in (":scripts", ":script"):
+        return SCRIPTS_HELP, state
+    if lowered in (":tools", ":tool"):
+        return TOOLS_HELP, state
+    if lowered in (":suggested", ":suggest", ":commands", ":cmd", ":cmds"):
+        return SUGGESTED_HELP, state
     if lowered == ":clear":
         return CLEAR, state
     if lowered == ":pwd":

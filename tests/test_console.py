@@ -51,6 +51,35 @@ def test_help_does_not_reach_the_runner():
     runner = recording_runner()
     text, _ = handle(":help", ConsoleState(cwd="/tmp"), runner)
     assert "shell command" in text or "built-ins" in text
+    assert ":scripts" in text
+    assert ":tools" in text
+    assert ":suggested" in text
+    assert runner.calls == []
+
+
+def test_scripts_builtin_returns_scripts_catalog():
+    runner = recording_runner()
+    text, _ = handle(":scripts", ConsoleState(cwd="/tmp"), runner)
+    assert "python3 -m netdnsmonitor.app" in text
+    assert "SCRIPTS.md" in text
+    assert "prober.py" in text
+    assert runner.calls == []
+
+
+def test_tools_builtin_returns_diagnostic_tools():
+    runner = recording_runner()
+    text, _ = handle(":tools", ConsoleState(cwd="/tmp"), runner)
+    assert "scutil --dns" in text
+    assert "traceroute" in text
+    assert "lsof" in text
+    assert runner.calls == []
+
+
+def test_suggested_builtin_returns_suggested_commands():
+    runner = recording_runner()
+    text, _ = handle(":suggested", ConsoleState(cwd="/tmp"), runner)
+    assert "scutil --nwi" in text
+    assert "dig @8.8.8.8" in text
     assert runner.calls == []
 
 
