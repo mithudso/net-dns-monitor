@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
+from netdnsmonitor import privileges
 from netdnsmonitor.ladder import LadderStep
-from netdnsmonitor.repair_executor import make_repair_executor
+from netdnsmonitor.repair_executor import DSCACHEUTIL, NETSTAT, SCUTIL, make_repair_executor
+
+KILLALL = privileges.KILLALL
 
 
 def fake_run_factory(returncode=0, stdout="ok output", stderr=""):
@@ -23,16 +26,21 @@ def test_flush_dns_cache_runs_flush_and_hup_and_reports_ok():
     # accepts `dscacheutil -statistics` (flushes nothing, still reports "ok")
     # and `killall -9 mDNSResponder` (kills the resolver daemon outright
     # instead of signalling it). Both mutations passed the old assertions.
-    assert ["dscacheutil", "-flushcache"] in calls
-    assert ["killall", "-HUP", "mDNSResponder"] in calls
+    #
+    # Absolute paths: this argv runs from a menu-bar app whose PATH is whatever
+    # launchd handed it, and privileges.py already names the same binaries by
+    # full path in the sudoers rule it writes.
+    assert [DSCACHEUTIL, "-flushcache"] in calls
+    assert [KILLALL, "-HUP", "mDNSResponder"] in calls
+    assert all(call[0].startswith("/") for call in calls)
 
 
 def test_flush_dns_cache_flushes_the_cache_before_signalling_the_resolver():
     run_fn, calls = fake_run_factory(returncode=0)
     executor = make_repair_executor(run_fn=run_fn)
     executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
-    assert calls.index(["dscacheutil", "-flushcache"]) < calls.index(
-        ["killall", "-HUP", "mDNSResponder"]
+    assert calls.index([DSCACHEUTIL, "-flushcache"]) < calls.index(
+        [KILLALL, "-HUP", "mDNSResponder"]
     )
 
 
@@ -48,7 +56,7 @@ def test_flush_dns_cache_reports_partial_when_only_hup_lacks_privilege():
     # Empirically confirmed: dscacheutil -flushcache succeeds unprivileged, but
     # killall -HUP mDNSResponder can't signal a daemon owned by another user.
     def run_fn(args, **kwargs):
-        if args[0] == "dscacheutil":
+        if args[0] == DSCACHEUTIL:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return SimpleNamespace(
             returncode=1, stdout="", stderr="No matching processes belonging to you were found"
@@ -100,7 +108,7 @@ def test_flush_dns_cache_retries_the_resolver_restart_with_sudo_when_granted():
     def run_fn(args, **kwargs):
         calls.append(args)
         # The unprivileged HUP still fails; the sudo one succeeds.
-        if args[0] == "killall":
+        if args[0] == KILLALL:
             return SimpleNamespace(returncode=1, stdout="", stderr="not permitted")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -129,9 +137,7 @@ def test_a_granted_rule_that_still_fails_is_reported_differently_from_no_grant()
     """
 
     def run_fn(args, **kwargs):
-        return SimpleNamespace(
-            returncode=0 if args[0] == "dscacheutil" else 1, stdout="", stderr=""
-        )
+        return SimpleNamespace(returncode=0 if args[0] == DSCACHEUTIL else 1, stdout="", stderr="")
 
     outcome = granted_executor(run_fn)(
         LadderStep("flush_dns_cache", "repair", needs_privilege=False)
@@ -157,7 +163,43 @@ def test_renewing_a_lease_with_no_default_route_does_not_shell_out():
         LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
     )
     assert "cannot renew" in outcome
+    # `primary_interface` answers None for a default route on a VPN tunnel too, so
+    # the outcome must not assert that no route exists.
+    assert "Ethernet or Wi-Fi" in outcome
+    assert "no interface currently carries" not in outcome
     assert calls == []
+
+
+def test_a_renewal_on_an_interface_the_grant_does_not_cover_reports_needs_privilege():
+    """`is_granted` answers only for the mDNSResponder restart; the DHCP rules are
+    separate lines enumerated at grant time. Dock a laptop and the default route
+    moves to an interface no rule names -- the sudo call would be refused, and it
+    is more honest (and cheaper) to say so than to run it and report the refusal.
+    """
+    run_fn, calls = fake_run_factory(returncode=0)
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en5",
+        covered_interfaces_fn=lambda: ["en0", "en9"],
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("NEEDS_PRIVILEGE")
+    assert "en5" in outcome
+    assert calls == []
+
+
+def test_a_blanket_grant_covers_whatever_interface_carries_the_default_route():
+    run_fn, calls = fake_run_factory(returncode=0)
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en5",
+        covered_interfaces_fn=lambda: list(privileges.ALL_INTERFACES_SENTINEL),
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("ok")
+    assert calls == [["/usr/bin/sudo", "-n", "/usr/sbin/ipconfig", "set", "en5", "DHCP"]]
 
 
 def test_a_failed_renewal_reports_the_command_and_the_error():
@@ -189,9 +231,9 @@ def test_check_interface_state_shells_out_to_scutil():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_interface_state", "check", needs_privilege=False))
     assert "Network reachable via Wi-Fi" in outcome
-    # `calls[0][0] == "scutil"` also lets this step silently become
+    # `calls[0][0] == SCUTIL` also lets this step silently become
     # `scutil --dns`, i.e. a different check entirely.
-    assert calls == [["scutil", "--nwi"]]
+    assert calls == [[SCUTIL, "--nwi"]]
 
 
 def test_check_default_route_shells_out_to_netstat():
@@ -203,7 +245,26 @@ def test_check_default_route_shells_out_to_netstat():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
     assert "default 192.0.2.1" in outcome
-    assert calls == [["netstat", "-rn", "-f", "inet"]]
+    assert calls == [[NETSTAT, "-rn", "-f", "inet"]]
+
+
+def test_a_failed_check_command_is_reported_as_failed():
+    """A check that exits non-zero used to report its (often empty) stdout as the
+    finding, so a broken `netstat` looked like "no routes" in the report, the LLM
+    bundle and the Slack alert.
+    """
+    run_fn, _calls = fake_run_factory(returncode=2, stdout="", stderr="")
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
+    assert outcome.startswith("failed")
+    assert "exited 2" in outcome
+
+
+def test_a_check_command_with_no_output_says_so_rather_than_reporting_nothing():
+    run_fn, _calls = fake_run_factory(returncode=0, stdout="", stderr="")
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("check_interface_state", "check", needs_privilege=False))
+    assert outcome.startswith("no output")
 
 
 def test_check_configured_dns_servers_shells_out_to_scutil_dns():
@@ -211,7 +272,7 @@ def test_check_configured_dns_servers_shells_out_to_scutil_dns():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_configured_dns_servers", "check", needs_privilege=False))
     assert "192.0.2.53" in outcome
-    assert calls == [["scutil", "--dns"]]
+    assert calls == [[SCUTIL, "--dns"]]
 
 
 def test_check_resolver_overrides_reports_failure_instead_of_raising(tmp_path):
@@ -316,3 +377,38 @@ def test_unicode_decode_error_is_reported_not_raised():
     executor = make_repair_executor(run_fn=bad_decode)
     outcome = executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
     assert outcome.startswith("failed")
+
+
+# --- the failover step -----------------------------------------------------
+
+
+FAILOVER = LadderStep("switch_to_backup_network", "repair", needs_privilege=True)
+
+
+def test_the_failover_step_refuses_to_run_without_a_classification():
+    """The policy refuses classifications it was not configured for. Defaulting an
+    absent one to "network" -- the value most likely to be permitted -- turns a
+    caller's omission into a network switch the operator never authorised.
+    """
+    seen = []
+    executor = make_repair_executor(
+        run_fn=fake_run_factory()[0],
+        failover_fn=lambda classification: seen.append(classification) or "ok: switched",
+    )
+    outcome = executor(FAILOVER)
+    assert outcome.startswith("refused")
+    assert seen == []
+
+
+def test_a_failover_that_raises_is_reported_as_failed_not_raised():
+    """Every other step returns a string whatever happens. state_machine has no
+    per-step guard, so an exception here aborts the incident with no report.
+    """
+
+    def exploding(classification):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    executor = make_repair_executor(run_fn=fake_run_factory()[0], failover_fn=exploding)
+    outcome = executor(FAILOVER, "network")
+    assert outcome.startswith("failed")
+    assert "UnicodeDecodeError" in outcome

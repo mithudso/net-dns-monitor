@@ -33,6 +33,8 @@ from typing import Callable, Optional
 
 import yaml
 
+from netdnsmonitor.config import INTERVAL_KEYS, TIMEOUT_KEYS
+
 # (key, label, kind). Grouped in display order. `kind` drives parsing, and a
 # wrong kind is the difference between 5 and "5" reaching bind() or a timer.
 GROUPS = [
@@ -132,14 +134,14 @@ GROUPS = [
             ("failover_speedtest_host", "Throughput probe host", "str"),
             ("failover_speedtest_path", "Throughput probe path", "str"),
             ("failover_speedtest_port", "Throughput probe port", "int"),
-            ("failover_speedtest_timeout_seconds", "Throughput probe timeout (seconds)", "int"),
+            ("failover_speedtest_timeout_seconds", "Throughput probe timeout (seconds)", "float"),
             ("failover_speedtest_max_bytes", "Throughput probe max bytes", "int"),
         ],
     ),
     (
         "Domain learning",
         [
-            ("probe_timeout_seconds", "Probe timeout (seconds)", "int"),
+            ("probe_timeout_seconds", "Probe timeout (seconds)", "float"),
             ("control_domain", "Control domain (known-good name)", "str"),
             ("learn_domains_from_logs", "Learn domains from the log", "bool"),
             ("max_learned_domains", "Maximum learned domains", "int"),
@@ -175,6 +177,18 @@ GROUPS = [
             ("forensic_episodes_dir", "Forensic episodes", "str"),
             ("peer_record_path", "Peer record", "str"),
             ("history_path", "Graph history", "str"),
+        ],
+    ),
+    (
+        "Router",
+        [
+            ("router_enabled", "Run the router", "bool"),
+            ("wan_interface", "WAN interface", "str"),
+            ("lan_interface", "LAN interface", "str"),
+            ("lan_ip", "LAN address", "str"),
+            ("lan_netmask", "LAN netmask", "str"),
+            ("dhcp_start", "DHCP range start", "str"),
+            ("dhcp_end", "DHCP range end", "str"),
         ],
     ),
 ]
@@ -250,6 +264,15 @@ NEEDS_RESTART = {
     "failover_speedtest_port",
     "failover_speedtest_timeout_seconds",
     "failover_speedtest_max_bytes",
+    # The Router is built once in App.__init__ from these. The router window
+    # pushes its own edits into the live object; this window does not.
+    "router_enabled",
+    "wan_interface",
+    "lan_interface",
+    "lan_ip",
+    "lan_netmask",
+    "dhcp_start",
+    "dhcp_end",
 }
 
 FIELDS = [(key, label, kind) for _group, fields in GROUPS for key, label, kind in fields]
@@ -259,9 +282,13 @@ HEADER = """# Written by Net-DNS-Monitor's settings window.
 # Comments from a hand-edited config are NOT preserved by that window. The repo's
 # tracked default config.yaml still carries the full explanation of every key
 # below, including the warning about leaving `domains` empty.
-#
-# The previous version of this file was saved alongside it as
-# config.yaml.bak-<timestamp>.
+"""
+
+# Appended only when a backup was actually written. On a first save there is
+# nothing to back up, and a backup can fail; naming a file that does not exist
+# sends someone looking for it.
+BACKUP_NOTE = """#
+# The previous version of this file was saved alongside it as {name}.
 """
 
 
@@ -272,7 +299,17 @@ def format_field(kind: str, value) -> str:
     if kind == "list":
         return ", ".join(str(v) for v in (value or []))
     if kind == "targets":
-        return ", ".join(f"{host}:{port}" for host, port in (value or []))
+        # A hand-written `["1.1.1.1:443"]` is a list of strings, not pairs.
+        # load() runs from the menu callback that opens the window, so an
+        # unpack error here would kill the click; the entry is shown as
+        # written and parse_field rejects it by name on save.
+        parts = []
+        for entry in value or []:
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                parts.append(f"{entry[0]}:{entry[1]}")
+            else:
+                parts.append(str(entry))
+        return ", ".join(parts)
     if value is None:
         return ""
     return str(value)
@@ -307,17 +344,34 @@ def parse_field(kind: str, text: str, label: str = ""):
             host, _, port = part.rpartition(":")
             if not host or not port.strip().isdigit():
                 raise ValueError(f"{name}: expected host:port entries, got {part!r}")
-            targets.append([host.strip(), int(port)])
+            number = int(port)
+            # Out of range reaches the probe as an OverflowError on a timer.
+            if not 1 <= number <= 65535:
+                raise ValueError(f"{name}: port must be 1-65535, got {part!r}")
+            host = host.strip()
+            # rpartition splits "::1" into host ":" and port "1", and would keep
+            # the brackets of "[::1]:53" as part of the host name.
+            bracketed = host.startswith("[") and host.endswith("]")
+            if bracketed:
+                host = host[1:-1]
+            elif ":" in host:
+                raise ValueError(f"{name}: bracket an IPv6 host, e.g. [::1]:53, got {part!r}")
+            targets.append([host, number])
         return targets
     if kind == "int":
         try:
-            return int(float(text))
+            value = int(float(text))
         except (ValueError, OverflowError):
             # OverflowError is not hypothetical: float("inf") parses fine and
             # int() then refuses it, and that exception is not a ValueError -- so
             # it escaped past the window's handler into an AppKit callback, where
             # the click simply appeared to do nothing.
             raise ValueError(f"{name}: expected a whole number, got {text!r}") from None
+        # Zero stays legal: it means "never" or "use the default" for several
+        # keys. Below zero reaches rumps.Timer as an interval.
+        if value < 0:
+            raise ValueError(f"{name}: expected a whole number of 0 or more, got {text!r}")
+        return value
     if kind == "float":
         try:
             value = float(text)
@@ -326,6 +380,8 @@ def parse_field(kind: str, text: str, label: str = ""):
         # inf/nan parse as floats and would reach a timer interval or a timeout.
         if value != value or value in (float("inf"), float("-inf")):
             raise ValueError(f"{name}: expected a finite number, got {text!r}")
+        if value < 0:
+            raise ValueError(f"{name}: expected a number of 0 or more, got {text!r}")
         return value
     return text
 
@@ -340,11 +396,26 @@ def collect(values: dict) -> dict:
     for key, label, kind in FIELDS:
         if key in values:
             parsed[key] = parse_field(kind, values[key], label)
+            # parse_field allows 0 because it means "never" or "use the default"
+            # for several keys -- but load_config rejects 0 for a timer interval,
+            # so letting it through here would write a file the app then refuses
+            # to start on. Same error path as any other bad field: nothing is
+            # written.
+            if key in INTERVAL_KEYS + TIMEOUT_KEYS and parsed[key] <= 0:
+                raise ValueError(f"{label}: must be greater than 0, got {values[key]!r}")
     return parsed
 
 
 def backup_path(path: str, clock: Callable[[], float] = time.time) -> str:
-    return f"{path}.bak-{int(clock())}"
+    # One-second resolution is not unique: Cmd-S twice inside a second would
+    # replace the only commented backup with the already-stripped version.
+    base = f"{path}.bak-{int(clock())}"
+    candidate = base
+    n = 1
+    while os.path.exists(candidate):
+        candidate = f"{base}.{n}"
+        n += 1
+    return candidate
 
 
 def save_config(
@@ -356,10 +427,11 @@ def save_config(
 ) -> dict:
     """Write the config, backing up whatever was there first.
 
-    Returns {"path", "backup"} where backup is None if there was nothing to back
-    up. The merge is onto the file's own contents rather than onto the running
-    config, so a key the window does not expose is preserved rather than being
-    silently reset to its default.
+    Returns {"path", "backup"}. backup is None both when there was nothing to
+    back up and when backing up failed -- the caller must not read it as "this
+    was the first save". The merge is onto the file's own contents rather than
+    onto the running config, so a key the window does not expose is preserved
+    rather than being silently reset to its default.
     """
     if writer is None:
         from netdnsmonitor.report_storage import _atomic_write
@@ -396,13 +468,20 @@ def save_config(
     merged = {**on_disk, **updates}
     body = yaml.safe_dump(merged, default_flow_style=False, sort_keys=True, allow_unicode=True)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    writer(path, HEADER + "\n" + body)
+    header = HEADER + (BACKUP_NOTE.format(name=os.path.basename(backup)) if backup else "")
+    writer(path, header + "\n" + body)
     return {"path": path, "backup": backup}
 
 
-def restart_note(updates: dict) -> str:
-    """Which of these need a restart, in words for the window."""
-    pending = sorted(key for key in updates if key in NEEDS_RESTART)
+def restart_note(updates: dict, changed: Optional[set] = None) -> str:
+    """Which of these need a restart, in words for the window.
+
+    `changed` is the subset of keys whose text differs from what the window
+    loaded. The window submits every field on Save, so without it the note
+    would name every restart key on every save and say nothing useful.
+    """
+    keys = updates if changed is None else (set(updates) & changed)
+    pending = sorted(key for key in keys if key in NEEDS_RESTART)
     if not pending:
         return "Saved. These take effect immediately."
     return (
@@ -425,13 +504,15 @@ CHROME_HEIGHT = 132
 class SettingsWindow:
     """A field per option, in a scrolling list. Retained by App, like the others."""
 
-    def __init__(self, on_save: Callable[[dict], str]):
+    def __init__(self, on_save: Callable[[Optional[dict]], str]):
         import AppKit
 
         from netdnsmonitor.dashboard import _label, _make_button_target
 
         self.on_save = on_save
         self.fields = {}
+        # Field text as of the last load(), so a save can say which keys changed.
+        self._loaded: dict[str, str] = {}
         self._target = _make_button_target(self._handle)
 
         rows = sum(len(fields) for _g, fields in GROUPS)
@@ -539,14 +620,28 @@ class SettingsWindow:
                 return
             self.status.setStringValue_(message)
         elif action == "reload":
-            self.status.setStringValue_("Reloaded from disk.")
-            self.on_save(None)
+            # Reload re-reads the file through load_config, which raises on a
+            # malformed one. Same rule as Save: report it here, never into the
+            # AppKit callback -- and only claim "reloaded" once it has happened.
+            try:
+                message = self.on_save(None)
+            except Exception as exc:  # noqa: BLE001 - never raise into AppKit
+                traceback.print_exc()
+                self.status.setStringValue_(f"Not reloaded -- {type(exc).__name__}: {exc}")
+                return
+            self.status.setStringValue_(message or "Reloaded from disk.")
 
     def load(self, config: dict):
         for key, _label, kind in FIELDS:
             field = self.fields.get(key)
             if field is not None:
-                field.setStringValue_(format_field(kind, config.get(key)))
+                text = format_field(kind, config.get(key))
+                field.setStringValue_(text)
+                self._loaded[key] = text
+
+    def changed_keys(self, values: dict) -> set:
+        """Keys whose text differs from what load() put in the field."""
+        return {key for key, text in values.items() if self._loaded.get(key) != text}
 
     def show(self):
         import AppKit

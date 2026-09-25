@@ -19,6 +19,8 @@ import subprocess
 import sys
 from typing import Callable, Optional
 
+import yaml
+
 from netdnsmonitor.classifier import classify
 from netdnsmonitor.commands import BY_KEY, CATALOG, missing_placeholder, resolve
 from netdnsmonitor.config import load_config
@@ -38,6 +40,11 @@ from netdnsmonitor.throughput import make_throughput_meter
 
 DEFAULT_CONFIG_PATH = "~/.config/net-dns-monitor/config.yaml"
 
+# `enabled` is tri-state: None is a configured service that is not in the
+# service order at all. Printing that as OFF sends someone to enable a service
+# that does not exist.
+SVC_STATE = {True: "on", False: "OFF", None: "?"}
+
 
 # --- rendering (pure) -------------------------------------------------------
 
@@ -54,7 +61,7 @@ def render_interfaces(rows: list[dict]) -> str:
         speed = row.get("throughput_mbps")
         lines.append(
             f"{index:>2}  {row['name'][:26]:<26} {(row.get('device') or '-'):<8} "
-            f"{('on' if row.get('enabled') else 'OFF'):<4} "
+            f"{SVC_STATE.get(row.get('enabled'), '?'):<4} "
             f"{REACHABILITY.get(row.get('reachable'), 'unknown'):<11} "
             f"{('-' if speed is None else format(speed, '.1f')):>6}"
         )
@@ -155,7 +162,7 @@ def list_services(run_fn: Callable) -> list:
     return parse_service_order(getattr(result, "stdout", "") or "")
 
 
-def run_catalog_command(key: str, values: dict) -> str:
+def run_catalog_command(key: str, values: dict, run_fn: Callable = subprocess.run) -> str:
     """Run one catalogue command and return its output as text.
 
     Every failure arrives as text rather than an exception: a missing binary, a
@@ -163,6 +170,10 @@ def run_catalog_command(key: str, values: dict) -> str:
     a traceback out of the CLI (or out of the console REPL, which would end the
     session) is not a useful way to report one. Each command carries its own
     timeout because `traceroute` legitimately outlives the ladder's 5s ceiling.
+
+    A non-zero exit is reported as `failed:` even when the command printed
+    something: `networksetup` refusing a change writes its reason to stdout and
+    exits non-zero, and output alone reads as success.
     """
     command = BY_KEY.get(key)
     argv = resolve(key, **values)
@@ -170,13 +181,15 @@ def run_catalog_command(key: str, values: dict) -> str:
         return f"failed: cannot build a command for '{key}'"
     header = f"$ {' '.join(argv)}"
     try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=command.timeout)
+        result = run_fn(argv, capture_output=True, text=True, timeout=command.timeout)
     except subprocess.TimeoutExpired:
         return f"{header}\nfailed: timed out after {command.timeout:.0f}s"
     except (OSError, subprocess.SubprocessError) as exc:
         return f"{header}\nfailed: {type(exc).__name__}: {exc}"
     body = (result.stdout or "").rstrip() or (result.stderr or "").rstrip()
-    return f"{header}\n{body or f'(no output, exit {result.returncode})'}"
+    if result.returncode != 0:
+        return f"{header}\n{body}\nfailed: exited {result.returncode}"
+    return f"{header}\n{body or '(no output, exit 0)'}"
 
 
 def promote_service(run_fn, services, name: str) -> str:
@@ -194,7 +207,7 @@ def promote_service(run_fn, services, name: str) -> str:
         return (
             f"failed: '{name}' is DISABLED, so promoting it would change the order "
             "and route nothing. Enable it first: "
-            f"netdns run enable --value service='{name}' --yes"
+            f"python3 -m netdnsmonitor.cli run enable --value service='{name}' --yes"
         )
     new_order = promote(services, name)
     if new_order is None:
@@ -202,9 +215,9 @@ def promote_service(run_fn, services, name: str) -> str:
     return apply_service_order(run_fn, services, new_order)
 
 
-def interface_rows(run_fn, prober, meter=None, measure: bool = False) -> list[dict]:
+def interface_rows(run_fn, prober, meter=None, measure: bool = False, services=None) -> list[dict]:
     rows = []
-    for service in list_services(run_fn):
+    for service in list_services(run_fn) if services is None else services:
         reachable = prober(service.device)
         rows.append(
             {
@@ -239,9 +252,9 @@ def cmd_bench(args, config, out) -> int:
     return 0
 
 
-def cmd_status(args, config, out) -> int:
+def cmd_status(args, config, out, prober_factory: Callable = make_prober) -> int:
     prober, meter, failover, run_fn = build_context(config)
-    probe = make_prober(
+    probe = prober_factory(
         external_targets=[tuple(t) for t in config["external_targets"]],
         internal_targets=[tuple(t) for t in config["internal_targets"]],
         domains=list(config.get("domains") or [])
@@ -260,7 +273,7 @@ def cmd_status(args, config, out) -> int:
                 indent=2,
             )
         )
-        return 0
+        return 0 if classification.value == "healthy" else 1
     out(f"Classification : {classification.value}")
     out(f"External       : {probe.get('external_reachable')}")
     out(f"DNS            : {probe.get('dns_ok')}")
@@ -312,10 +325,21 @@ def cmd_priority(args, config, out) -> int:
     return 0 if outcome.startswith("ok:") else 1
 
 
-def cmd_ladder(args, config, out) -> int:
-    executor = make_repair_executor()
+def cmd_ladder(args, config, out, executor: Optional[Callable] = None) -> int:
+    from netdnsmonitor.app import failover_trigger_classifications  # local: avoids rumps
+
+    executor = executor or make_repair_executor()
     classification = classify(False, False) if args.layer == "network" else classify(True, False)
-    for step in ladder_for(classification):
+    for step in ladder_for(classification, failover_trigger_classifications(config)):
+        # The executor here has no failover wired in, so letting the step reach
+        # it reports "not configured" on a machine where it is. This command
+        # never switches networks; say so and name the command that does.
+        if step.name == "switch_to_backup_network":
+            out(
+                f"{step.name}: SKIPPED (this command never switches networks; "
+                "use `python3 -m netdnsmonitor.cli failover backup`)"
+            )
+            continue
         if step.kind != "check" and not args.repair:
             out(f"{step.name}: SKIPPED (repair; pass --repair to run it)")
             continue
@@ -325,7 +349,7 @@ def cmd_ladder(args, config, out) -> int:
     return 0
 
 
-def cmd_run(args, config, out) -> int:
+def cmd_run(args, config, out, run_fn: Callable = subprocess.run) -> int:
     """Run one catalogue command by key."""
     command = BY_KEY.get(args.key)
     if command is None:
@@ -341,7 +365,7 @@ def cmd_run(args, config, out) -> int:
             "Re-run with --yes to confirm."
         )
         return 2
-    text = run_catalog_command(args.key, dict(args.value or []))
+    text = run_catalog_command(args.key, dict(args.value or []), run_fn)
     out(text)
     return 1 if "\nfailed:" in text else 0
 
@@ -375,19 +399,28 @@ def build_parser() -> argparse.ArgumentParser:
     # subcommand too. Declared only on the top-level parser, `netdns status
     # --json` is an error and only `netdns --json status` works, which is the
     # opposite of what anyone types.
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", default=DEFAULT_CONFIG_PATH)
-    common.add_argument("--json", action="store_true", help="machine-readable output")
+    # The subparser copy carries SUPPRESS defaults rather than the real ones:
+    # argparse applies a subparser's defaults after the top-level parser has
+    # already stored the value, so a real default here would silently replace
+    # `--config x.yaml status` with the default path.
+    def shared(default_config, default_json):
+        common = argparse.ArgumentParser(add_help=False)
+        common.add_argument("--config", default=default_config)
+        common.add_argument(
+            "--json", action="store_true", default=default_json, help="machine-readable output"
+        )
+        return common
 
     parser = argparse.ArgumentParser(
-        prog="netdns",
+        prog="python3 -m netdnsmonitor.cli",
         description="Network and DNS monitor: diagnose, benchmark, fail over.",
-        parents=[common],
+        parents=[shared(DEFAULT_CONFIG_PATH, False)],
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    after = shared(argparse.SUPPRESS, argparse.SUPPRESS)
 
     def add(name, **kwargs):
-        return sub.add_parser(name, parents=[common], **kwargs)
+        return sub.add_parser(name, parents=[after], **kwargs)
 
     p = add("status", help="classification, probe results and failover state")
     p.set_defaults(func=cmd_status)
@@ -432,7 +465,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None, out: Callable[[str], None] = print) -> int:
     args = build_parser().parse_args(argv)
-    config = load_config(os.path.expanduser(args.config))
+    try:
+        config = load_config(os.path.expanduser(args.config))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        out(f"failed: {args.config}: {exc}")
+        return 2
     try:
         return args.func(args, config, out)
     except KeyboardInterrupt:

@@ -33,9 +33,19 @@ already cost several commits.
 
 from typing import Callable, Optional
 
+from netdnsmonitor.peers import BUCKETS
 from netdnsmonitor.status import format_rate
 
 WINDOW_TITLE = "Net-DNS-Monitor"
+
+# A peer's hostname is network-supplied (up to 253 characters after
+# sanitising) and the label column's width is global, so one long name would
+# push every value in the window that far to the right.
+PEER_LABEL_MAX = 28
+
+# The results pane is fed automatically by the log watcher for as long as the
+# app runs, and each append re-reads the whole pane across the ObjC bridge.
+OUTPUT_MAX_CHARS = 40_000
 
 # (button label, action id, kind). The kind is surfaced in the label for repairs
 # because `flush_dns_cache` genuinely mutates system state and a button that
@@ -188,15 +198,15 @@ def _verdict_rows(verdict: dict) -> list:
         (
             "Peers consulted",
             f"{evidence.get('peers_answered', 0)} answered of "
-            f"{evidence.get('peers_asked', 0)} known",
+            f"{evidence.get('peers_known', 0)} known",
         ),
     ]
-    if evidence.get("peer_external_reachable") is not None:
-        rows.append(
-            ("Peer can reach internet", "yes" if evidence["peer_external_reachable"] else "no")
-        )
-    if evidence.get("peer_dns_ok") is not None:
-        rows.append(("Peer can resolve DNS", "yes" if evidence["peer_dns_ok"] else "no"))
+    for label, field in (
+        ("Peer can reach internet", "peer_external_reachable"),
+        ("Peer can resolve DNS", "peer_dns_ok"),
+    ):
+        if evidence.get(field) is not None:
+            rows.append((label, _yes_no(evidence[field])))
     return rows
 
 
@@ -208,7 +218,7 @@ def _peer_rows(peers: dict) -> list:
     is invisible if absent peers are hidden.
     """
     rows = []
-    for bucket in ("current", "recent", "other"):
+    for bucket in BUCKETS:
         entries = peers.get(bucket) or []
         if not entries:
             continue
@@ -218,7 +228,8 @@ def _peer_rows(peers: dict) -> list:
             detail = f"{peer.get('address', '?')} -- {peer.get('status') or 'unknown'}"
             if missed:
                 detail += f", {missed} missed heartbeat(s)"
-            rows.append((f"  {peer.get('host') or peer.get('id', '?')}", detail))
+            name = str(peer.get("host") or peer.get("id", "?"))[:PEER_LABEL_MAX]
+            rows.append((f"  {name}", detail))
     if not rows:
         return [("Peers", "none discovered yet")]
     return rows
@@ -234,7 +245,11 @@ def _rate_text(bps: Optional[float]) -> str:
     return f"{format_rate(bps)}bps"
 
 
-def _repeat_text(seconds) -> str:
+def _repeat_text(seconds: Optional[float]) -> str:
+    # An absent key is not a zero: the sibling rows say '?' for a missing
+    # setting, and "one alert per outage" is a claim about configured behaviour.
+    if seconds is None:
+        return "?"
     if not seconds:
         return "no (one alert per outage)"
     return f"every {seconds}s"
@@ -247,6 +262,11 @@ def _status_text(flap_state: str, consecutive_failures: int, ping_stats: dict) -
         return "incident declared"
     if consecutive_failures:
         return "flaky -- a probe is failing"
+    # ping_stats starts as NO_PING_YET, whose `down` is False, so without this
+    # the window reads "healthy" before the first reply -- and for as long as
+    # the ping worker keeps failing to produce one.
+    if ping_stats.get("rtt_ms") is None and ping_stats.get("loss_pct") is None:
+        return "not probed yet"
     return "healthy"
 
 
@@ -600,9 +620,11 @@ class DashboardWindow:
         self.stats_view.setString_(text)
 
     def append_output(self, text: str):
-        current = self.output_view.string() or ""
-        self.output_view.setString_(current + text)
-        self.output_view.scrollRangeToVisible_((len(self.output_view.string() or ""), 0))
+        combined = (self.output_view.string() or "") + text
+        if len(combined) > OUTPUT_MAX_CHARS:
+            combined = combined[-OUTPUT_MAX_CHARS:]
+        self.output_view.setString_(combined)
+        self.output_view.scrollRangeToVisible_((len(combined), 0))
 
     # --- the log column ----------------------------------------------------
 

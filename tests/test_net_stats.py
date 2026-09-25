@@ -93,12 +93,31 @@ def test_malformed_rows_are_skipped_rather_than_raising():
     """This runs every 5 seconds forever; one unexpected line must not take
     the heartbeat down.
     """
-    junk = NETSTAT_OUTPUT + "en0        1500  <Link#15>   4a:63:a4:bf:16:ed  -  -  -  -\n"
+    junk = NETSTAT_OUTPUT + (
+        "en0        1500  <Link#15>   4a:63:a4:bf:16:ed     1000     0"
+        "          �      900     0      40000     0\n"
+    )
     assert parse_interface_counters(junk) == (EN0_IN + EN9_IN, EN0_OUT + EN9_OUT)
 
 
-def test_empty_output_is_zero_not_an_error():
-    assert parse_interface_counters("") == (0, 0)
+def test_empty_output_is_unmeasured_not_zero():
+    """No `en*` link row means no reading was made. (0, 0) would be a real
+    reading of "no bytes ever", which the meter then turns into a counter
+    reset -- or, against a genuine total, into one enormous delta.
+    """
+    assert parse_interface_counters("") is None
+    assert parse_interface_counters(None) is None
+    only_loopback = """Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+lo0        16384 <Link#1>                        546703     0  121334000   546703     0  121334000     0
+"""
+    assert parse_interface_counters(only_loopback) is None
+
+
+def test_a_read_that_parsed_nothing_reaches_the_meter_as_unmeasured():
+    def fake_run(args, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert read_interface_counters(run_fn=fake_run) is None
 
 
 def test_read_interface_counters_uses_the_absolute_netstat_path():
@@ -190,6 +209,16 @@ def test_recovers_on_the_sample_after_a_counter_reset():
     down, up = meter.sample((5_000 + 6250, 5_000 + 1250), now=110.0)
     assert down == 10_000
     assert up == 2_000
+
+
+def test_an_unmeasured_reading_keeps_the_baseline():
+    """One failed netstat read must cost one blank cycle, not two: the next
+    good reading still has the earlier baseline to diff against.
+    """
+    meter = ThroughputMeter()
+    meter.sample((1000, 500), now=100.0)
+    assert meter.sample(None, now=105.0) == (None, None)
+    assert meter.sample((7250, 1750), now=110.0) == (5000.0, 1000.0)
 
 
 def test_zero_elapsed_time_reports_no_rate_instead_of_dividing_by_zero():

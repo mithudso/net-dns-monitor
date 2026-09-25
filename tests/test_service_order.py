@@ -9,6 +9,7 @@ from netdnsmonitor.service_order import (
     NetworkService,
     find_service,
     is_order_intact,
+    order_argv,
     parse_service_order,
     promote,
 )
@@ -163,3 +164,29 @@ def test_is_order_intact_rejects_empty_current_list():
     """An unparseable listing must never authorize a reorder."""
     assert is_order_intact([], []) is False
     assert is_order_intact([], ["Wi-Fi"]) is False
+
+
+def test_is_order_intact_refuses_a_listing_with_duplicate_names():
+    """macOS keys services by id, so two services can share a name. A name
+    list cannot express which is which, so no reorder built from it is safe.
+    """
+    services = parse_service_order("(1) Wi-Fi\n(2) Wi-Fi\n(3) Ethernet\n")
+    assert is_order_intact(services, ["Wi-Fi", "Wi-Fi", "Ethernet"]) is False
+    assert is_order_intact(services, ["Ethernet", "Wi-Fi", "Wi-Fi"]) is False
+
+
+def test_service_name_whitespace_survives_the_parse():
+    """The name has to reach networksetup exactly as the listing printed it.
+    Trimming it makes the guard's before/after comparison pass while the argv
+    names a service that does not exist.
+    """
+    services = parse_service_order("(1) Wi-Fi \n")
+    assert services[0].name == "Wi-Fi "
+
+
+def test_order_argv_is_built_only_from_an_intact_order():
+    services = parse_service_order(REAL_LISTING)
+    order = promote(services, "Wi-Fi")
+    assert order_argv(services, order) == ["networksetup", "-ordernetworkservices", *order]
+    assert order_argv(services, order[:-1]) is None
+    assert order_argv([], ["Wi-Fi"]) is None

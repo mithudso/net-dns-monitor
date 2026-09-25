@@ -22,9 +22,11 @@ gets the notification as the durable record of what happened.
 is right for a cosmetic tint, but this module *is* the feature -- a silent
 no-op here (a renamed selector, a notification API that has finally been
 removed) would look exactly like a network that never failed. Everything is
-still caught, because an exception on a worker thread would kill the heartbeat
-for the rest of the process's life, but it goes to stderr, which the
-LaunchAgent redirects to ~/Library/Logs/net-dns-monitor.launchd.log.
+still caught, because every caller is on the main run loop -- the ping drain
+in `App` and the "Test network alert" menu callback -- and an exception that
+escapes there kills the rumps timer for the rest of the session. It goes to
+stderr instead, which the LaunchAgent redirects to
+~/Library/Logs/net-dns-monitor.launchd.log.
 
 **Notification path.** `rumps.notification` is tried first because it carries
 the app's own identity in the banner. It goes through the deprecated
@@ -47,8 +49,11 @@ OSASCRIPT_BIN = "/usr/bin/osascript"
 RunFn = Callable[..., object]
 AppFn = Callable[[], object]
 
-# Set by bounce_dock so stop_bouncing can cancel the same request.
-_attention_request: Optional[int] = None
+# Every request id bounce_dock has been handed and not yet cancelled. A list,
+# not one slot: with ping_alert_repeat_seconds set the alert re-fires during an
+# outage, and each call is a separate critical request that AppKit keeps
+# bouncing until it is cancelled by its own id.
+_attention_requests: list[int] = []
 
 
 def _shared_application():
@@ -63,28 +68,24 @@ def _log(message: str) -> None:
 
 def bounce_dock(app_fn: AppFn = _shared_application) -> None:
     """Bounce the Dock tile until the app is activated or the request is cancelled."""
-    global _attention_request
     try:
         import AppKit
 
-        _attention_request = app_fn().requestUserAttention_(AppKit.NSCriticalRequest)
-    except Exception:  # noqa: BLE001 - must not kill the heartbeat thread
+        _attention_requests.append(app_fn().requestUserAttention_(AppKit.NSCriticalRequest))
+    except Exception:  # noqa: BLE001 - must not kill the rumps timer
         traceback.print_exc()
 
 
 def stop_bouncing(app_fn: AppFn = _shared_application) -> None:
-    """Cancel an outstanding bounce, so a transient blip doesn't leave the Dock
-    bouncing indefinitely after the network comes back.
+    """Cancel every outstanding bounce, so a transient blip doesn't leave the
+    Dock bouncing indefinitely after the network comes back.
     """
-    global _attention_request
-    if _attention_request is None:
-        return
-    try:
-        app_fn().cancelUserAttentionRequest_(_attention_request)
-    except Exception:  # noqa: BLE001 - must not kill the heartbeat thread
-        traceback.print_exc()
-    finally:
-        _attention_request = None
+    while _attention_requests:
+        request_id = _attention_requests.pop()
+        try:
+            app_fn().cancelUserAttentionRequest_(request_id)
+        except Exception:  # noqa: BLE001 - must not kill the rumps timer
+            traceback.print_exc()
 
 
 def notify(
@@ -111,7 +112,10 @@ def notify(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=10,
+            # This blocks the main run loop, so the timeout is how long every
+            # timer in the app stalls if osascript hangs. A banner is not worth
+            # more than a few seconds of a frozen monitor.
+            timeout=3,
         )
     except (subprocess.SubprocessError, OSError, UnicodeError):
         traceback.print_exc()
@@ -157,5 +161,4 @@ def network_recovered(host: str, app_fn: AppFn = _shared_application) -> None:
 
 
 def _reset_for_tests() -> None:
-    global _attention_request
-    _attention_request = None
+    _attention_requests.clear()

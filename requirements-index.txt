@@ -1,0 +1,12 @@
+# Local semantic-index tooling only: scripts/semantic_indexer.py,
+# scripts/watch_and_index.py, scripts/query_index.py and scripts/mcp_server.py
+# (see docs/MCP.md and scripts/install_indexer_daemon.sh). Not part of the app
+# and never installed on end-user machines -- scripts/start.sh installs
+# requirements.txt only.
+#
+#   pip install -r requirements-index.txt
+#
+# Pinned exactly to the versions the LaunchAgent on the dev machine runs with.
+chromadb==1.5.9
+fastmcp==3.2.4
+watchdog==6.0.0

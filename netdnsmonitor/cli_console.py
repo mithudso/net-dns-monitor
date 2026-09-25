@@ -57,15 +57,21 @@ def _run_argv(argv: Optional[list[str]], runner: Callable) -> str:
     result = runner(argv)
     stdout = (getattr(result, "stdout", "") or "").rstrip()
     stderr = (getattr(result, "stderr", "") or "").rstrip()
-    body = stdout or stderr or f"(no output, exit {getattr(result, 'returncode', '?')})"
-    return f"$ {' '.join(argv)}\n{body}"
+    returncode = getattr(result, "returncode", 0)
+    body = stdout or stderr
+    # `networksetup` refusing a change writes its reason to stdout and exits
+    # non-zero; output alone reads as success.
+    if returncode != 0:
+        return f"$ {' '.join(argv)}\n{body}\nfailed: exited {returncode}"
+    return f"$ {' '.join(argv)}\n{body or '(no output, exit 0)'}"
 
 
 def _lookup(token: str):
     """A catalogue entry by key, or by its 1-based position in the listing."""
     if token in BY_KEY:
         return BY_KEY[token]
-    if token.isdigit():
+    # `'²'.isdigit()` is True and `int('²')` raises, out of the REPL loop.
+    if token.isascii() and token.isdigit():
         index = int(token) - 1
         if 0 <= index < len(CATALOG):
             return CATALOG[index]
@@ -93,11 +99,14 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
                 return "cancelled.", ConsoleState()
             state.values[state.pending_needs] = text
             state.pending_needs = None
+            argv = resolve(command.key, **state.values)
+            if argv is None:
+                return f"failed: could not build '{command.key}' from '{text}'.", ConsoleState()
             if command.mutates and not state.pending_confirm:
                 state.pending_confirm = True
                 return (
                     f"'{command.key}' CHANGES SYSTEM STATE:\n"
-                    f"  $ {' '.join(resolve(command.key, **state.values))}\n"
+                    f"  $ {' '.join(argv)}\n"
                     "Type 'yes' to run it, anything else to cancel.",
                     state,
                 )
@@ -163,8 +172,8 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
         return (f"unknown: '{text}'. `c` lists commands, `?` for the guide.", state)
 
     values = {}
-    # Offer the obvious default for a placeholder from the live service list
-    # rather than making the user retype a device name they can see above.
+    # List the live device/service names beside the prompt so the value can be
+    # copied rather than recalled.
     needs = missing_placeholder(command.key, **values)
     if needs:
         hint = ""
@@ -205,7 +214,7 @@ def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input
 
     out(BANNER)
     out("")
-    out(render_interfaces(interface_rows(run_fn, prober)))
+    out(render_interfaces(interface_rows(run_fn, prober, services=cached["services"])))
     state = ConsoleState()
     while not state.quit:
         try:
@@ -218,12 +227,12 @@ def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input
         # The loop owns the handful of actions that need live context; `handle`
         # stays pure and names them instead of performing them.
         if text == "__INTERFACES__":
-            refresh_services()
-            text = render_interfaces(interface_rows(run_fn, prober))
+            text = render_interfaces(interface_rows(run_fn, prober, services=refresh_services()))
         elif text == "__BENCH__":
             out("benchmarking reachable interfaces, this takes a few seconds...")
-            refresh_services()
-            text = render_interfaces(interface_rows(run_fn, prober, meter, measure=True))
+            text = render_interfaces(
+                interface_rows(run_fn, prober, meter, measure=True, services=refresh_services())
+            )
         elif text == "__STATUS__":
             text = render_failover_status(failover.snapshot() if failover else None)
         elif text == "__PRIORITY__":

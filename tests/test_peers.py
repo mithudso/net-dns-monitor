@@ -6,8 +6,10 @@ dependent.
 """
 
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 
+from netdnsmonitor.localize import INCONCLUSIVE, localize
 from netdnsmonitor.peers import (
     CURRENT,
     OTHER,
@@ -186,6 +188,55 @@ def test_eviction_drops_the_least_recently_heard_peer():
     assert set(reg.peers) == {"middle", "newest"}
 
 
+def test_eviction_cannot_spin_on_an_entry_whose_id_does_not_match_its_key():
+    """The record file is hand-editable. An entry whose `id` field disagrees with
+    the key it sits under must still be evictable, or the table never makes
+    room and the listener thread loops forever.
+    """
+    reg = make_registry(max_peers=1)
+    reg.peers["stale-key"] = {"id": "some-other-id", "last_seen": ""}
+    reg.observe("newcomer")
+    assert set(reg.peers) == {"newcomer"}
+
+
+def test_a_record_with_a_hostname_as_address_is_not_probed():
+    """`address` in the record file goes straight to sendto(). A hostname there
+    would make the timer thread block on a name lookup.
+    """
+    reg = make_registry()
+    reg.load({"peers": {"current": [{"id": "peer-a", "address": "evil.example"}]}})
+    assert reg.addresses_to_probe() == []
+
+
+def test_the_registry_survives_a_listener_writing_while_the_timer_reads():
+    """observe() runs on the listener thread; every read runs on the timer.
+    Without serialisation the reader dies with "dictionary changed size during
+    iteration" -- inside a timer callback, where nothing catches it.
+    """
+    reg = make_registry(max_peers=200)
+    for index in range(200):
+        reg.observe(f"seed-{index}", address="192.168.1.1")
+
+    stop = threading.Event()
+
+    def churn():
+        counter = 0
+        while not stop.is_set():
+            counter += 1
+            reg.observe(f"churn-{counter}", address="192.168.1.1")
+
+    writer = threading.Thread(target=churn, daemon=True)
+    writer.start()
+    try:
+        for _ in range(300):
+            assert len(reg.localization_view()) == 200
+            assert len(reg.addresses_to_probe()) == 1
+            assert sum(len(v) for v in reg.buckets().values()) == 200
+    finally:
+        stop.set()
+        writer.join(timeout=5)
+
+
 # --- healthchecks ----------------------------------------------------------
 
 
@@ -207,6 +258,74 @@ def test_being_heard_from_again_clears_the_missed_count():
 
 def test_a_miss_for_an_unknown_peer_is_harmless():
     make_registry().note_healthcheck_miss("never-seen")
+
+
+# --- the localization view -------------------------------------------------
+
+
+def test_a_peer_that_just_answered_is_fresh():
+    reg = make_registry()
+    reg.observe("peer-a", host="mac-a", address="192.168.1.5")
+    view = reg.localization_view(fresh_seconds=15)
+    assert len(view) == 1
+    assert view[0]["answered"] is True
+
+
+def test_a_peer_that_missed_the_probe_window_is_silent_but_present():
+    """Heard from within the current window but not in the last few seconds:
+    that is the genuine "went silent" signal, and it has to be reported as such.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("peer-a", host="mac-a", address="192.168.1.5")
+    clock.advance(seconds=60)
+    view = reg.localization_view(fresh_seconds=15)
+    assert len(view) == 1
+    assert view[0]["answered"] is False
+
+
+def test_a_peer_last_heard_from_a_month_ago_is_not_counted_as_silent():
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("peer-a", host="mac-a", address="192.168.1.5")
+    clock.advance(days=30)
+    assert reg.localization_view(fresh_seconds=15) == []
+
+
+def test_a_stale_registry_yields_inconclusive_not_this_machine():
+    """Sixteen month-old records is the shape of the live peers.json. Counted as
+    silent they produced "none of the 16 answered -- this machine" at high
+    confidence, about machines that simply left.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    for index in range(16):
+        reg.observe(f"peer-{index}", host="mac-b", address="192.168.1.5")
+    clock.advance(days=30)
+    verdict = localize(
+        our_external_reachable=False,
+        our_dns_ok=None,
+        peers=reg.localization_view(fresh_seconds=15),
+    )
+    assert verdict["verdict"] == INCONCLUSIVE
+    assert verdict["confidence"] == "low"
+
+
+def test_a_stale_registry_is_not_described_as_no_peer_known():
+    """Sixteen peers are known; none has been heard from lately. "No peer is
+    known" would send the reader to install a second monitor they already have.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("peer-a", host="mac-b", address="192.168.1.5")
+    clock.advance(days=30)
+    verdict = localize(
+        our_external_reachable=False,
+        our_dns_ok=None,
+        peers=reg.localization_view(fresh_seconds=15),
+    )
+    assert "No peer is known" not in verdict["reason"]
+    assert "current window" in verdict["reason"]
 
 
 # --- the record file -------------------------------------------------------

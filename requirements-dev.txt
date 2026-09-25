@@ -8,3 +8,5 @@
 -r requirements.txt
 pytest==9.1.1
 ruff==0.16.1
+# Runs the same ruff via .pre-commit-config.yaml; `pre-commit install` once per clone.
+pre-commit==4.6.2

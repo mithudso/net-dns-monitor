@@ -131,6 +131,96 @@ def test_load_config_does_not_mutate_the_module_level_defaults(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "poll_interval_seconds",
+        "ping_interval_seconds",
+        "ui_refresh_seconds",
+        "peer_announce_seconds",
+        "log_view_poll_seconds",
+        "resolution_interval_seconds",
+        "domain_learn_interval_seconds",
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-5", "'30'", "true"])
+def test_a_zero_negative_or_non_numeric_interval_is_rejected_at_load(tmp_path, key, value):
+    """`poll_interval_seconds: 0` reaches rumps.Timer as an interval and spins
+    the run loop; it also collapses the learn-interval clamp to 0.0.
+    """
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"{key}: {value}\n")
+    with pytest.raises(ValueError, match=f"{key}.*greater than 0"):
+        load_config(str(config_path))
+
+
+@pytest.mark.parametrize("key", ["ping_timeout_seconds", "log_view_timeout_seconds"])
+@pytest.mark.parametrize("value", ["0", "-1", "'2'", "true"])
+def test_a_zero_negative_or_non_numeric_timeout_is_rejected_at_load(tmp_path, key, value):
+    """ping.py raises on every heartbeat for a bad ping_timeout_seconds, and
+    make_log_reader coerces log_view_timeout_seconds at start-up -- neither
+    names the key or the file. Zero is not "default" for these two.
+    """
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"{key}: {value}\n")
+    with pytest.raises(ValueError, match=f"{key}.*greater than 0"):
+        load_config(str(config_path))
+
+
+def test_zero_still_means_default_for_the_probe_budget(tmp_path):
+    """0 is documented as "use probe_timeout_seconds" here; it must not be caught
+    by the timeout check.
+    """
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("failover_probe_timeout_seconds: 0\n")
+    assert load_config(str(config_path))["failover_probe_timeout_seconds"] == 0
+
+
+def test_two_loads_do_not_share_the_same_list_objects(tmp_path):
+    """`dict(DEFAULT_CONFIG)` copies the mapping but not the lists inside it, so
+    an append to one load's `domains` shows up in every later load.
+    """
+    a = load_config(str(tmp_path / "does-not-exist.yaml"))
+    b = load_config(str(tmp_path / "does-not-exist.yaml"))
+    assert a["domains"] is not b["domains"]
+    assert a["domains"] is not DEFAULT_CONFIG["domains"]
+
+
+def test_a_mapping_for_a_list_key_is_rejected_at_load(tmp_path):
+    """A mapping iterates its keys and an int does not iterate at all; neither
+    is "a list of strings", which is what the error already claimed to require.
+    """
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("domains:\n  example.com: true\n")
+    with pytest.raises(ValueError, match="must be a list of strings"):
+        load_config(str(config_path))
+
+
+def test_a_non_string_path_is_rejected_naming_the_key_and_file(tmp_path):
+    """`reports_dir: null` used to raise a bare TypeError from expanduser that
+    named neither the key nor the file.
+    """
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("reports_dir: null\n")
+    with pytest.raises(ValueError, match="reports_dir") as excinfo:
+        load_config(str(config_path))
+    assert str(config_path) in str(excinfo.value)
+
+
+def test_the_router_keys_have_declared_defaults(tmp_path):
+    """app.py and router_window.py each carried their own inline fallback for
+    these, and the two disagreed about which interface was WAN and which LAN.
+    """
+    cfg = load_config(str(tmp_path / "does-not-exist.yaml"))
+    assert cfg["router_enabled"] is False
+    assert cfg["wan_interface"] == "en3"
+    assert cfg["lan_interface"] == "en0"
+    assert cfg["lan_ip"] == "192.168.10.1"
+    assert cfg["lan_netmask"] == "255.255.255.0"
+    assert cfg["dhcp_start"] == "192.168.10.100"
+    assert cfg["dhcp_end"] == "192.168.10.200"
+
+
 def test_a_bare_string_for_a_list_key_is_rejected_at_load(tmp_path):
     """`domains: example.com` is the natural way to write one entry, and a str
     is iterable -- so without this it becomes 11 single-character lookups, all

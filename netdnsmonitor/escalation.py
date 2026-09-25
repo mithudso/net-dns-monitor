@@ -21,10 +21,17 @@ def redact(value: Any, sensitive_strings: list[str]) -> Any:
     if isinstance(value, str):
         redacted = value
         for needle in sensitive_strings:
+            # A stray `- ` in the YAML list yields "", and `str.replace("", x)`
+            # inserts x between every character.
+            if not needle:
+                continue
             redacted = redacted.replace(needle, "[REDACTED]")
         return redacted
     if isinstance(value, dict):
-        return {k: redact(v, sensitive_strings) for k, v in value.items()}
+        # Keys too: probe_results["domain_results"] is keyed by hostname.
+        return {
+            redact(k, sensitive_strings): redact(v, sensitive_strings) for k, v in value.items()
+        }
     if isinstance(value, list):
         return [redact(item, sensitive_strings) for item in value]
     return value

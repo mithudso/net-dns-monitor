@@ -5,7 +5,7 @@ The one thing these cannot prove is that macOS actually draws a notification
 banner -- that depends on notification authorisation for the bundle and is not
 observable from inside the process. What they do pin is that the app decides to
 alert, bounces with the right request type, cancels on recovery, and never lets
-an AppKit failure escape onto the heartbeat thread.
+an AppKit failure escape into the rumps timer that called it.
 """
 
 import subprocess
@@ -83,10 +83,29 @@ def test_a_new_outage_after_recovery_bounces_again():
     assert app.attention_requests == [0, 0]
 
 
+def test_every_outstanding_bounce_is_cancelled_when_the_network_returns():
+    """With `ping_alert_repeat_seconds` set, the alert re-fires while the outage
+    lasts, and each `requestUserAttention_` is a separate request with its own
+    id. Cancelling only the last one leaves the earlier critical requests
+    bouncing the Dock forever after recovery.
+    """
+
+    class CountingApp(FakeApp):
+        def requestUserAttention_(self, request_type):
+            self.attention_requests.append(request_type)
+            return len(self.attention_requests)
+
+    app = CountingApp()
+    alert.bounce_dock(app_fn=lambda: app)
+    alert.bounce_dock(app_fn=lambda: app)
+    alert.stop_bouncing(app_fn=lambda: app)
+    assert sorted(app.cancelled) == [1, 2]
+
+
 def test_an_appkit_failure_is_logged_not_raised(capsys):
-    """This runs on the heartbeat's worker path. An escaping exception stops
-    the monitor for the rest of the process's life while the menu bar keeps
-    showing the last good reading.
+    """This runs on the main run loop, from the ping drain and from a menu
+    callback. An escaping exception kills the rumps timer for the rest of the
+    session while the menu bar keeps showing the last good reading.
     """
 
     def boom():
@@ -168,6 +187,16 @@ def test_osascript_failure_is_logged_not_raised(monkeypatch, capsys):
 
     alert.notify("net down", run_fn=timing_out)
     assert "TimeoutExpired" in capsys.readouterr().err
+
+
+def test_osascript_fallback_cannot_freeze_the_run_loop_for_long(monkeypatch):
+    """The fallback runs on the main run loop, so its timeout is the longest
+    every timer in the app can stall if osascript hangs.
+    """
+    calls = []
+    monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(kwargs))
+    assert calls[0]["timeout"] <= 3
 
 
 def test_osascript_uses_an_absolute_path(monkeypatch):

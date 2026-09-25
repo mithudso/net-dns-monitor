@@ -38,8 +38,13 @@ DEFAULT_PATH = "/__down?bytes=2000000"
 DEFAULT_PORT = 443
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_MAX_BYTES = 2_000_000
+# How much longer than the meter's own timeout measure_all waits for it:
+# connect plus TLS on a slow hotspot can run a measurement slightly past its
+# budget, and cutting it off there would report a working link as unmeasured.
+CONNECT_SLACK_SECONDS = 1.0
 
 MeasureFn = Callable[..., Optional[float]]
+ResolveFn = Callable[[str, float], Optional[str]]
 
 
 def is_success_status(first_bytes: bytes) -> bool:
@@ -70,14 +75,21 @@ def resolve_once(host: str, timeout: float) -> Optional[str]:
     1ms timeout, and unbounded when the resolver itself is the thing that is
     broken, which during a network outage it may well be. Doing the lookup
     here, on a worker thread with a deadline, keeps the whole measurement
-    inside its budget. The result is cached by the meter, so this cost is paid
-    once per session rather than once per interface.
+    inside its budget. The meter caches a successful answer and reuses it for
+    every interface; a failed one is asked again next time.
     """
     result: list[str] = []
 
     def lookup() -> None:
+        # IPv4 first. The backup path being measured may be v4-only (a phone
+        # hotspot usually is), and the resolver's first answer is often AAAA;
+        # connecting to that literal from a v4-only interface fails and reads
+        # as an interface that cannot be measured.
         try:
-            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            try:
+                infos = socket.getaddrinfo(host, None, socket.AF_INET, proto=socket.IPPROTO_TCP)
+            except OSError:
+                infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
             if infos:
                 result.append(infos[0][4][0])
         except OSError:
@@ -112,11 +124,15 @@ def default_measure(
         address = resolve_once(host, timeout)
         if address is None:
             return None
-    # Whatever resolution cost, the transfer gets what is left.
-    remaining = timeout - (time.monotonic() - started_total)
-    if remaining <= 0:
+    # One deadline from entry, covering lookup, connect, TLS and transfer.
+    # Starting the transfer clock after the handshake looks natural, but on a
+    # high-RTT hotspot connect plus TLS can eat most of the budget, and a
+    # transfer that then takes its full timeout overruns measure_all's shared
+    # deadline -- which reports the interface as unmeasured after having
+    # waited for it anyway.
+    deadline = started_total + timeout
+    if deadline - time.monotonic() <= 0:
         return None
-    timeout = remaining
 
     if ":" in address:
         family, level, option = socket.AF_INET6, socket.IPPROTO_IPV6, IPV6_BOUND_IF
@@ -127,18 +143,19 @@ def default_measure(
     stream = sock
     try:
         sock.setsockopt(level, option, index)
-        sock.settimeout(timeout)
+        sock.settimeout(max(0.05, deadline - time.monotonic()))
         # Connect to the literal, present the hostname for SNI and certificate
         # validation. Passing the hostname here would re-resolve, unbounded.
         sock.connect((address, port))
         stream = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+        stream.settimeout(max(0.05, deadline - time.monotonic()))
         stream.sendall(
             f"GET {path} HTTP/1.1\r\nHost: {host}\r\n"
             "Connection: close\r\nUser-Agent: net-dns-monitor\r\n\r\n".encode()
         )
 
+        # The rate is timed from here; the deadline is not.
         started = time.monotonic()
-        deadline = started + timeout
         first = stream.recv(65536)
         if not first:
             return None
@@ -179,42 +196,46 @@ def make_throughput_meter(
     timeout: float = DEFAULT_TIMEOUT,
     max_bytes: int = DEFAULT_MAX_BYTES,
     measure_fn: MeasureFn = default_measure,
+    resolve_fn: ResolveFn = resolve_once,
 ):
     """Returns meter(device) -> Optional[float] in Mbps.
 
     Disabled entirely by passing an empty host, which reports None for every
     interface -- ranking then falls back to reachability alone rather than
     inventing numbers.
+
+    The lookup and the transfer share the meter's timeout: whatever the lookup
+    costs comes off the transfer's budget, so one call never exceeds it.
     """
 
-    # Resolved once and reused: the lookup is the same for every interface, and
-    # paying it per candidate is both slower and a second chance to block.
+    # A successful lookup is reused for every interface, since it is the same
+    # for all of them. A failed one is deliberately not cached: it happened
+    # during the outage this feature serves, and remembering it would switch
+    # benchmarking off for the rest of the session.
     cache: dict = {}
 
     def meter(device: Optional[str]) -> Optional[float]:
         if not device or not host:
             return None
-        if "address" not in cache:
-            cache["address"] = resolve_once(host, timeout)
+        started = time.monotonic()
+        address = cache.get("address")
+        if address is None:
+            address = resolve_fn(host, timeout)
+            if address is None:
+                return None
+            cache["address"] = address
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0:
+            return None
         try:
             return measure_fn(
                 device,
                 host=host,
                 path=path,
                 port=port,
-                timeout=timeout,
+                timeout=remaining,
                 max_bytes=max_bytes,
-                address=cache["address"],
-            )
-        except TypeError:
-            # An injected fake that predates the `address` argument.
-            return measure_fn(
-                device,
-                host=host,
-                path=path,
-                port=port,
-                timeout=timeout,
-                max_bytes=max_bytes,
+                address=address,
             )
         except Exception:  # noqa: BLE001 - a benchmark must never take down a caller
             return None
@@ -226,6 +247,7 @@ def measure_all(
     devices: list[str],
     meter: Callable[[Optional[str]], Optional[float]],
     timeout: float = DEFAULT_TIMEOUT,
+    slack: float = CONNECT_SLACK_SECONDS,
 ) -> dict:
     """Benchmark several interfaces against ONE shared deadline.
 
@@ -234,6 +256,11 @@ def measure_all(
     bitten by once with per-domain DNS timeouts. Run concurrently the whole
     round costs roughly one timeout, and a device that has not answered by the
     deadline is reported as unmeasured rather than waited for.
+
+    `timeout` must be the meter's own timeout. The meter bounds each
+    measurement; this only bounds the wait for them. A shorter value here
+    reports a still-running measurement as unmeasured, and a longer one waits
+    for nothing.
     """
     results: dict = {}
     workers = []
@@ -246,7 +273,7 @@ def measure_all(
         workers.append(worker)
         worker.start()
 
-    deadline = time.monotonic() + timeout + 1.0  # +1s for connect/TLS overhead
+    deadline = time.monotonic() + timeout + slack
     for worker in workers:
         worker.join(max(0.0, deadline - time.monotonic()))
     return {device: results.get(device) for device in devices}

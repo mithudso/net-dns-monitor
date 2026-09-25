@@ -20,6 +20,7 @@ opened to investigate.
 
 import contextlib
 import threading
+import traceback
 from typing import Callable, Optional
 
 from netdnsmonitor.console import BANNER, CLEAR, PROMPT, ConsoleState, handle, run_command
@@ -35,6 +36,12 @@ RESIZE_BOTH = 2 | 16
 RESIZE_PINNED_BOTTOM = 2 | 32
 
 BUSY_MESSAGE = "(a command is still running -- wait for it, or close the window)"
+
+# Characters kept in the transcript. The controller lives for the whole app
+# session and is never rebuilt, so without a ceiling the text storage grows
+# with every command until the window -- and the menu bar app behind it --
+# starts paying for it on every redraw.
+MAX_TRANSCRIPT_CHARS = 2_000_000
 
 
 def _make_target(controller):
@@ -58,7 +65,13 @@ def _make_target(controller):
         def submit_(self, sender):
             line = str(sender.stringValue())
             sender.setStringValue_("")
-            self._controller.submit(line)
+            # The field is already cleared, so a raise here loses the line
+            # with no trace of it -- and an exception out of an ObjC action
+            # is not reported anywhere a person would look.
+            try:
+                self._controller.submit(line)
+            except Exception:  # noqa: BLE001 - an ObjC action must not raise
+                traceback.print_exc()
 
     return _ConsoleTarget.alloc().initWithController_(controller)
 
@@ -101,6 +114,10 @@ class ConsoleWindowController:
 
         storage = self.text_view.textStorage()
         storage.appendAttributedString_(NSAttributedString.alloc().initWithString_(text + "\n"))
+        if storage.length() > MAX_TRANSCRIPT_CHARS:
+            storage.deleteCharactersInRange_(
+                NSMakeRange(0, storage.length() - MAX_TRANSCRIPT_CHARS)
+            )
         self.text_view.scrollRangeToVisible_(NSMakeRange(storage.length(), 0))
 
     def clear(self) -> None:
@@ -119,8 +136,14 @@ class ConsoleWindowController:
             from Foundation import NSOperationQueue
 
             NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
-        except Exception:  # noqa: BLE001 - headless fallback
-            fn()
+        except Exception:  # noqa: BLE001 - a worker thread must not die here
+            # Running `fn` inline would put `_finish`'s AppKit writes on this
+            # worker thread. Only the headless path -- no text view, where
+            # append is a print -- is safe to run inline.
+            if self.text_view is None:
+                fn()
+            else:
+                traceback.print_exc()
 
     # --- actions ---------------------------------------------------------
 

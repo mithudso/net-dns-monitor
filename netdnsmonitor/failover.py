@@ -42,7 +42,7 @@ from netdnsmonitor.failover_policy import (
 )
 from netdnsmonitor.service_order import (
     find_service,
-    is_order_intact,
+    order_argv,
     parse_service_order,
     promote,
 )
@@ -86,8 +86,15 @@ def default_run(args: list[str]) -> object:
     # exactly the network churn being diagnosed -- a longer ceiling turns one
     # attempt into a menu-bar freeze.
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=5)
-    except (subprocess.SubprocessError, OSError) as exc:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
         return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
 
 
@@ -101,11 +108,12 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
 
     Returns a string starting 'ok:', 'failed:' or 'NEEDS_PRIVILEGE:'.
     """
-    if not is_order_intact(services, new_order):
+    argv = order_argv(services, new_order)
+    if argv is None:
         return (
             "failed: refused to apply a service order that is not a permutation of the current one"
         )
-    result = run_fn(["networksetup", "-ordernetworkservices", *new_order])
+    result = run_fn(argv)
     stderr = (getattr(result, "stderr", "") or "").strip()
     stdout = (getattr(result, "stdout", "") or "").strip()
     if getattr(result, "returncode", 1) != 0:
@@ -214,8 +222,8 @@ class NetworkFailover:
         self,
         preferred_service: str,
         backup_service: Optional[str] = None,
-        store: FailoverStore = None,
-        interface_prober: Callable[[Optional[str]], Optional[bool]] = None,
+        store: Optional[FailoverStore] = None,
+        interface_prober: Optional[Callable[[Optional[str]], Optional[bool]]] = None,
         run_fn: Callable[[list[str]], object] = default_run,
         backup_services: Optional[list[str]] = None,
         throughput_meter: Optional[Callable[[Optional[str]], Optional[float]]] = None,
@@ -231,6 +239,8 @@ class NetworkFailover:
         # With auto off and both service names set, the menu bar button still
         # works and nothing ever moves on its own -- which is how you try this
         # feature before trusting it to act unattended.
+        if store is None or interface_prober is None:
+            raise ValueError("NetworkFailover needs a store and an interface prober")
         self.auto_enabled = auto_enabled
         self.preferred_service = preferred_service
         # One backup or several. The singular form stays accepted because it is
@@ -343,8 +353,12 @@ class NetworkFailover:
                 )
             return f"failed: could not enable '{name}': {stderr or stdout}"
         after = self._list_services()
-        service = find_service(after, name) if after else None
-        if service is not None and not service.enabled:
+        if not after:
+            return f"failed: could not read the service order back to confirm '{name}' is enabled"
+        service = find_service(after, name)
+        if service is None:
+            return f"failed: '{name}' disappeared mid-check"
+        if not service.enabled:
             return f"failed: '{name}' reports success but is still disabled in the service order"
         return ""
 
@@ -371,16 +385,22 @@ class NetworkFailover:
         The switch is recorded, so an automatic switch cannot immediately
         follow a manual one.
         """
+        # Early failures arm the cooldown here too, as in `_attempt`: nothing
+        # about them changes by the next tick, and an automatic switch must not
+        # follow straight after a manual one that failed for the same reason.
         services = self._list_services()
         if not services:
+            self.store.record_attempt(self.time_fn())
             return "failed: could not read the current network service order"
         if find_service(services, self.preferred_service) is None:
+            self.store.record_attempt(self.time_fn())
             return f"failed: service '{self.preferred_service}' not found; available: " + ", ".join(
                 s.name for s in services
             )
 
         missing = [n for n in self.backup_services if find_service(services, n) is None]
         if self.backup_services and len(missing) == len(self.backup_services):
+            self.store.record_attempt(self.time_fn())
             return (
                 "failed: backup service(s) not found: "
                 f"{', '.join(repr(n) for n in missing)}; available: "
@@ -394,7 +414,10 @@ class NetworkFailover:
             return "no switch: already on the backup network"
         if target == BACKUP and service and services[0].name == service:
             return f"no switch: already on '{service}'"
-        if target == PREFERRED and active_side == PREFERRED:
+        # Keyed off the head of the order, not `active_side`: a third service
+        # promoted by hand is "not on a backup" without being on the preferred
+        # link, and the restore is exactly what that situation needs.
+        if target == PREFERRED and services[0].name == self.preferred_service:
             return "no switch: already on the preferred network"
 
         outcome = (
@@ -414,9 +437,10 @@ class NetworkFailover:
         """What the menu bar shows: which side is live, and whether each side
         can actually carry traffic right now.
 
-        Probes both interfaces, so this costs up to two timeouts and a
-        subprocess. Only ever called from an explicit user action or straight
-        after a switch -- never from the poll path.
+        Probes the preferred service and every configured backup, so this
+        costs one subprocess plus up to one probe timeout per configured
+        service. Called from explicit user actions and, on the tick path, only
+        when a failback was actually attempted.
         """
         services = self._list_services()
         if not services:
@@ -480,27 +504,48 @@ class NetworkFailover:
         thread every 30 seconds forever, to answer a question whose answer is
         almost always "nothing to do".
         """
-        if self.store.original_order is None or not self.auto_enabled:
+        if not self.auto_enabled:
+            return None
+        # The CLI (`netdns failover backup`) writes this same file from its own
+        # process. The store was loaded at startup, so without re-reading it a
+        # CLI-initiated failover is invisible here: it is never undone, and the
+        # next save() overwrites its record with nothing. A file read only --
+        # no subprocess, no probe -- so the healthy tick stays free.
+        self.store.load()
+        if self.store.original_order is None:
+            return None
+        # The policy would refuse inside the cooldown anyway; checking here
+        # saves paying a subprocess and a probe on every tick to hear it.
+        last = self.store.last_switch_at
+        if last is not None and 0 <= self.time_fn() - last < self.cooldown_seconds:
             return None
         outcome = self._attempt(classification="healthy", allow=FAILBACK)
         return outcome if outcome.startswith(("ok:", "failed:", "NEEDS_PRIVILEGE:")) else None
 
     def _attempt(self, *, classification: str, allow: str) -> str:
+        # Each early failure arms the cooldown: nothing about "the listing
+        # cannot be read" or "the preferred service is not in it" changes
+        # between ticks, so without it the same doomed attempt re-runs its
+        # subprocess every 30 seconds.
         services = self._list_services()
         if not services:
+            self.store.record_attempt(self.time_fn())
             return "failed: could not read the current network service order"
 
         preferred = find_service(services, self.preferred_service)
         available = ", ".join(s.name for s in services)
         if preferred is None:
+            self.store.record_attempt(self.time_fn())
             return (
                 f"failed: preferred service '{self.preferred_service}' not found; "
                 f"available: {available}"
             )
         if not self.backup_services:
+            self.store.record_attempt(self.time_fn())
             return "failed: no backup services configured"
         missing = [n for n in self.backup_services if find_service(services, n) is None]
         if len(missing) == len(self.backup_services):
+            self.store.record_attempt(self.time_fn())
             return (
                 "failed: backup service(s) not found: "
                 f"{', '.join(repr(n) for n in missing)}; available: {available}"
@@ -528,6 +573,11 @@ class NetworkFailover:
             # restore point while the machine is on neither side.
             if self.store.original_order is not None and services[0].name == self.preferred_service:
                 self.store.original_order = None
+                # The enable goes with it. Kept, it would be undone by some
+                # later unrelated failback -- switching off a service the
+                # user may have left on deliberately. Leaving a service on
+                # is the safer mistake.
+                self.store.enabled_by_us = None
                 self.store.save()
             if services[0].name != self.preferred_service:
                 return (
@@ -621,6 +671,10 @@ class NetworkFailover:
                         f"failed: '{prefer_name}' is configured but not in the service "
                         "order; available: " + ", ".join(s.name for s in services)
                     )
+                # Naming the target is an instruction, not evidence: the
+                # outcome still has to say whether the path was proven.
+                if winner.reachable is not True:
+                    note_unverified = " -- WARNING: this path was not verified reachable"
             else:
                 winner = best_candidate(candidates)
             if winner is None and allow_unverified:
@@ -700,12 +754,19 @@ class NetworkFailover:
         if self.store.enabled_by_us:
             name = self.store.enabled_by_us
             result = self.run_fn(["networksetup", "-setnetworkserviceenabled", name, "off"])
-            undone = (
-                f" and disabled '{name}' again, which this app had enabled"
-                if getattr(result, "returncode", 1) == 0
-                else f" (could not re-disable '{name}', which this app enabled)"
-            )
-            self.store.enabled_by_us = None
+            # Read back before claiming, as with every other write here: exit
+            # 0 does not mean the service went off.
+            after = self._list_services()
+            service = find_service(after, name) if after else None
+            if (
+                getattr(result, "returncode", 1) == 0
+                and service is not None
+                and not service.enabled
+            ):
+                undone = f" and disabled '{name}' again, which this app had enabled"
+                self.store.enabled_by_us = None
+            else:
+                undone = f" (could not re-disable '{name}', which this app enabled)"
 
         self.store.original_order = None
         self.store.save()
