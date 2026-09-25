@@ -1,9 +1,16 @@
 """Which other copies of this monitor are on the network, and how recently each
 one was heard from.
 
-Pure bookkeeping: no sockets, no threads, an injected clock. peer_net.py does the
-talking and calls in here. Splitting it that way is what makes the bucketing and
-the eviction policy testable without opening a port.
+Pure bookkeeping: no sockets, no threads of its own, an injected clock. peer_net.py
+does the talking and calls in here. Splitting it that way is what makes the
+bucketing and the eviction policy testable without opening a port.
+
+**One lock around the table.** peer_net.py records peers from its listener
+thread while the main thread reads the table for the sweep, the record file, the
+dashboard and fault localization. Without the lock, a reader iterating the dict
+raised "dictionary changed size during iteration" whenever a new peer arrived
+mid-read. Readers therefore hand out copies taken under the lock, never the live
+entries.
 
 **The three buckets.** A peer is filed by how recently it was last heard from,
 not by a flag anyone sets, so a peer that goes away is reclassified by the
@@ -15,8 +22,12 @@ passage of time alone and nothing has to notice it left:
             isn't answering now
   other     known, but longer ago than that -- kept as history
 
-**What is trusted from the wire: nothing.** Every field arriving from another
-host is treated as hostile input. Strings are truncated and stripped of control
+**What is trusted from the wire.** Messages are not authenticated. Any host that
+can reach the port can claim any id, including one already in the table, and can
+report any hostname, status, `external_reachable` and `dns_ok`. Those values are
+stored as reported and fault localization uses them as reported, so a spoofed
+peer can change a verdict or move a known peer's address. What *is* defended is
+the shape of the input: strings are truncated and stripped of control
 characters, unknown fields are dropped, the table is capped so a flood cannot
 exhaust memory, and our own id is ignored so an instance never counts itself as
 its own peer. Nothing from a packet is ever used as a path, a command, or a
@@ -73,9 +84,9 @@ class PeerRegistry:
         self.max_peers = max_peers
         self.clock = clock
         self.peers: dict = {}
-        # Writes arrive on peer_net's listener thread; every read runs on a
-        # timer. Reentrant because to_dict() and observe() each call another
-        # locked method.
+        # Held by every write (observe, note_healthcheck_miss, load) and by the
+        # snapshot every reader copies from. Re-entrant so that a method holding
+        # it can call another one that takes it without deadlocking.
         self._lock = threading.RLock()
 
     # --- updating ----------------------------------------------------------
@@ -104,32 +115,34 @@ class PeerRegistry:
             now = self.clock().isoformat()
             existing = self.peers.get(peer_id)
             is_new = existing is None
+            entry = dict(existing) if existing else {"first_seen": now}
 
-            if is_new:
-                self._evict_if_full()
-                existing = {"first_seen": now, "missed_healthchecks": 0}
-                self.peers[peer_id] = existing
-
-            existing.update(
+            entry.update(
                 {
                     "id": peer_id,
-                    "host": sanitise(host) or existing.get("host", ""),
-                    "address": sanitise(address, 64) or existing.get("address", ""),
-                    "status": sanitise(status, 32) or existing.get("status", ""),
+                    "host": sanitise(host) or entry.get("host", ""),
+                    "address": sanitise(address, 64) or entry.get("address", ""),
+                    "status": sanitise(status, 32) or entry.get("status", ""),
                     "last_seen": now,
                     "last_seen_via": sanitise(via, 32),
                 }
             )
             # Tri-state and only overwritten when the peer actually said
-            # something. A peer running an older build sends neither, and
-            # "didn't say" must stay distinguishable from "said no" --
-            # localize.py treats them completely differently.
+            # something. A peer running an older build sends neither, and "didn't
+            # say" must stay distinguishable from "said no" -- localize.py treats
+            # them completely differently.
             for field, value in (("external_reachable", external_reachable), ("dns_ok", dns_ok)):
                 if value is not None:
-                    existing[field] = bool(value)
+                    entry[field] = bool(value)
                 else:
-                    existing.setdefault(field, None)
-            existing["missed_healthchecks"] = 0
+                    entry.setdefault(field, None)
+            entry["missed_healthchecks"] = 0
+
+            if is_new:
+                self._evict_if_full()
+            # Swapped in whole rather than updated in place, so no reader can copy
+            # an entry that is only half written.
+            self.peers[peer_id] = entry
             return is_new
 
     def note_healthcheck_miss(self, peer_id: str) -> None:
@@ -137,21 +150,21 @@ class PeerRegistry:
         with self._lock:
             peer = self.peers.get(peer_id)
             if peer is not None:
-                peer["missed_healthchecks"] = int(peer.get("missed_healthchecks", 0)) + 1
+                peer["missed_healthchecks"] = _as_int(peer.get("missed_healthchecks")) + 1
 
     def _evict_if_full(self) -> None:
         """Drop the least recently heard-from peer to make room.
 
         Without a cap, a host spraying announcements with a fresh id each time
-        would grow this table and the record file without limit.
+        would grow this table and the record file without limit. The caller holds
+        the lock.
         """
-        with self._lock:
-            while len(self.peers) >= self.max_peers:
-                # Popped by key, not by the entry's own `id`: the record file is
-                # hand-editable, and an entry whose id disagrees with its key
-                # would otherwise never be removed and this loop never ends.
-                oldest = min(self.peers, key=lambda key: self.peers[key].get("last_seen", ""))
-                self.peers.pop(oldest)
+        while self.peers and len(self.peers) >= self.max_peers:
+            # Popped by key, not by the entry's own `id`: the record file is
+            # hand-editable, and an entry whose id disagrees with its key would
+            # otherwise never be removed and this loop never ends.
+            oldest = min(self.peers, key=lambda key: self.peers[key].get("last_seen", ""))
+            self.peers.pop(oldest)
 
     # --- reading -----------------------------------------------------------
 
@@ -171,11 +184,14 @@ class PeerRegistry:
             return RECENT
         return OTHER
 
+    def _snapshot(self) -> list:
+        with self._lock:
+            return [dict(peer) for peer in self.peers.values()]
+
     def buckets(self) -> dict:
         grouped = {name: [] for name in BUCKETS}
-        with self._lock:
-            for peer in self.peers.values():
-                grouped[self.bucket(peer)].append(peer)
+        for peer in self._snapshot():
+            grouped[self.bucket(peer)].append(peer)
         for entries in grouped.values():
             entries.sort(key=lambda p: p.get("last_seen", ""), reverse=True)
         return grouped
@@ -212,29 +228,32 @@ class PeerRegistry:
         if not isinstance(groups, dict):
             return
         with self._lock:
-            for entries in groups.values():
-                if not isinstance(entries, list):
+            self._load_groups(groups)
+
+    def _load_groups(self, groups: dict) -> None:
+        for entries in groups.values():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
                     continue
-                for entry in entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    peer_id = sanitise(entry.get("id"), 64)
-                    if not peer_id or peer_id == self.self_id or peer_id in self.peers:
-                        continue
-                    if len(self.peers) >= self.max_peers:
-                        return
-                    self.peers[peer_id] = {
-                        "id": peer_id,
-                        "host": sanitise(entry.get("host")),
-                        "address": _numeric_address(entry.get("address")),
-                        "status": sanitise(entry.get("status"), 32),
-                        "first_seen": sanitise(entry.get("first_seen"), 64),
-                        "last_seen": sanitise(entry.get("last_seen"), 64),
-                        "last_seen_via": sanitise(entry.get("last_seen_via"), 32),
-                        "missed_healthchecks": _as_int(entry.get("missed_healthchecks")),
-                        "external_reachable": _as_tristate(entry.get("external_reachable")),
-                        "dns_ok": _as_tristate(entry.get("dns_ok")),
-                    }
+                peer_id = sanitise(entry.get("id"), 64)
+                if not peer_id or peer_id == self.self_id or peer_id in self.peers:
+                    continue
+                if len(self.peers) >= self.max_peers:
+                    return
+                self.peers[peer_id] = {
+                    "id": peer_id,
+                    "host": sanitise(entry.get("host")),
+                    "address": _numeric_address(entry.get("address")),
+                    "status": sanitise(entry.get("status"), 32),
+                    "first_seen": sanitise(entry.get("first_seen"), 64),
+                    "last_seen": sanitise(entry.get("last_seen"), 64),
+                    "last_seen_via": sanitise(entry.get("last_seen_via"), 32),
+                    "missed_healthchecks": _as_int(entry.get("missed_healthchecks")),
+                    "external_reachable": _as_tristate(entry.get("external_reachable")),
+                    "dns_ok": _as_tristate(entry.get("dns_ok")),
+                }
 
     def localization_view(self, fresh_seconds: float = 30) -> list:
         """Peers as localize.py wants them: each tagged with whether it has been
@@ -245,29 +264,50 @@ class PeerRegistry:
         seconds", not "was it around this morning" -- a peer last heard from nine
         minutes ago is still `current` but tells you nothing about right now.
 
-        Peers older than the `current` window are left out entirely rather than
-        tagged as not answering. A record nobody has heard from for a whole
-        window is a machine that left, and it proves nothing about now.
+        Only peers inside the `current` window are included at all. localize.py
+        reads every `answered: False` entry as a peer that went silent, and
+        silence from a machine last seen days ago, or from a ghost entry left by
+        a previous process id, says nothing about this outage. Counting it made a
+        lone stale peer produce "this machine's own link" at high confidence.
+
+        A peer with no readable `last_seen`, or one dated in the future (a
+        hand-edited record, or a clock stepped back), is left out too. Its age is
+        unknown, and an unknown must become neither "answered" nor "silent".
+
+        One entry per address, the most recently heard-from id. The id is
+        regenerated per launch, so a peer whose app restarted inside the window
+        leaves its old id behind at the same address. Counted separately, that
+        one machine was two silent peers and got past localize.py's
+        single-silent-peer cap. The age filter runs first, so an entry outside
+        the window cannot claim an address. Entries with no address are all kept:
+        there is nothing to match them on.
         """
+        cutoff = max(self.current_seconds, fresh_seconds)
+        in_window = []
+        for peer in self._snapshot():
+            age = self.age_seconds(peer)
+            if age is None or age < 0 or age > cutoff:
+                continue
+            in_window.append((age, peer))
+        in_window.sort(key=lambda item: item[0])
+        seen_addresses = set()
         view = []
-        with self._lock:
-            for peer in list(self.peers.values()):
-                age = self.age_seconds(peer)
-                if age is None or age > self.current_seconds:
-                    # Counted as silent, a month-old record file manufactured
-                    # "none of the 16 known peers answered" at high confidence
-                    # about machines that were simply gone.
+        for age, peer in in_window:
+            address = peer.get("address")
+            if address:
+                if address in seen_addresses:
                     continue
-                view.append(
-                    {
-                        "id": peer.get("id"),
-                        "host": peer.get("host"),
-                        "address": peer.get("address"),
-                        "answered": age <= fresh_seconds,
-                        "external_reachable": peer.get("external_reachable"),
-                        "dns_ok": peer.get("dns_ok"),
-                    }
-                )
+                seen_addresses.add(address)
+            view.append(
+                {
+                    "id": peer.get("id"),
+                    "host": peer.get("host"),
+                    "address": peer.get("address"),
+                    "answered": age <= fresh_seconds,
+                    "external_reachable": peer.get("external_reachable"),
+                    "dns_ok": peer.get("dns_ok"),
+                }
+            )
         return view
 
     def addresses_to_probe(self) -> list:

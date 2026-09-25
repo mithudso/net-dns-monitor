@@ -5,6 +5,11 @@
 # `anthropic>=0.40.0` floor had already drifted to 0.117.0, across many
 # pre-1.0 breaking releases. Reproducibility beats auto-upgrades here; bump
 # these deliberately.
+#
+# These pins cover only the packages the app imports. Their dependencies
+# (httpx, pydantic, pyobjc-core, ...) are pinned in constraints.txt, which every
+# install path passes with `-c`. After bumping a pin here, regenerate
+# constraints.txt as its header describes.
 rumps==0.4.0
 anthropic==0.117.0
 PyYAML==6.0.3

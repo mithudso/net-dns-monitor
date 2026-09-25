@@ -20,9 +20,12 @@ something, no stdin so nothing can hang on a prompt, and an output cap.
 import codecs
 import contextlib
 import os
+import shlex
 import signal
 import subprocess
+import sys
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -164,6 +167,8 @@ Limits that apply to every command, so that a mistyped one cannot wedge the app:
 
   * {DEFAULT_TIMEOUT_SECONDS:.0f}s timeout, then the whole process group is killed. A bare
     `ping google.com` never exits on its own; this is what stops it.
+  * a background job (`&`) still holding the output when the shell exits is
+    killed with it. Redirect its output (`cmd > file 2>&1 &`) to keep it running.
   * stdin is /dev/null. Anything that would prompt -- `sudo`, `ssh` -- fails
     with a readable error instead of hanging until the timeout.
   * output is capped at {MAX_OUTPUT_BYTES // 1024} KB. Redirect to a file for more.
@@ -191,6 +196,57 @@ class ConsoleState:
     cwd: str = field(default_factory=lambda: os.path.expanduser("~"))
     history: list = field(default_factory=list)
     closed: bool = False
+
+
+# Process groups of commands still running, so quitting the app can end them.
+# `start_new_session=True` detaches each one from the app's own group, which is
+# what stops a stray signal reaching the app -- and also why nothing kills them
+# when the app exits unless something is told to.
+_LIVE: set[int] = set()
+_LIVE_LOCK = threading.Lock()
+
+# What py2app's launcher sets for the bundled interpreter (apptemplate
+# src/main.c). A child inheriting PYTHONHOME points the user's `python3`, `pip`
+# or `aws` at the app bundle's resources and fails with "No module named
+# encodings".
+FROZEN_ONLY_ENVIRONMENT = (
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "RESOURCEPATH",
+    "ARGVZERO",
+    "EXECUTABLEPATH",
+    "PYTHONOPTIMIZE",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONUNBUFFERED",
+    "_PY2APP_LAUNCHED_",
+)
+
+
+def child_env(environ: Mapping[str, str], frozen: Optional[str]) -> dict:
+    """The environment a console command runs with.
+
+    Unchanged when running from source. Inside the built app, the variables the
+    launcher set for its own interpreter are removed, so a command gets the
+    user's environment and not the bundle's.
+    """
+    env = dict(environ)
+    if frozen:
+        for name in FROZEN_ONLY_ENVIRONMENT:
+            env.pop(name, None)
+    return env
+
+
+def kill_running() -> None:
+    """Kill every console command still running. Registered for app quit.
+
+    Never raises: it runs while the app is shutting down, where an exception
+    has nowhere useful to go.
+    """
+    with _LIVE_LOCK:
+        groups = list(_LIVE)
+    for pgid in groups:
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, signal.SIGKILL)
 
 
 def _kill_process_group(process) -> None:
@@ -266,6 +322,7 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
             command,
             shell=True,
             cwd=cwd,
+            env=child_env(os.environ, getattr(sys, "frozen", None)),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -276,6 +333,18 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
         # gone by the time the next command runs.
         return CommandResult(stderr=f"{type(exc).__name__}: {exc}", returncode=127)
 
+    # The session leader's pid is the group id, so the group is killable by it
+    # even after the shell itself has exited and been reaped.
+    with _LIVE_LOCK:
+        _LIVE.add(process.pid)
+    try:
+        return _collect(process, timeout)
+    finally:
+        with _LIVE_LOCK:
+            _LIVE.discard(process.pid)
+
+
+def _collect(process, timeout: float) -> CommandResult:
     sinks = {
         "stdout": {"parts": [], "size": 0},
         "stderr": {"parts": [], "size": 0},
@@ -383,13 +452,15 @@ def _change_directory(argument: str, state: ConsoleState) -> str:
             "line, then the rest."
         )
 
-    # There is no shell in front of this built-in to unquote `cd "$TMPDIR"` or
-    # expand the variable; handed through as typed, the check reports `no such
-    # directory: /tmp/"$TMPDIR"`, which reads as a missing directory rather
-    # than a path the console did not understand.
-    if len(argument) >= 2 and argument[0] == argument[-1] and argument[0] in "\"'":
-        argument = argument[1:-1]
-    target = os.path.expandvars(os.path.expanduser(argument or "~"))
+    # Unquoted the way the shell would, since HELP promises quoting works:
+    # `cd "My Folder"` used to look for a directory with quotes in its name.
+    # An unbalanced quote, or several words, falls back to the raw text.
+    try:
+        tokens = shlex.split(argument)
+    except ValueError:
+        tokens = [argument]
+    path = tokens[0] if len(tokens) == 1 else argument
+    target = os.path.expanduser(os.path.expandvars(path or "~"))
     if not os.path.isabs(target):
         target = os.path.join(state.cwd, target)
     target = os.path.normpath(target)

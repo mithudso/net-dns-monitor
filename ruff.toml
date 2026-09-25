@@ -1,4 +1,4 @@
-target-version = "py39"
+target-version = "py313"
 line-length = 100
 
 [lint]
@@ -11,7 +11,11 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B", "SIM", "BLE"]
 # The formatter owns wrapping, and it deliberately leaves long strings and
 # URLs intact rather than mangling them.
-ignore = ["E501"]
+# UP045/UP007 (Optional[X] -> X | None), UP035 (typing imports), UP017
+# (timezone.utc -> UTC) and UP041 are pure spelling changes across ~330 lines.
+# They are deferred to a dedicated change so they do not bury behavioural
+# diffs; the target itself is 3.13, matching CI and the scripts.
+ignore = ["E501", "UP045", "UP007", "UP035", "UP017", "UP041"]
 
 [lint.per-file-ignores]
 # Lambda test-doubles (`resolve_fn = lambda d, t: (True, None)`) are the

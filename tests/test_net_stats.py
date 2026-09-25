@@ -100,24 +100,44 @@ def test_malformed_rows_are_skipped_rather_than_raising():
     assert parse_interface_counters(junk) == (EN0_IN + EN9_IN, EN0_OUT + EN9_OUT)
 
 
-def test_empty_output_is_unmeasured_not_zero():
-    """No `en*` link row means no reading was made. (0, 0) would be a real
-    reading of "no bytes ever", which the meter then turns into a counter
-    reset -- or, against a genuine total, into one enormous delta.
+def test_empty_output_is_unmeasured_not_an_idle_zero():
+    """(0, 0) would reach ThroughputMeter as a real reading and render "measured,
+    idle" forever. Nothing parsed means nothing was measured.
     """
     assert parse_interface_counters("") is None
-    assert parse_interface_counters(None) is None
-    only_loopback = """Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+
+
+def test_output_with_no_matching_link_row_is_unmeasured_not_idle():
+    """A netstat format change, or a sandbox that hides interfaces, leaves no
+    `<Link#>` row for en*. Summing nothing to zero reported an idle link on no
+    evidence, on every tick for the life of the process.
+    """
+    only_other_interfaces = """Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
 lo0        16384 <Link#1>                        546703     0  121334000   546703     0  121334000     0
+utun8      1300  <Link#34>                       193060     0   67107906   104358     0   67872775     0
 """
-    assert parse_interface_counters(only_loopback) is None
+    assert parse_interface_counters(only_other_interfaces) is None
 
 
-def test_a_read_that_parsed_nothing_reaches_the_meter_as_unmeasured():
+def test_an_interface_that_really_carried_nothing_is_still_zero():
+    """The fix for the no-match case must not erase a genuine zero reading."""
+    fresh = """Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+en5        1500  <Link#20>   00:e0:4c:ff:bd:c0        0     0          0        0     0          0     0
+"""
+    assert parse_interface_counters(fresh) == (0, 0)
+
+
+def test_only_malformed_matching_rows_is_unmeasured():
+    junk_only = "en0        1500  <Link#15>   4a:63:a4:bf:16:ed  -  -  -  -  -  -  -\n"
+    assert parse_interface_counters(junk_only) is None
+
+
+def test_read_interface_counters_returns_none_when_nothing_matched():
     def fake_run(args, **kwargs):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     assert read_interface_counters(run_fn=fake_run) is None
+    assert ThroughputMeter().sample(read_interface_counters(run_fn=fake_run)) == (None, None)
 
 
 def test_read_interface_counters_uses_the_absolute_netstat_path():

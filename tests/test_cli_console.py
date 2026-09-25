@@ -3,6 +3,7 @@ loop. `handle` is a pure function of (line, state) so the REPL is testable
 without a terminal.
 """
 
+import os
 from types import SimpleNamespace
 
 from netdnsmonitor.cli import (
@@ -34,10 +35,22 @@ LISTING = """An asterisk (*) denotes that a network service is disabled.
 """
 
 
-def runner(argv):
+def runner(argv, timeout=5):
     if argv[:2] == ["networksetup", "-listnetworkserviceorder"]:
         return SimpleNamespace(returncode=0, stdout=LISTING, stderr="")
     return SimpleNamespace(returncode=0, stdout=f"ran {' '.join(argv)}", stderr="")
+
+
+def recording_runner():
+    """Records each argv with the timeout it was given."""
+    calls = []
+
+    def run(argv, timeout=5):
+        calls.append((argv, timeout))
+        return SimpleNamespace(returncode=0, stdout="out", stderr="")
+
+    run.calls = calls
+    return run
 
 
 SERVICES = [
@@ -191,6 +204,20 @@ def test_catalog_render_flags_the_mutating_commands():
     text = render_catalog()
     assert "changes system state" in text
     assert "enable" in text and "nwi" in text
+
+
+def test_catalog_render_shows_every_note_and_the_admin_marker():
+    """`notes` and `needs_admin` used to be read nowhere, so flush-dns's
+    "only half a flush" caveat never reached anyone.
+    """
+    text = render_catalog()
+    for command in CATALOG:
+        if command.notes:
+            assert command.notes in text
+    wifi_line = next(line for line in text.splitlines() if " wifi " in line)
+    assert "(needs admin)" in wifi_line
+    nwi_line = next(line for line in text.splitlines() if " nwi " in line)
+    assert "(needs admin)" not in nwi_line
 
 
 def test_guide_covers_both_fault_layers_and_the_disabled_trap():
@@ -356,16 +383,16 @@ def test_ladder_does_not_claim_failover_is_unconfigured():
     assert "switch_to_backup_network" not in seen
 
 
-def test_main_reports_a_bad_config_without_a_traceback(tmp_path):
+def test_main_reports_a_bad_config_without_a_traceback(tmp_path, capsys):
     bad = tmp_path / "config.yaml"
     bad.write_text("- this\n- is a list\n", encoding="utf-8")
     out = collecting()
     code = main(["commands", "--config", str(bad)], out=out)
     assert code == 2
-    assert any(line.startswith("failed:") for line in out.lines)
+    assert capsys.readouterr().err.startswith("config error: ")
 
 
-def test_a_global_flag_before_the_subcommand_is_honoured(tmp_path):
+def test_a_global_flag_before_the_subcommand_is_honoured(tmp_path, capsys):
     """`--config x.yaml commands` and `commands --config x.yaml` must load the
     same file; a subparser default that overwrites the first form silently
     runs against the wrong config.
@@ -375,7 +402,7 @@ def test_a_global_flag_before_the_subcommand_is_honoured(tmp_path):
     out = collecting()
     code = main(["--config", str(bad), "commands"], out=out)
     assert code == 2
-    assert any(str(bad) in line for line in out.lines)
+    assert str(bad) in capsys.readouterr().err
 
 
 def test_console_reports_a_nonzero_exit_with_output_as_failed():
@@ -383,7 +410,7 @@ def test_console_reports_a_nonzero_exit_with_output_as_failed():
     alone renders as success.
     """
 
-    def refusing(argv):
+    def refusing(argv, **kwargs):
         return SimpleNamespace(returncode=1, stdout="** Error: could not set", stderr="")
 
     text, _ = handle("nwi", ConsoleState(), SERVICES, refusing)
@@ -446,7 +473,7 @@ def test_a_mutating_command_asks_before_running():
     """
     called = []
 
-    def recording(argv):
+    def recording(argv, timeout=5):
         called.append(argv)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -502,6 +529,58 @@ def test_a_mutating_command_with_a_placeholder_asks_for_both():
     assert state.pending_confirm is True
     text, state = handle("yes", state, SERVICES, runner)
     assert "$ networksetup -setnetworkserviceenabled M3100 on" in text
+
+
+def test_each_command_runs_with_its_own_timeout():
+    """At the runner's fixed 5s, `traceroute` (45s budget) and `ping-gw` (15s)
+    printed a timeout where their output belonged.
+    """
+    run = recording_runner()
+    handle("traceroute", ConsoleState(), SERVICES, run)
+    assert run.calls[-1] == (["traceroute", "-w", "1", "-m", "12", "1.1.1.1"], 45.0)
+
+    _, state = handle("ping-gw", ConsoleState(), SERVICES, run)
+    handle("192.168.1.1", state, SERVICES, run)
+    assert run.calls[-1] == (["ping", "-c", "3", "192.168.1.1"], 15.0)
+
+
+def test_a_confirmed_command_keeps_its_own_timeout_through_every_step():
+    run = recording_runner()
+    _, state = handle("renew-dhcp", ConsoleState(), SERVICES, run)
+    _, state = handle("en0", state, SERVICES, run)
+    assert run.calls == [], "nothing may run before confirmation"
+    handle("yes", state, SERVICES, run)
+    # The catalogue may spell the binary as an absolute path.
+    assert [([os.path.basename(argv[0]), *argv[1:]], timeout) for argv, timeout in run.calls] == [
+        (["ipconfig", "set", "en0", "DHCP"], 20.0)
+    ]
+
+
+def test_a_raising_runner_is_reported_rather_than_ending_the_repl():
+    """An undecodable byte of output raises UnicodeDecodeError, a ValueError."""
+
+    def undecodable(argv, timeout=5):
+        raise UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid continuation byte")
+
+    text, state = handle("wifi", ConsoleState(), SERVICES, undecodable)
+    assert text.startswith("$ wdutil info")
+    assert "failed: UnicodeDecodeError" in text
+    assert state.quit is False
+
+
+def test_the_confirmation_shows_the_caveat_and_the_admin_marker():
+    text, _ = handle("flush-dns", ConsoleState(), SERVICES, runner)
+    assert "half a flush" in text
+    text, state = handle("enable", ConsoleState(), SERVICES, runner)
+    text, _ = handle("M3100", state, SERVICES, runner)
+    assert "CHANGES SYSTEM STATE (needs admin)" in text
+
+
+def test_a_command_with_a_caveat_prints_it_with_the_result():
+    _, state = handle("flush-dns", ConsoleState(), SERVICES, runner)
+    text, _ = handle("yes", state, SERVICES, runner)
+    assert text.startswith("$ ") and "dscacheutil -flushcache" in text.splitlines()[0]
+    assert text.endswith("note: " + BY_KEY["flush-dns"].notes)
 
 
 def test_read_only_shortcuts_are_named_actions_not_executed_inline():
@@ -564,9 +643,39 @@ def test_promote_refuses_a_disabled_service_rather_than_claiming_success():
 
 
 def test_promote_of_an_enabled_service_goes_through():
+    """A stateful fake: the reorder rewrites the listing, so the read-back sees
+    the new order and the `ok:` path is the one exercised.
+    """
     from netdnsmonitor.cli import promote_service
 
-    assert promote_service(runner, SERVICES, "Wi-Fi").startswith(("ok:", "failed: networksetup"))
+    listing = {"text": LISTING}
+    reorders = []
+
+    def stateful(argv, timeout=5):
+        if argv[:2] == ["networksetup", "-ordernetworkservices"]:
+            reorders.append(argv)
+            names = argv[2:]
+            devices = {s.name: s for s in SERVICES}
+            lines = ["An asterisk (*) denotes that a network service is disabled."]
+            position = 0
+            for name in names:
+                service = devices[name]
+                if service.enabled:
+                    position += 1
+                    lines.append(f"({position}) {name}")
+                else:
+                    lines.append(f"(*) {name}")
+                lines.append(f"(Hardware Port: {name}, Device: {service.device})")
+                lines.append("")
+            listing["text"] = "\n".join(lines)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if argv[:2] == ["networksetup", "-listnetworkserviceorder"]:
+            return SimpleNamespace(returncode=0, stdout=listing["text"], stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="unexpected")
+
+    outcome = promote_service(stateful, SERVICES, "Wi-Fi")
+    assert outcome.startswith("ok:"), outcome
+    assert reorders == [["networksetup", "-ordernetworkservices", "Wi-Fi", "AX88179B", "M3100"]]
 
 
 def test_blank_input_does_nothing():

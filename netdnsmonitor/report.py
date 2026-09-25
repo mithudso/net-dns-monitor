@@ -24,10 +24,17 @@ def build_report(
 ) -> dict:
     resolved = bool(recheck_ok)
     resolution_word = "resolved" if resolved else "unresolved"
+    # An empty ladder is real, not hypothetical: ladder_for returns [] for
+    # UNCLASSIFIED, and a summary saying a ladder ran would describe steps
+    # that never happened to the person reading the report.
+    ladder_clause = (
+        " after the offline troubleshooting ladder ran"
+        if ladder_results
+        else "; no offline troubleshooting ladder steps ran"
+    )
     summary = (
         f"{classification.value.upper()}-layer incident detected at "
-        f"{started_at.isoformat()}, {resolution_word} after the offline "
-        f"troubleshooting ladder ran."
+        f"{started_at.isoformat()}, {resolution_word}{ladder_clause}."
     )
     return {
         "started_at": started_at.isoformat(),

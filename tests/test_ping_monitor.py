@@ -115,6 +115,23 @@ def test_repeat_of_zero_means_never_re_alert():
     assert monitor.record(FAIL, now=100_000.0)["alert"] is False
 
 
+def test_a_negative_repeat_interval_is_clamped_rather_than_alerting_every_tick():
+    """`now - last >= -300` is true on every tick, so an unclamped negative
+    setting turned one alert per outage into one alert per failing ping --
+    exactly what the edge trigger exists to prevent.
+    """
+    monitor = PingMonitor(alert_repeat_seconds=-300)
+    alerts = [monitor.record(FAIL, now=t)["alert"] for t in (0.0, 5.0, 10.0)]
+    assert alerts == [True, False, False]
+
+
+def test_a_missing_repeat_interval_means_never_re_alert():
+    """A blank YAML value arrives as None; it has always meant "never"."""
+    monitor = PingMonitor(alert_repeat_seconds=None)
+    monitor.record(FAIL, now=0.0)
+    assert monitor.record(FAIL, now=100_000.0)["alert"] is False
+
+
 def test_failed_ping_reports_no_rtt_and_carries_the_error():
     monitor = PingMonitor()
     snapshot = monitor.record(FAIL, now=0.0)

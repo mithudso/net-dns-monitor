@@ -66,6 +66,11 @@ def default_resolve_with_error(domain: str, timeout: float) -> tuple:
         return False, str(exc)
 
 
+# Kept for callers written against the other name; see the docstring above for why
+# the descriptive name is the one used here.
+default_resolve = default_resolve_with_error
+
+
 def _resolve_one(domain: str, timeout: float, resolve_fn: ResolveFn) -> dict:
     started = time.monotonic()
     try:
@@ -130,7 +135,7 @@ def resolve_domains_parallel(
             wait(futures, timeout=max(0.0, remaining))
 
         findings = []
-        for domain, future in zip(domains, futures):
+        for domain, future in zip(domains, futures, strict=True):
             findings.append(_finding_for(domain, future, started))
         return findings
     finally:

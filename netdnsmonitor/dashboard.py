@@ -31,10 +31,12 @@ adding a framework to `packages` in setup.py, and this project's bundling has
 already cost several commits.
 """
 
+import sys
+import traceback
 from typing import Callable, Optional
 
+from netdnsmonitor.graphs import format_bits
 from netdnsmonitor.peers import BUCKETS
-from netdnsmonitor.status import format_rate
 
 WINDOW_TITLE = "Net-DNS-Monitor"
 
@@ -42,10 +44,6 @@ WINDOW_TITLE = "Net-DNS-Monitor"
 # sanitising) and the label column's width is global, so one long name would
 # push every value in the window that far to the right.
 PEER_LABEL_MAX = 28
-
-# The results pane is fed automatically by the log watcher for as long as the
-# app runs, and each append re-reads the whole pane across the ObjC bridge.
-OUTPUT_MAX_CHARS = 40_000
 
 # (button label, action id, kind). The kind is surfaced in the label for repairs
 # because `flush_dns_cache` genuinely mutates system state and a button that
@@ -92,6 +90,18 @@ def _yes_no(value: Optional[bool]) -> str:
     return "yes" if value else "no"
 
 
+# The results pane is appended to on most log polls whether or not the window
+# is visible. Each append copies the whole pane across the bridge and re-lays it
+# out on the main thread, so after weeks of LaunchAgent uptime an uncapped pane
+# turns every append into a multi-megabyte stall of the run loop the tick,
+# ping and UI timers share. The newest text is what anyone reads.
+OUTPUT_MAX_CHARS = 200_000
+
+
+def capped_output(current: str, text: str, limit: int = OUTPUT_MAX_CHARS) -> str:
+    return (current + text)[-limit:]
+
+
 def dashboard_sections(
     *,
     ping_stats: dict,
@@ -105,6 +115,7 @@ def dashboard_sections(
     episode_started_at: Optional[str] = None,
     peers: Optional[dict] = None,
     fault_verdict: Optional[dict] = None,
+    dns_domains: Optional[list] = None,
     log_entries: int = 0,
     log_errors: int = 0,
     new_log_errors: int = 0,
@@ -161,7 +172,14 @@ def dashboard_sections(
             f"{config.get('success_threshold', '?')} successes",
         ),
         ("Resolution batch every", f"{config.get('resolution_interval_seconds', '?')}s"),
-        ("Domains checked for DNS", ", ".join(config.get("domains") or []) or "none configured"),
+        # dns_domains is what the prober actually resolves (domains plus the
+        # control domain); config["domains"] alone said "none configured"
+        # while api.anthropic.com was checked on every tick.
+        (
+            "Domains checked for DNS",
+            ", ".join(dns_domains if dns_domains is not None else config.get("domains") or [])
+            or "none configured",
+        ),
     ]
 
     sections = [
@@ -242,7 +260,7 @@ def _rtt_text(rtt: Optional[float]) -> str:
 def _rate_text(bps: Optional[float]) -> str:
     if bps is None:
         return "not measured yet"
-    return f"{format_rate(bps)}bps"
+    return f"{format_bits(bps)}bps"
 
 
 def _repeat_text(seconds: Optional[float]) -> str:
@@ -589,8 +607,16 @@ class DashboardWindow:
 
     def _handle(self, sender):
         identifier = sender.identifier()
-        if identifier:
+        if not identifier:
+            return
+        try:
             self.on_action(str(identifier))
+        except Exception as exc:  # noqa: BLE001 - never raise into AppKit
+            # Escaping here unwinds through PyObjC into AppKit and the click looks
+            # like it did nothing at all. Class name only, for the reason in
+            # _report_action_failure.
+            _report_action_failure(str(identifier), exc)
+            self.append_output(f"{identifier} raised {type(exc).__name__}; see the app log.\n")
 
     # --- what App calls ----------------------------------------------------
 
@@ -620,11 +646,9 @@ class DashboardWindow:
         self.stats_view.setString_(text)
 
     def append_output(self, text: str):
-        combined = (self.output_view.string() or "") + text
-        if len(combined) > OUTPUT_MAX_CHARS:
-            combined = combined[-OUTPUT_MAX_CHARS:]
-        self.output_view.setString_(combined)
-        self.output_view.scrollRangeToVisible_((len(combined), 0))
+        current = self.output_view.string() or ""
+        self.output_view.setString_(capped_output(current, text))
+        self.output_view.scrollRangeToVisible_((len(self.output_view.string() or ""), 0))
 
     # --- the log column ----------------------------------------------------
 
@@ -666,6 +690,18 @@ class DashboardWindow:
         button = self.log_control_buttons.get("log_toggle_level")
         if button is not None:
             button.setTitle_(title)
+
+
+def _report_action_failure(action_id: str, exc: BaseException) -> None:
+    """Log where a click handler failed without logging what it said.
+
+    Not `traceback.print_exc()`: the message of a network or auth failure can
+    carry a credential -- urllib's error text embeds the full request URL, and
+    the Slack webhook URL is one. The frames say where it broke; the class name
+    says what kind of failure it was.
+    """
+    print(f"{action_id} raised {type(exc).__name__}", file=sys.stderr)
+    traceback.print_tb(exc.__traceback__, file=sys.stderr)
 
 
 def _label(AppKit, frame, text: str, point_size: float):
@@ -754,6 +790,22 @@ APP_MENU_ITEMS = [
     ("Settings…", "open_settings", ","),
 ]
 
+# (title, selector, key equivalent), with None for a separator. A text field does
+# not handle Cmd-V itself: AppKit matches the keystroke against the main menu's
+# key equivalents and sends that item's action. With no Edit menu nothing matched,
+# so paste did nothing anywhere -- including the store build's masked credentials
+# dialog, the only place a key can be entered in that build. An uppercase key
+# equivalent implies Shift, which makes Redo Cmd-Shift-Z.
+EDIT_MENU_ITEMS = [
+    ("Undo", "undo:", "z"),
+    ("Redo", "redo:", "Z"),
+    None,
+    ("Cut", "cut:", "x"),
+    ("Copy", "copy:", "c"),
+    ("Paste", "paste:", "v"),
+    ("Select All", "selectAll:", "a"),
+]
+
 
 def install_main_menu(on_action: Callable[[str], None]):
     """Give the app a real application menu, and return the target to retain.
@@ -771,7 +823,15 @@ def install_main_menu(on_action: Callable[[str], None]):
     """
     import AppKit
 
-    target = _make_button_target(lambda sender: on_action(str(sender.identifier() or "")))
+    def dispatch(sender):
+        action_id = str(sender.identifier() or "")
+        try:
+            on_action(action_id)
+        except Exception as exc:  # noqa: BLE001 - never raise into AppKit
+            # No window to report into from a menu item; the log is all there is.
+            _report_action_failure(action_id, exc)
+
+    target = _make_button_target(dispatch)
 
     app_menu = AppKit.NSMenu.alloc().init()
     for title, action_id, key in APP_MENU_ITEMS:
@@ -792,5 +852,22 @@ def install_main_menu(on_action: Callable[[str], None]):
     app_item.setSubmenu_(app_menu)
     main_menu = AppKit.NSMenu.alloc().init()
     main_menu.addItem_(app_item)
+
+    # No target on these, unlike the items above. A nil target sends the action
+    # to the first responder -- the focused field -- which is the object that can
+    # paste. Targeting the dispatch object would route paste: to it instead.
+    edit_menu = AppKit.NSMenu.alloc().initWithTitle_("Edit")
+    for entry in EDIT_MENU_ITEMS:
+        if entry is None:
+            edit_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+            continue
+        title, selector, key = entry
+        edit_menu.addItem_(
+            AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, key)
+        )
+    edit_item = AppKit.NSMenuItem.alloc().init()
+    edit_item.setSubmenu_(edit_menu)
+    main_menu.addItem_(edit_item)
+
     AppKit.NSApplication.sharedApplication().setMainMenu_(main_menu)
     return target

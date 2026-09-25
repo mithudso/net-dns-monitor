@@ -68,3 +68,51 @@ def test_should_escalate_when_ladder_and_repair_done_but_still_failing():
         should_escalate(ladder_completed=True, repair_attempted_or_na=True, recheck_ok=False)
         is True
     )
+
+
+def test_redact_removes_a_sensitive_name_used_as_a_dict_key():
+    """probe_results.domain_results is keyed by domain, so redacting values
+    alone sent every configured hostname to the API as a key.
+    """
+    bundle = {"probe_results": {"domain_results": {"mail.corp.local": False}}}
+    redacted = redact(bundle, sensitive_strings=["mail.corp.local"])
+    assert "mail.corp.local" not in str(redacted)
+    assert redacted["probe_results"]["domain_results"] == {"[REDACTED]": False}
+
+
+def test_redact_keeps_every_entry_when_two_keys_collapse_to_one_placeholder():
+    """Two sensitive keys both become "[REDACTED]"; a plain dict comprehension
+    would silently drop one, and the model would reason over half the evidence.
+    """
+    bundle = {"a.corp.local": False, "b.corp.local": True}
+    redacted = redact(bundle, sensitive_strings=["a.corp.local", "b.corp.local"])
+    assert "corp.local" not in str(redacted)
+    assert sorted(redacted.values()) == [False, True]
+
+
+def test_redact_walks_tuples_like_lists():
+    redacted = redact({"pair": ("mail.corp.local", 53)}, sensitive_strings=["mail.corp.local"])
+    assert redacted["pair"] == ("[REDACTED]", 53)
+
+
+def test_redact_applies_the_longer_of_two_overlapping_needles():
+    """Replacing "internal" first leaves "[REDACTED]-db.acme.com", which leaks
+    the rest of the longer secret.
+    """
+    redacted = redact(
+        "lookup internal-db.acme.com failed",
+        sensitive_strings=["internal", "internal-db.acme.com"],
+    )
+    assert redacted == "lookup [REDACTED] failed"
+
+
+def test_redact_ignores_an_empty_needle_in_a_plain_string():
+    """str.replace("", x) inserts x between every character."""
+    assert redact("dns ok", sensitive_strings=["", "corp"]) == "dns ok"
+
+
+def test_redact_accepts_a_non_string_needle():
+    """A YAML list such as [8443] yields an int; the TypeError it raised
+    escaped the incident pipeline and lost the report.
+    """
+    assert redact("proxy on port 8443", sensitive_strings=[8443]) == "proxy on port [REDACTED]"

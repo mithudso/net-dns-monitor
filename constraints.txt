@@ -1,0 +1,53 @@
+# Exact versions for every package in the tested environment, transitive ones
+# included. requirements.txt pins only what the app imports directly, so without
+# this file `pip install -r requirements.txt` still resolves httpx, pydantic,
+# pyobjc-core and the rest fresh on every install. Two people installing weeks
+# apart would then freeze different dependency trees into their bundles.
+#
+# A constraint installs nothing by itself. It only fixes the version of a package
+# that something else asks for, so the dev-only and build-only entries here
+# (pytest, ruff, py2app) have no effect on an end-user runtime install.
+#
+# Used by scripts/start.sh, scripts/install.sh and .github/workflows/ci.yml:
+#
+#   pip install -r requirements.txt -c constraints.txt
+#   pip install -r requirements-dev.txt -c constraints.txt
+#   pip install py2app -c constraints.txt
+#
+# Frozen from a Python 3.13 virtualenv with every requirements file installed,
+# plus py2app. Regenerate after changing any pin, then re-run the test suite:
+#
+#   uv pip freeze --color never -p .venv/bin/python | grep -v -e '^-e' -e ' @ '
+#
+# Editable and local-path entries are excluded; they are not installable elsewhere.
+altgraph==0.17.5
+annotated-types==0.8.0
+anthropic==0.117.0
+anyio==4.15.1
+certifi==2026.7.22
+distro==1.9.0
+docstring-parser==0.18.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.19
+iniconfig==2.3.0
+jiter==0.17.0
+macholib==1.16.4
+modulegraph==0.19.7
+packaging==26.3
+pluggy==1.6.0
+py2app==0.28.10
+pydantic==2.13.5
+pydantic-core==2.46.5
+pygments==2.21.0
+pyobjc-core==12.2.2
+pyobjc-framework-cocoa==12.2.1
+pytest==9.1.1
+pyyaml==6.0.3
+ruff==0.16.1
+rumps==0.4.0
+setuptools==84.0.0
+sniffio==1.3.1
+typing-extensions==4.16.0
+typing-inspection==0.4.4

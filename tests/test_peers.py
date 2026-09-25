@@ -6,10 +6,12 @@ dependent.
 """
 
 import json
+import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
-from netdnsmonitor.localize import INCONCLUSIVE, localize
+from netdnsmonitor.localize import INCONCLUSIVE, LOCAL_MACHINE, localize
 from netdnsmonitor.peers import (
     CURRENT,
     OTHER,
@@ -229,7 +231,9 @@ def test_the_registry_survives_a_listener_writing_while_the_timer_reads():
     writer.start()
     try:
         for _ in range(300):
-            assert len(reg.localization_view()) == 200
+            # All 200 share one address, and localization_view keeps one entry
+            # per address; the point here is that it does not raise.
+            assert len(reg.localization_view()) == 1
             assert len(reg.addresses_to_probe()) == 1
             assert sum(len(v) for v in reg.buckets().values()) == 200
     finally:
@@ -440,3 +444,202 @@ def test_an_unwritable_record_path_returns_false_rather_than_raising(tmp_path):
     reg = make_registry()
     reg.observe("peer-a")
     assert save_record(reg, str(blocker / "sub" / "peers.json")) is False
+
+
+# --- localization view -----------------------------------------------------
+
+
+def test_a_peer_last_seen_days_ago_is_not_counted_as_silent():
+    """Silence from a machine that was switched off three days ago says nothing
+    about this outage. Counted as silent, it was the only peer, so "none of the
+    known peers answered" blamed this machine's own link at high confidence.
+    """
+    clock = Clock()
+    reg = make_registry(clock)
+    reg.load(
+        {
+            "peers": {
+                OTHER: [
+                    {
+                        "id": "home-imac",
+                        "host": "imac",
+                        "address": "192.168.1.9",
+                        "last_seen": (START - timedelta(days=3)).isoformat(),
+                    }
+                ]
+            }
+        }
+    )
+    view = reg.localization_view(fresh_seconds=15)
+    assert view == []
+    assert localize(False, None, view)["verdict"] != LOCAL_MACHINE
+
+
+def test_a_current_peer_that_did_not_answer_is_still_reported_silent():
+    """The cut is the `current` window, not the fresh one: a peer heard from a
+    few minutes ago was probed and did not answer, which is real evidence.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("peer-a", address="192.168.1.5")
+    clock.advance(seconds=300)
+    view = reg.localization_view(fresh_seconds=15)
+    assert [(p["id"], p["answered"]) for p in view] == [("peer-a", False)]
+
+
+def test_a_peer_that_answered_is_kept_even_when_fresh_exceeds_current():
+    """A misconfigured `current` window shorter than the fresh window must not
+    drop a peer that just answered.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=5)
+    reg.observe("peer-a")
+    clock.advance(seconds=10)
+    assert [p["answered"] for p in reg.localization_view(fresh_seconds=15)] == [True]
+
+
+def test_a_future_dated_last_seen_is_neither_answered_nor_silent():
+    """A negative age comes from a hand-edited record or a clock stepped back.
+    It says nothing about when the peer was last heard from, so it must not count
+    as a peer that answered, and must not count as one that went silent either.
+    """
+    clock = Clock()
+    reg = make_registry(clock)
+    reg.load(
+        {
+            "peers": {
+                CURRENT: [
+                    {
+                        "id": "skewed",
+                        "address": "192.168.1.7",
+                        "last_seen": (START + timedelta(hours=1)).isoformat(),
+                    }
+                ]
+            }
+        }
+    )
+    assert not any(p["answered"] for p in reg.localization_view(fresh_seconds=15))
+    assert reg.localization_view(fresh_seconds=15) == []
+
+
+def test_a_restarted_peer_is_one_silent_peer_not_two():
+    """The peer id is regenerated per launch, so a peer Mac whose app restarted
+    inside the `current` window leaves its old id behind at the same address.
+    Counted separately, the ghost and the new id were two silent peers, which
+    bypassed the single-silent-peer cap and blamed this machine at high
+    confidence when only one machine had gone quiet.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("old-launch", host="imac", address="192.168.1.9")
+    clock.advance(seconds=60)
+    reg.observe("new-launch", host="imac", address="192.168.1.9")
+    clock.advance(seconds=120)
+    view = reg.localization_view(fresh_seconds=15)
+    assert [(p["id"], p["answered"]) for p in view] == [("new-launch", False)]
+    result = localize(False, False, view)
+    assert result["verdict"] == LOCAL_MACHINE
+    assert result["confidence"] == "medium"
+
+
+def test_the_newest_id_at_an_address_is_the_one_kept():
+    """The ghost of the previous launch is silent by definition. Keeping it
+    instead of the id that just answered would turn a live peer into a silent one.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("old-launch", address="192.168.1.9")
+    clock.advance(seconds=300)
+    reg.observe("new-launch", address="192.168.1.9")
+    clock.advance(seconds=5)
+    view = reg.localization_view(fresh_seconds=15)
+    assert [(p["id"], p["answered"]) for p in view] == [("new-launch", True)]
+
+
+def test_a_stale_entry_does_not_hide_a_current_one_at_the_same_address():
+    """Only entries inside the window compete for an address, so an out-of-window
+    record cannot claim the address and push the live peer out of the view.
+    """
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.load(
+        {
+            "peers": {
+                OTHER: [
+                    {
+                        "id": "future-skewed",
+                        "address": "192.168.1.9",
+                        "last_seen": (START + timedelta(hours=1)).isoformat(),
+                    }
+                ]
+            }
+        }
+    )
+    reg.observe("live", address="192.168.1.9")
+    view = reg.localization_view(fresh_seconds=15)
+    assert [(p["id"], p["answered"]) for p in view] == [("live", True)]
+
+
+def test_peers_at_different_addresses_or_with_no_address_are_all_kept():
+    clock = Clock()
+    reg = make_registry(clock, current_seconds=600)
+    reg.observe("peer-a", address="192.168.1.5")
+    reg.observe("peer-b", address="192.168.1.6")
+    reg.observe("no-address-1")
+    reg.observe("no-address-2")
+    clock.advance(seconds=120)
+    view = reg.localization_view(fresh_seconds=15)
+    assert sorted(p["id"] for p in view) == ["no-address-1", "no-address-2", "peer-a", "peer-b"]
+    assert localize(False, False, view)["confidence"] == "high"
+
+
+# --- concurrency -----------------------------------------------------------
+
+
+def test_readers_survive_the_listener_thread_mutating_the_table():
+    """peer_net.py calls observe() on its listener thread while the main thread
+    reads. Unlocked, iteration raised "dictionary changed size during iteration",
+    which aborted the peer sweep before the record was saved and dropped the
+    fault verdict for an outage.
+    """
+    reg = PeerRegistry(self_id="me", max_peers=20)
+    stop = threading.Event()
+
+    def flood():
+        index = 0
+        while not stop.is_set():
+            reg.observe(f"peer-{index}", host="h", address=f"10.0.{index % 250}.1")
+            reg.note_healthcheck_miss(f"peer-{index - 3}")
+            index += 1
+
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    errors = []
+    writer = threading.Thread(target=flood, daemon=True)
+    writer.start()
+    try:
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            try:
+                reg.buckets()
+                reg.to_dict()
+                reg.localization_view(fresh_seconds=15)
+                reg.addresses_to_probe()
+            except RuntimeError as exc:
+                errors.append(exc)
+                break
+    finally:
+        stop.set()
+        writer.join(timeout=5)
+        sys.setswitchinterval(old_interval)
+    assert errors == []
+
+
+def test_buckets_hand_out_copies_not_the_live_entries():
+    """The dashboard reads these on the main thread; a live entry would keep
+    changing under it as the listener thread records pongs.
+    """
+    reg = make_registry()
+    reg.observe("peer-a", host="mac-a")
+    reg.buckets()[CURRENT][0]["host"] = "changed"
+    assert reg.peers["peer-a"]["host"] == "mac-a"

@@ -2,6 +2,7 @@
 and the failback call on the tick path. No rumps event loop is started.
 """
 
+import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from netdnsmonitor.app import (
 )
 from netdnsmonitor.classifier import Classification
 from netdnsmonitor.config import DEFAULT_CONFIG
+from netdnsmonitor.failover import FailoverStore, NetworkFailover
 from netdnsmonitor.ladder import ladder_for
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report import build_report
@@ -380,6 +382,75 @@ def test_menu_rows_show_active_preferred_and_backup(tmp_path):
     assert titles[1].startswith("○") and titles[2].startswith("●")
 
 
+def test_the_menu_shows_a_paused_failback_in_its_three_rows(tmp_path):
+    """The menu has exactly three rows, so a fourth line saying why the machine
+    stays on the backup would be dropped without a trace.
+    """
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "none.yaml"))
+    app.failover = FakeFailoverForMenu(dict(MENU_SNAPSHOT, failback_paused=True))
+    app._refresh_failover_menu()
+    assert "failback paused after a manual switch" in app.failover_rows[0].title
+
+
+class OrderRunner:
+    """networksetup's list and reorder calls over a two-service order."""
+
+    DEVICES = {"AX88179B": "en6", "Wi-Fi": "en0"}
+
+    def __init__(self):
+        self.order = ["AX88179B", "Wi-Fi"]
+        self.calls = []
+
+    def __call__(self, args):
+        self.calls.append(args)
+        if args[:2] == ["networksetup", "-listnetworkserviceorder"]:
+            lines = []
+            for position, name in enumerate(self.order, 1):
+                device = self.DEVICES[name]
+                lines += [f"({position}) {name}", f"(Hardware Port: {name}, Device: {device})", ""]
+            return SimpleNamespace(returncode=0, stdout="\n".join(lines), stderr="")
+        if args[:2] == ["networksetup", "-ordernetworkservices"]:
+            self.order = list(args[2:])
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="unexpected")
+
+
+def test_switch_to_backup_from_the_menu_holds_off_the_tick_failback(tmp_path):
+    """The whole path: the menu button pauses, and the healthy ticks that used
+    to fail back on good gateway probes spend nothing and move nothing.
+    """
+    now = [1_000_000.0]
+    runner = OrderRunner()
+    failover = NetworkFailover(
+        preferred_service="AX88179B",
+        backup_service="Wi-Fi",
+        store=FailoverStore(str(tmp_path / "failover.json")),
+        interface_prober=lambda dev: True,
+        run_fn=runner,
+        cooldown_seconds=300.0,
+        time_fn=lambda: now[0],
+    )
+    app = make_app(tmp_path, failover, QuietStateMachine())
+    import netdnsmonitor.app as app_module
+
+    real_notification = app_module.rumps.notification
+    app_module.rumps.notification = lambda *a, **k: None
+    try:
+        app.switch_to_backup(None)
+    finally:
+        app_module.rumps.notification = real_notification
+    assert runner.order[0] == "Wi-Fi"
+    assert "failback paused" in app.failover_rows[0].title
+
+    now[0] += 301
+    runner.calls.clear()
+    for _ in range(5):
+        app.tick()
+        now[0] += 30
+    assert runner.calls == []
+    assert runner.order[0] == "Wi-Fi"
+
+
 def test_unconfigured_failover_leaves_no_blank_rows(tmp_path):
     """A blank title renders as an empty clickable-looking row."""
     app = NetDnsMonitorApp(config_path=str(tmp_path / "none.yaml"))
@@ -486,7 +557,73 @@ def test_the_built_failover_probes_the_configured_targets(monkeypatch):
         captured["targets"] = targets
         return lambda device: True
 
-    monkeypatch.setattr("netdnsmonitor.app.make_interface_prober", fake_make_interface_prober)
+    # build_failover lives in failover.py, so the prober factory is looked up there.
+    monkeypatch.setattr("netdnsmonitor.failover.make_interface_prober", fake_make_interface_prober)
     build_failover(enabled_config(failover_probe_targets=[["192.168.68.1", 53]]))
 
     assert captured["targets"] == [("192.168.68.1", 53)]
+
+
+def test_the_measurement_deadline_is_the_configured_speedtest_timeout():
+    """measure_all stops waiting at `measure_timeout`. Left at NetworkFailover's
+    5s default, a longer configured speedtest timeout was cut short there.
+    """
+    failover = build_failover(enabled_config(failover_speedtest_timeout_seconds=12))
+    assert failover.measure_timeout == 12.0
+
+
+def test_the_probe_deadline_is_the_configured_failover_probe_timeout():
+    """The candidate probes run together and stop being waited for at
+    `probe_timeout`. A deadline shorter than the prober's own budget would cut
+    off a probe that was still going to answer, and read the link as unprobed.
+    """
+    failover = build_failover(enabled_config(failover_probe_timeout_seconds=7))
+    assert failover.probe_timeout == 7.0
+
+    fallback = build_failover(
+        enabled_config(failover_probe_timeout_seconds=0, probe_timeout_seconds=3.5)
+    )
+    assert fallback.probe_timeout == 3.5
+
+
+def test_the_app_re_exports_the_failover_builders_it_used_to_define():
+    from netdnsmonitor import app, failover
+
+    for name in (
+        "build_failover",
+        "failover_backup_names",
+        "failover_probe_targets",
+        "failover_probe_timeout",
+        "failover_trigger_classifications",
+    ):
+        assert getattr(app, name) is getattr(failover, name)
+
+
+def test_the_cli_builds_its_failover_without_importing_the_menu_bar_app(tmp_path):
+    """The CLI runs in a terminal, where rumps and AppKit are dead weight and a
+    GUI import can fail outright. A fresh interpreter, because this process has
+    already imported rumps. build_context on the default config constructs the
+    probers and meter but calls none of them, and builds no failover.
+    """
+    import os
+    import subprocess
+
+    code = (
+        "import sys\n"
+        "from netdnsmonitor import cli\n"
+        "from netdnsmonitor.config import DEFAULT_CONFIG\n"
+        "context = cli.build_context(dict(DEFAULT_CONFIG))\n"
+        "assert context[2] is None, context\n"
+        "print('rumps' in sys.modules, 'netdnsmonitor.app' in sys.modules)\n"
+    )
+    env = dict(os.environ, HOME=str(tmp_path))
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["False", "False"]

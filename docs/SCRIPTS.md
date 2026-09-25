@@ -8,26 +8,32 @@ commands you actually type, including the one-shot module invocations that are t
 only way to exercise a piece of this app without a menu bar.
 
 Every example below was executed against this repo on macOS 25.4 with Python 3.13.1.
-Where output is shown it is real, trimmed for length, never illustrative.
+The notification, `StateMachine` and title samples were re-run on 2026-09-14 with
+Python 3.13.15 after `b07eee5`. Where output is shown it is real, trimmed for length,
+never illustrative, unless the text says it is an example.
 
 ## The one rule
 
 **This app diagnoses far more than it fixes, and the report is the deliverable.** Of
-the eight ladder steps present by default, exactly one mutates anything
-(`flush_dns_cache`), and even that one only half-works unprivileged —
-`dscacheutil -flushcache` succeeds, `killall -HUP mDNSResponder` does not, because
-signalling a process owned by another user is rejected regardless of the command's own
-permissions. It reports `partial`. Two more repairs are `NEEDS_PRIVILEGE` stubs.
+the eight ladder steps present by default, three are repairs. Without the sudoers
+grant from `privileges.py`, exactly one of them mutates anything (`flush_dns_cache`),
+and it only half-works: `dscacheutil -flushcache` succeeds, `killall -HUP
+mDNSResponder` does not, because the system rejects a signal to a process owned by
+another user regardless of the command's own permissions. It reports `partial`.
+`renew_dhcp_lease` reports `NEEDS_PRIVILEGE` and runs nothing. With the grant, the
+flush completes and `renew_dhcp_lease` runs; the grant has never been exercised live.
+`toggle_network_service` is never automated and reports `NOT_AUTOMATED`.
 
-Enabling failover adds a ninth step, `switch_to_backup_network`, which is the only one
-that rewrites system network configuration. It is off by default and reports
+Enabling failover (`failover_enabled` plus both service names) adds a ninth step,
+`switch_to_backup_network`, which is the only one that rewrites system network
+configuration. It is off by default and reports
 `NEEDS_PRIVILEGE` rather than acting when the administrator right is refused. Read
 "Reading the output correctly" at the bottom before concluding this app fixed anything.
 
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 1079 tests; the whole decision surface
+python3 -m pytest -q          # 1884 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -39,7 +45,7 @@ python3 -m pytest -q          # 1079 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 1079 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 1884 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -50,12 +56,17 @@ python3 -m pytest -q          # 1079 tests; the whole decision surface
 | one-shot `service_order` + `interface_probe` | read-only failover dry run | **yes** |
 | menu bar **Switch to backup now** | **mutates system network config** — the intended live check | **yes** |
 | **failover live check** by hand (below) | **mutates system network config** | **yes** |
+| `scripts/appstore/build_appstore.py adhoc\|release` | build and sign the Mac App Store bundle | no |
+| `scripts/appstore/make_icon.py OUT.icns` | draw the placeholder app icon | no |
+| `sandbox_probe` inside an ad-hoc bundle | measure what works inside the App Sandbox | **yes** |
 
-There is no `scripts/` directory: the CLI is the interface, and `app.py` stays a thin
-rumps shell over the same tested modules. The one-shot `python3 -c` invocations further
-down predate the CLI and are kept because they show which module owns which decision —
-but for day-to-day use, reach for `netdnsmonitor.cli`. Everything runs from the repo
-root.
+The CLI is the interface for diagnostics, and `app.py` stays a rumps shell over the
+same tested modules. `scripts/` holds the launcher and installer (`start.sh`,
+`install.sh`, `net-dns-monitor-service`; see `docs/DEVELOPMENT.md`) and the Mac App
+Store build tools (`scripts/appstore/`, below). The one-shot `python3 -c` invocations
+further down predate the CLI and are kept because they show which module owns which
+decision — but for day-to-day use, reach for `netdnsmonitor.cli`. Everything runs from
+the repo root.
 
 ### `python3 -m netdnsmonitor.cli` — the CLI
 
@@ -112,21 +123,23 @@ networks (`f`/`p`), or `promote` — prints the exact argv and waits for `yes`. 
 that rewrites configuration happens on a single keypress. A command with a placeholder
 asks for the value rather than shelling out with a literal `{device}` in it.
 
-The same console is available as a window from the menu bar ("Open console…").
+The menu bar's "Open console" item opens a different console: an arbitrary shell
+(`console.py` + `console_window.py`), not this catalogue.
 
 ---
 
 ## Setup
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # rumps 0.4.0, anthropic, PyYAML 6.0.3, pytest
+python3.13 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -c constraints.txt      # the app's four runtime pins
+pip install -r requirements-dev.txt -c constraints.txt  # adds pytest and ruff, for the gate
 
 mkdir -p ~/.config/net-dns-monitor
 cp config.yaml ~/.config/net-dns-monitor/config.yaml
 ```
 
-**Optional environment, all three independent.** Each unset feature degrades to a
+**Optional credentials, all three independent.** Each unset feature degrades to a
 no-op rather than an error:
 
 ```bash
@@ -134,6 +147,10 @@ export ANTHROPIC_API_KEY=sk-ant-...                          # LLM escalation
 export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/... # Slack alerts
 export SMTP_PASSWORD=...                                      # email auth, if the relay needs it
 ```
+
+The app reads each one from the environment first and from the Keychain second
+(`credentials.py`). The menu bar's Credentials submenu saves a value to the Keychain.
+An exported variable wins over a saved one.
 
 **No secret belongs in `config.yaml`.** For a Slack incoming webhook the URL *is* the
 credential. `config.yaml` is gitignored anyway, but the split is not about git — it is
@@ -163,39 +180,63 @@ source .venv/bin/activate
 python3 -m netdnsmonitor.app     # blocks; Ctrl-C or the menu to quit
 ```
 
-Real title output for all three states, taken from `status.build_title`:
+**An exception in a timer callback does not stop the timer.** `rumps` 0.4.0 catches
+exceptions in `Timer.callback_` and `MenuItem.callback_` and prints the traceback. The
+hazard is the rest of that callback: a raise skips the title repaint and, on an incident
+edge, the alert, which the anti-flap gate never offers again. That is why `app.tick()`
+wraps `_tick()` and why every injected call in the incident pipeline fails as data.
+
+Title output from `status.build_title` with no heartbeat reading yet (`--ms` is replaced
+by the ping and throughput stats once the first ping lands):
 
 ```
-healthy   None  -> 🟢 Net/DNS: healthy
-incident  dns   -> 🔴 Net/DNS: dns issue
-incident  None  -> 🔴 Net/DNS: unknown issue
+healthy   None           -> --ms 🟢 Net/DNS: healthy
+incident  dns            -> --ms 🔴 Net/DNS: dns issue
+incident  None           -> --ms 🔴 Net/DNS: unknown issue
+healthy   ping_down=True -> --ms 🔴 Net/DNS: ping issue
 ```
 
 **The title is driven by the live flap-gate state, not by the last report.** That is a
 fixed bug, not a detail: recovery produces no report, so a title read off "last
 report" stayed red forever after the network came back.
 
-**The menu.** Three greyed indicator rows (readouts, not actions), then the controls:
+**The menu.** Three greyed indicator rows (readouts, not actions), then the controls.
+The item order below is the direct build's, taken from
+`NetDnsMonitorApp._menu_layout`; the indicator text is an example:
 
 ```
 Active: Wi-Fi — failover is automatic
 ○ Preferred: AX88179B (en6) — unreachable
 ● Backup: Wi-Fi (en0) — reachable
 ─────────────────────────
+Open dashboard
+Open console
+Toggle mini window
+Open last report
+─────────────────────────
+Router ▸       Management Console · Configure... · Start · Stop · List Interfaces · Troubleshoot
+Start at Login
+Test network alert
+Credentials ▸  Set Anthropic API key… · Set Slack webhook URL… · Set SMTP password… · Remove saved credentials
+─────────────────────────
 Switch to backup now
 Switch back to preferred now
 Refresh network status
-─────────────────────────
-Open last report
 ```
 
-`●` is the side currently carrying traffic. Reachability is tri-state and says
-`not probed` for an absent adapter rather than `unreachable`, because an unplugged
-cable is not a dead link.
+The Mac App Store build leaves out Open console, Router, Start at Login and the two
+Switch items, and adds "Allow Claude diagnosis…", "Withdraw Claude permission" and
+"Privacy Policy". See `docs/APP_STORE_SUBMISSION.md`.
 
-The rows are repainted on startup, after any switch, and on "Refresh network status" —
-**not** every tick. A refresh costs a `networksetup` subprocess plus two interface
-probes, which is not an every-30-seconds price to pay on the UI thread.
+`●` marks the service at the head of the service order. That is not always the link
+carrying traffic: see `docs/known-issues.md` for an unplugged adapter at the head.
+Reachability is tri-state and says `not probed` for an absent adapter rather than
+`unreachable`, because an unplugged cable is not a dead link.
+
+The rows are repainted on startup, after any switch, after an incident report, after
+an attempted failback, and on "Refresh network status" — **not** every tick. A refresh
+costs a `networksetup` subprocess plus two interface probes, which is not an
+every-30-seconds price to pay on the run loop.
 
 ---
 
@@ -213,8 +254,8 @@ ICMP ping because ping is widely filtered and rate-limited, which produces false
 **When to use it.** Scripted health checks; confirming a config change probes what you
 meant.
 
-**When *not* to use it.** To measure latency. It returns booleans and deliberately
-throws away timing.
+**When *not* to use it.** To measure latency. It returns `True`, `False` or `None` per
+field and deliberately throws away timing.
 
 ```bash
 python3 -c "
@@ -280,10 +321,14 @@ The nine steps (eight with failover disabled) and what they actually do:
 | `check_configured_dns_servers` | check | `scutil --dns` | no |
 | `check_resolver_overrides` | check | reads `/etc/resolver` | no |
 | `resolve_against_public_resolver` | check | raw UDP to 1.1.1.1 | no |
-| `flush_dns_cache` | **repair** | `dscacheutil` + `killall -HUP` | **partial** |
-| `renew_dhcp_lease` | repair | **nothing — stub** | needs helper |
-| `toggle_network_service` | repair | **nothing — stub** | needs helper |
+| `flush_dns_cache` | **repair** | `dscacheutil` + `killall -HUP` (+ `sudo -n killall -HUP` with the grant) | **partial** without the grant |
+| `renew_dhcp_lease` | repair | `sudo -n ipconfig set <iface> DHCP` with the grant; **nothing** without it | sudoers grant |
+| `toggle_network_service` | repair | **nothing — `NOT_AUTOMATED`** | not automated by design |
 | `switch_to_backup_network` | **repair** | `networksetup -ordernetworkservices` | **needs admin — really attempted** |
+
+The sudoers grant (`privileges.py`, the "Grant elevated permissions" button) writes
+`/etc/sudoers.d/net-dns-monitor`. It has never been exercised live; see
+`docs/known-issues.md`.
 
 ### `log_watcher` — what evidence would a report carry?
 
@@ -293,9 +338,8 @@ lines.
 **When to use it.** Before filing a bug about an empty "Log Excerpts" section.
 
 **When *not* to use it — and this one matters.** Do not raise `log_lookback` past the
-default `5m` without also raising the watcher's subprocess timeout. The timeout is
-hardcoded at 10s and a timeout returns `[]`, which is **indistinguishable from "no
-errors found"**. Measured on this machine:
+default `5m` without checking the read still finishes. `log show` runs with a fixed
+10s timeout (`LOG_SHOW_TIMEOUT_SECONDS`, not configurable). Measured on this machine:
 
 ```
 5m  -> 424 lines   real 2.25s
@@ -303,15 +347,26 @@ errors found"**. Measured on this machine:
 30m -> 3942 lines  real 10.15s     <- at the 10s limit; an earlier run returned 0
 ```
 
-A `30m` lookback is a coin flip that fails *silently*, and the failure mode is a
-confident empty report rather than an error.
+If `log show` times out, exits nonzero or cannot run, the watcher returns one line
+instead of excerpts, for example:
+
+```
+[net-dns-monitor] no log evidence: log show timed out after 10s (lookback 30m)
+```
+
+`[]` means `log show` ran and no line matched. A `30m` lookback no longer fails
+silently. It still sits at the limit, so its report can carry that line instead of log
+evidence.
 
 ```bash
 python3 -c "
-from netdnsmonitor.log_watcher import make_log_watcher
+from netdnsmonitor.log_watcher import NO_EVIDENCE_PREFIX, make_log_watcher
 lines = make_log_watcher(lookback='5m')()
-print('error-like lines:', len(lines))
-for l in lines[:2]: print(l[:110])
+if lines and lines[0].startswith(NO_EVIDENCE_PREFIX):
+    print(lines[0])
+else:
+    print('error-like lines:', len(lines))
+    for l in lines[:2]: print(l[:110])
 "
 ```
 
@@ -351,6 +406,10 @@ print(f'{len(lines)} error-like lines -> {len(found)} learnable domains')
 print(found[:8])
 "
 ```
+
+If the log could not be read, `lines` holds the one `[net-dns-monitor] no log evidence`
+line, which `extract_failed_domains` skips, so the output reads `1 error-like lines -> 0
+learnable domains`. Check `lines[0]` before reading that as a log with nothing to learn.
 
 On this machine the answer is nothing — and **not** because nothing failed:
 
@@ -411,7 +470,7 @@ print('control:', cfg['control_domain'], '| interval:', cfg['domain_learn_interv
 ```
 path: /Users/<you>/Library/Application Support/net-dns-monitor/learned_domains.json
 exists: False
-control: api.anthropic.com | learn interval: 300
+control: api.anthropic.com | interval: 300
 ```
 
 **`domain_learn_interval_seconds` is clamped to at least twice
@@ -433,8 +492,17 @@ print('8.8.8.8 ->', query_public_dns('api.anthropic.com', server='8.8.8.8'))
 "
 ```
 
-**When *not* to use it.** As a resolver. It returns a bool from the response `rcode`
-and parses no answer records — there is no address in the result.
+**When *not* to use it.** As a resolver. It parses no answer records — there is no
+address in the result. It returns one of three values:
+
+| Result | Meaning |
+|---|---|
+| `True` | the resolver replied to this query with `rcode` 0 |
+| `False` | a reply arrived with any other `rcode`, was malformed or did not match the query, or the name has no DNS wire form |
+| `None` | no reply arrived (timeout, no route, UDP port 53 blocked): the name was never tested |
+
+The ladder step reports `None` as "could not reach the public resolver", never as a
+failed lookup.
 
 ### `format_notification` — see the alert without sending it
 
@@ -462,12 +530,19 @@ print('--- zero channels:', make_notifier([])('x'))
 Net/DNS incident: dns
 Started: 2026-08-05T20:31:00+00:00
 Duration: 12s
-Resolved by local repair: False
+Healthy on recheck: False
 Summary: DNS-layer incident detected, unresolved after the ladder ran.
 Repair outcome: flush_dns_cache: partial
 Full report: /tmp/2026-08-05.md
 --- zero channels: []
 ```
+
+`Healthy on recheck` is the recheck result only. It is `True` for an `unclassified`
+incident, which runs no ladder, and for a blip that cleared while every repair returned
+`NEEDS_PRIVILEGE`, so it never claims a repair worked. `format_notification` omits the
+`Repair outcome` line when no repair ran and the `Full report` line when the report
+could not be saved. When Claude answered, it adds a line starting
+`Claude analysis (unverified, derived from local logs):`.
 
 **Note what is absent: `probe_results` and `log_excerpts`.** Those stay in the on-disk
 report, where they are unredacted by design. The notification is a pointer to the
@@ -490,7 +565,7 @@ from netdnsmonitor.report import render_markdown
 probe = {'external_reachable': True, 'dns_ok': False, 'domain_results': {'api.anthropic.com': False}}
 machine = StateMachine(
     prober=lambda: probe,
-    repair_executor=lambda step: 'simulated',
+    repair_executor=lambda step, classification=None: 'simulated',
     escalator=lambda bundle: {'error': 'skipped in demo'},
     log_watcher=lambda: ['mDNSResponder: query for api.anthropic.com timed out'],
     failure_threshold=2, success_threshold=2, sensitive_strings=[],
@@ -507,10 +582,20 @@ tick 1 report: None
 tick 2 flap state: incident
 # Network/DNS Incident Report
 
-**Started:** 2026-08-06T00:39:38.647878+00:00
+**Started:** 2026-09-14T16:24:12.722104+00:00
 **Duration:** 0s
 **Resolved:** False
+
+## Classification
+dns
+
+## Summary
+DNS-layer incident detected at 2026-09-14T16:24:12.
 ```
+
+The state machine calls `repair_executor(step, classification)`. A one-argument fake
+raises `TypeError` there, and every step then reports `failed: step raised TypeError`
+rather than crashing the tick.
 
 **Tick 1 returns `None` on a failing probe, and that is the anti-flap gate working.**
 A report fires only on the healthy→incident edge, after `failure_threshold` consecutive
@@ -561,7 +646,8 @@ unverified.
 **The intended way is the button**, not the shell. Set both service names, leave
 `failover_enabled: false` (manual-only mode), start the app, and click
 **Switch to backup now**. That runs the same guarded path the automatic switch does —
-permutation guard, then read-back verification — and the notification tells you exactly
+permutation guard, a re-list right before the write, then read-back verification — and
+the notification tells you exactly
 which of the outcomes below you got. Click **Switch back to preferred now** to undo.
 
 Do it when the wired adapters have **no link** (unplugged) for a first try: with only
@@ -598,84 +684,205 @@ the right is satisfiable here without prompting. It is a strong prior, not proof
 | Result | Meaning |
 |---|---|
 | order changed, no prompt | the app's switch will work silently — the intended case |
-| a password prompt appeared | it works, but not unattended; the tick will block |
+| a password prompt appeared | not unattended. UNVERIFIED in the app: its `networksetup` calls run with a 5s timeout (`failover.default_run`), so an unanswered prompt should end as `failed:` after 5s |
 | `You must be running as root` | the app reports `NEEDS_PRIVILEGE` and changes nothing |
 | exit 0, order unchanged | the app reports `failed: ... order is unchanged` |
 
 **Do not** run step 2 with a service name omitted. `-ordernetworkservices` rewrites the
 order to exactly the list it is given; a missing name removes that service. The app
-guards this with `is_order_intact`, which refuses any list that is not a permutation of
-the current one — by hand, you are the guard.
+builds this command only in `failover.apply_service_order`. That function refuses any
+list that `service_order.is_order_intact` rejects (not a permutation of the current
+order), and re-lists the order right before the write so a service added during the
+check is not dropped — by hand, you are the guard.
+
+---
+
+## Mac App Store build — `scripts/appstore/`
+
+`docs/APP_STORE_SUBMISSION.md` is the authoritative guide: Apple setup, entitlements,
+metadata, and what the store build cannot do. This section lists the entry points only.
+All three need macOS. The build also needs Xcode and a virtualenv with `py2app`:
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt -c constraints.txt
+.venv/bin/pip install py2app -c constraints.txt
+```
+
+### `build_appstore.py` — build, sign and package
+
+**Purpose.** Build the bundle with py2app, then do what py2app cannot: rebuild the
+launcher stubs against the installed SDK, remove the string `itms-services` from the
+bundled standard library, refuse links to libraries outside the bundle or the OS, set
+`LSMinimumSystemVersion` from the bundled binaries, strip extended attributes, sign
+inside-out, and verify the signature.
+
+**When to use it.** `adhoc` after any change that adds a subprocess or file access, to
+run that change inside the App Sandbox without an Apple account. `release` only to
+produce a package for upload.
+
+**When *not* to use it.** To run the direct-download build; that is `scripts/start.sh`.
+Each run deletes `build/appstore/<mode>/` first. `release` has never run with real
+certificates.
+
+| Mode | Signs with | Output | Needs |
+|---|---|---|---|
+| `adhoc` | the ad-hoc identity `-`, with the real sandbox entitlements | `build/appstore/adhoc/dist/Net-DNS-Monitor.app` | Xcode |
+| `release` | your Apple Distribution identity, with the provisioning profile embedded | `build/appstore/release/Net-DNS-Monitor-<version>-<build>.pkg` | certificates, profile, `--privacy-policy-url` |
+
+Options for both modes: `--bundle-id` (default `com.net-dns-monitor.app`), `--version`
+(default `1.0`), `--build-number` (default `1`), `--copyright`,
+`--declare-exempt-encryption`, `--privacy-policy-url`, and `--icon` (a designed `.icns`;
+without it the `make_icon.py` placeholder is used, and a `release` run says so in a
+warning). `adhoc` adds `--with-probe`.
+`release` requires `--team-id`, `--app-identity`, `--installer-identity` and
+`--profile`. The full `release` command is in `docs/APP_STORE_SUBMISSION.md` §4.2.
+
+```bash
+.venv/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
+```
+
+The build stops if a `release` run has no `https://` privacy policy URL or the URL still
+holds a placeholder, if the profile belongs to a different app ID, if a `release` bundle
+contains the probe, if `itms-services` survives anywhere, if any binary links a
+library outside the bundle, `/System/Library/` or `/usr/lib/`, if the bundle's
+`Info.plist` lacks `CFBundleIdentifier`, either version string,
+`LSApplicationCategoryType`, `LSMinimumSystemVersion` or
+`NSLocalNetworkUsageDescription`, or if `--icon` names a file that is not `.icns` or
+lacks the 512x512 elements (`ic09`, `ic10`).
+
+### `make_icon.py` — placeholder icon
+
+**Purpose.** Draw the app icon with AppKit and write an `.icns` with every size App
+Store Connect needs, including 512x512 and 512x512@2x. `build_appstore.py` runs it;
+run it alone only to look at the icon.
+
+**When *not* to use it.** As the release icon. It is a placeholder; replace it with a
+designed icon before the first public release.
+
+```bash
+.venv/bin/python scripts/appstore/make_icon.py /tmp/AppIcon.icns
+```
+
+It prints the output path. With any other argument count, or a name that does not end
+in `.icns`, it prints its usage and exits 2.
+
+### `sandbox_probe` — what works inside the sandbox
+
+**Purpose.** Measure, from inside the App Sandbox, which of the app's operations work:
+a container write, reading the real `~/.config` file, a TCP connect, `getaddrinfo`, a
+UDP DNS query, an HTTPS request, an interface-bound connect, a UDP bind, a Keychain
+round trip, and a set of read-only commands (`ping`, `networksetup
+-listnetworkserviceorder`, `scutil`, `netstat`, `ifconfig`, `route`, `log show`).
+
+**When to use it.** After `build_appstore.py adhoc --with-probe`, and after any change
+that adds a subprocess or file access. Update the table in
+`docs/APP_STORE_SUBMISSION.md` §1 from its output.
+
+**When *not* to use it.** Outside the ad-hoc bundle. The sandbox applies from the
+bundle executable's entitlements, so `scripts/appstore/sandbox_probe.py` run with plain
+Python is not sandboxed and says nothing about the store build. The build refuses to
+package a `release` bundle that contains the probe.
+
+It changes no network setting. It adds one Keychain item and deletes it again, and
+writes `sandbox-probe.json` to `~/Library/Application Support/net-dns-monitor/`, which
+inside the sandbox is the container.
+
+```bash
+build/appstore/adhoc/dist/Net-DNS-Monitor.app/Contents/MacOS/sandbox_probe
+```
+
+It prints JSON with an `environment` object (`sandboxed`, `distribution`, `home`,
+`python`) and a `checks` object. A check that raised records `"ok": false` and the
+exception class name.
+
+---
 
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 1079 passed
+python3 -m pytest -q            # 1884 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
 
 `pytest.ini` sets `testpaths = tests`, so a bare `python3 -m pytest` from the root is
-the whole suite. Current distribution:
+the whole suite.
+
+The coordinator regenerates this per-file distribution and its total with the command
+in `docs/TESTING.md`. Do not edit the numbers by hand.
 
 | Tests | File |
 |---|---|
-| 63 | `test_failover.py` |
-| 54 | `test_status.py` |
-| 53 | `test_privileges.py` |
-| 45 | `test_system_log.py` |
-| 42 | `test_settings_window.py` |
-| 41 | `test_cli_console.py` |
-| 38 | `test_dashboard.py` |
-| 38 | `test_console.py` |
+| 200 | `test_config.py` |
+| 104 | `test_failover.py` |
+| 82 | `test_settings_window.py` |
+| 69 | `test_privileges.py` |
+| 58 | `test_status.py` |
+| 54 | `test_app_appstore_wiring.py` |
+| 52 | `test_app_dashboard_wiring.py` |
+| 48 | `test_peer_net.py` |
+| 47 | `test_cli_console.py` |
+| 47 | `test_console.py` |
+| 46 | `test_system_log.py` |
+| 45 | `test_dashboard.py` |
+| 42 | `test_cli.py` |
+| 41 | `test_app_failover_wiring.py` |
+| 40 | `test_router.py` |
+| 39 | `test_peers.py` |
+| 37 | `test_localize.py` |
+| 37 | `test_router_window.py` |
 | 35 | `test_app_log_wiring.py` |
-| 33 | `test_app_dashboard_wiring.py` |
-| 31 | `test_peer_net.py` |
-| 30 | `test_app_failover_wiring.py` |
-| 29 | `test_peers.py` |
-| 25 | `test_repair_executor.py` |
-| 25 | `test_localize.py` |
-| 25 | `test_failover_policy.py` |
-| 25 | `test_domain_learner.py` |
-| 21 | `test_net_stats.py` |
-| 20 | `test_throughput.py` |
-| 20 | `test_forensic_log.py` |
-| 20 | `test_config.py` |
-| 19 | `test_ping_monitor.py` |
-| 19 | `test_history.py` |
+| 34 | `test_repair_executor.py` |
+| 33 | `test_domain_learner.py` |
+| 32 | `test_throughput.py` |
+| 33 | `test_appstore_build.py` |
+| 27 | `test_forensic_log.py` |
+| 26 | `test_failover_policy.py` |
+| 25 | `test_app_router_wiring.py` |
+| 25 | `test_net_stats.py` |
+| 23 | `test_notifications.py` |
+| 21 | `test_graphs.py` |
+| 21 | `test_history.py` |
+| 21 | `test_ping_monitor.py` |
+| 20 | `test_app_privilege_wiring.py` |
+| 19 | `test_app_settings_wiring.py` |
+| 18 | `test_app_peer_wiring.py` |
+| 18 | `test_state_machine.py` |
+| 17 | `test_anthropic_escalator.py` |
+| 17 | `test_mini_window.py` |
 | 17 | `test_service_order.py` |
-| 17 | `test_app_privilege_wiring.py` |
-| 16 | `test_stall_log.py` |
-| 16 | `test_notifications.py` |
-| 16 | `test_graphs.py` |
 | 16 | `test_app_ping_wiring.py` |
+| 16 | `test_stall_log.py` |
+| 15 | `test_console_window.py` |
 | 15 | `test_dock_icon.py` |
-| 15 | `test_app_peer_wiring.py` |
+| 15 | `test_router_scripts.py` |
 | 14 | `test_alert.py` |
-| 13 | `test_resolution_prober.py` |
-| 13 | `test_console_window.py` |
-| 13 | `test_app_notification_wiring.py` |
+| 14 | `test_app_notification_wiring.py` |
+| 14 | `test_credentials.py` |
+| 14 | `test_interface_probe.py` |
+| 14 | `test_resolution_prober.py` |
+| 13 | `test_app_console_wiring.py` |
+| 13 | `test_escalation.py` |
+| 13 | `test_prober.py` |
 | 12 | `test_ping.py` |
-| 12 | `test_app_console_wiring.py` |
+| 11 | `test_flap_gate.py` |
 | 11 | `test_query_log.py` |
-| 10 | `test_interface_probe.py` |
-| 10 | `test_anthropic_escalator.py` |
-| 9 | `test_prober.py` |
-| 9 | `test_dns_query.py` |
+| 10 | `test_ai_consent.py` |
+| 10 | `test_distribution.py` |
+| 10 | `test_dns_query.py` |
+| 10 | `test_log_watcher.py` |
 | 9 | `test_app_status_wiring.py` |
-| 8 | `test_log_watcher.py` |
-| 8 | `test_ladder.py` |
-| 8 | `test_flap_gate.py` |
-| 7 | `test_state_machine.py` |
+| 9 | `test_ladder.py` |
+| 7 | `test_report.py` |
 | 7 | `test_report_storage.py` |
-| 7 | `test_escalation.py` |
-| 6 | `test_resolution_log.py` |
+| 7 | `test_router_configs.py` |
 | 6 | `test_classifier.py` |
-| 5 | `test_report.py` |
+| 6 | `test_resolution_log.py` |
 | 3 | `test_app_resolution_wiring.py` |
-| **1079** | **total** |
+| **1884** | **total** |
 
-**What the suite does not cover.** `default_resolve` and `default_connect` are never
+**What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,
 which is what keeps the suite offline and fast, and also means a change to the real
 resolver path is only caught by the one-shot invocations above. The `rumps` run loop
@@ -705,8 +912,10 @@ currently broken.
 The tools are honest; the risk is in what a reader concludes. Five things that
 constrain everything above.
 
-**1. "Resolved" means the recheck passed, not that this app fixed it.** The one real
-repair is a partial DNS-cache flush. If a transient outage ended on its own between
+**1. "Resolved" means the recheck passed, not that this app fixed it.** Without the
+sudoers grant, the one repair that runs is a partial DNS-cache flush. The notification
+says `Healthy on recheck`, not "resolved by local repair", for the same reason. If a
+transient outage ended on its own between
 the probe and the recheck, the report says resolved — correctly, and with no claim of
 credit.
 
@@ -719,12 +928,13 @@ rather than an error.
 healthy→incident edge, so incident→healthy is silent by construction. The menu bar
 icon is the recovery signal.
 
-**4. An empty "Log Excerpts" section is ambiguous, and so is an empty learned-domain
-list.** `log show` failing, timing out, or genuinely finding nothing are the same `[]`
-to every caller. See the `log_watcher` timing table — at the default `5m` that is not a
-real risk; raise `log_lookback` and it becomes one. The learner's `[]` is ambiguous for
-a second, independent reason: macOS masks hostnames in the log by default, so the names
-are unreadable rather than absent.
+**4. Read the "Log Excerpts" section before trusting it, and treat an empty
+learned-domain list as ambiguous.** An empty section means `log show` ran and no line
+matched. If `log show` failed or timed out, the section holds one line starting
+`[net-dns-monitor] no log evidence:` instead. See the `log_watcher` timing table — at
+the default `5m` a timeout is not a real risk; raise `log_lookback` and it becomes one.
+The learner's `[]` is ambiguous for an independent reason: macOS masks hostnames in the
+log by default, so the names are unreadable rather than absent.
 
 **4a. Reports are large, and "hand the `.md` to IT" needs that caveat.** Real reports on
 this machine run **282 KB to 3.8 MB** of Markdown, because `log_excerpts` carries every
@@ -737,10 +947,11 @@ the whole thing.
 du -h ~/Library/Application\ Support/net-dns-monitor/reports/*.md | sort -h | tail -3
 ```
 
-**5. Two of the three repairs do nothing at all.** `renew_dhcp_lease` and
-`toggle_network_service` return `NEEDS_PRIVILEGE` strings. A sandboxed menu-bar app
-does not have those rights; a real fix needs an `SMAppService` privileged helper that
-does not exist yet. A ladder that ran to completion is not a machine that was repaired.
+**5. Without the grant, two of the three ladder repairs do nothing at all.**
+`renew_dhcp_lease` returns `NEEDS_PRIVILEGE` until the sudoers grant in
+`privileges.py` is installed, and that grant has never been exercised live.
+`toggle_network_service` returns `NOT_AUTOMATED` whatever is granted. A ladder that ran
+to completion is not a machine that was repaired.
 
 **No live order, no live claim.** Where this repo is unverified it says so — see
 "Honest scope" in `README.md`.

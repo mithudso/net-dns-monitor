@@ -8,19 +8,39 @@ command from wedging the menu bar app, and a fake runner cannot prove any of
 them.
 """
 
+import contextlib
 import os
+import signal
 import threading
 import time
 
+from netdnsmonitor import console
 from netdnsmonitor.console import (
     CLEAR,
     CommandResult,
     ConsoleState,
+    child_env,
     format_result,
     handle,
+    kill_running,
     run_command,
     truncate,
 )
+
+
+def group_is_gone(pgid: int, within: float = 2.0) -> bool:
+    """Poll until no process is left in the group. SIGKILL is delivered at
+    once, but the orphans are reaped by launchd, not by this process.
+    """
+    deadline = time.monotonic() + within
+    while True:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
 
 
 def recording_runner(result=None):
@@ -211,6 +231,29 @@ def test_cd_to_a_missing_directory_reports_and_leaves_cwd_alone():
     assert state.cwd == "/tmp"
 
 
+def test_cd_accepts_a_quoted_or_escaped_path(tmp_path):
+    """HELP says quoting works. `cd "a b"` used to look for a directory whose
+    name included the quotes.
+    """
+    spaced = tmp_path / "a b"
+    spaced.mkdir()
+    for line in (f'cd "{spaced}"', f"cd '{spaced}'", f"cd {tmp_path}/a\\ b"):
+        text, state = handle(line, ConsoleState(cwd="/tmp"), recording_runner())
+        assert state.cwd == str(spaced), f"{line!r} -> {text}"
+
+
+def test_cd_expands_environment_variables(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _, state = handle("cd $HOME", ConsoleState(cwd="/tmp"), recording_runner())
+    assert state.cwd == str(tmp_path)
+
+
+def test_cd_with_an_unbalanced_quote_reports_rather_than_raising():
+    text, state = handle('cd "unterminated', ConsoleState(cwd="/tmp"), recording_runner())
+    assert "no such directory" in text
+    assert state.cwd == "/tmp"
+
+
 def test_a_chained_cd_says_it_cannot_chain_rather_than_blaming_the_directory(tmp_path):
     """`cd /tmp && ls` is a normal thing to type. Reporting it as
     `no such directory: /tmp && ls` reads as "that directory is missing", which
@@ -365,16 +408,98 @@ def test_a_command_that_never_exits_is_killed_at_the_timeout(tmp_path):
 def test_the_whole_process_group_dies_not_just_the_shell(tmp_path):
     """`subprocess.run(timeout=...)` under `shell=True` kills /bin/sh and leaves
     the child running, detached and invisible -- one orphan per attempt. The
-    marker file is written by the grandchild *after* the timeout would have
-    fired, so its absence is the proof that the group was killed.
+    shell prints its own pid, which is the group id, so the proof is that the
+    group is empty afterwards. The grandchild's output is redirected so it does
+    not hold the pipes: otherwise the background-job kill would empty the group
+    too, and this would pass even with a timeout that killed only the shell.
     """
-    marker = tmp_path / "survivor"
     result = run_command(
-        f"sh -c 'sleep 1.5; touch {marker}' & wait", cwd=str(tmp_path), timeout=1.0
+        "echo $$; sh -c 'sleep 30' > /dev/null 2>&1 & wait", cwd=str(tmp_path), timeout=0.5
     )
     assert result.timed_out is True
-    time.sleep(2.5)
-    assert not marker.exists(), "a child outlived the timeout: process group not killed"
+    pgid = int(result.stdout.split()[0])
+    assert group_is_gone(pgid), "a child outlived the timeout: process group not killed"
+
+
+def test_a_background_job_does_not_outlive_the_command(tmp_path):
+    """`ping 1.1.1.1 &` exits the shell at once, so the timeout never fires,
+    and the orphan holds the output pipes open. Without the group kill the
+    readers block on it: a leaked process and two threads per line.
+    """
+    started = time.monotonic()
+    result = run_command("echo $$; sleep 30 &", cwd=str(tmp_path), timeout=20)
+    assert time.monotonic() - started < 3
+    assert result.timed_out is False
+    assert group_is_gone(int(result.stdout.split()[0]))
+
+
+def test_a_redirected_background_job_is_left_running(tmp_path):
+    """The group kill is for jobs that hold the console's pipes. One the user
+    detached from them is a deliberate choice and is not second-guessed.
+    """
+    result = run_command("echo $$; sleep 30 > /dev/null 2>&1 &", cwd=str(tmp_path), timeout=20)
+    pgid = int(result.stdout.split()[0])
+    try:
+        os.killpg(pgid, 0)  # raises ProcessLookupError if it was killed
+    finally:
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, signal.SIGKILL)
+
+
+def test_kill_running_ends_a_command_in_flight(tmp_path):
+    """Registered for app quit: `start_new_session` detaches each command from
+    the app's group, so nothing else would end it.
+    """
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(run_command("sleep 30", str(tmp_path), 60))
+    )
+    worker.start()
+    deadline = time.monotonic() + 2
+    while not console._LIVE and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert console._LIVE, "the command never registered as running"
+    pgid = next(iter(console._LIVE))
+
+    started = time.monotonic()
+    kill_running()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert time.monotonic() - started < 2
+    assert results[0].returncode == -signal.SIGKILL
+    assert group_is_gone(pgid)
+    assert not console._LIVE, "a finished command must not stay registered"
+
+
+def test_kill_running_with_nothing_running_is_harmless():
+    kill_running()
+
+
+# --- child environment ------------------------------------------------------
+
+
+def test_the_built_app_does_not_hand_its_python_home_to_commands():
+    """py2app's launcher sets PYTHONHOME to the bundle; inherited, it breaks the
+    user's own `python3` with "No module named encodings".
+    """
+    environ = {
+        "PYTHONHOME": "/Applications/Net-DNS-Monitor.app/Contents/Resources",
+        "PYTHONPATH": "/bundle/lib",
+        "RESOURCEPATH": "/bundle",
+        "ARGVZERO": "/bundle/MacOS/app",
+        "EXECUTABLEPATH": "/bundle/MacOS/app",
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/Users/someone",
+    }
+    assert child_env(environ, "macosx_app") == {"PATH": "/usr/bin:/bin", "HOME": "/Users/someone"}
+
+
+def test_running_from_source_passes_the_environment_through_unchanged():
+    environ = {"PYTHONPATH": "/my/project", "PATH": "/usr/bin"}
+    env = child_env(environ, None)
+    assert env == environ
+    assert env is not environ
 
 
 def test_output_survives_a_child_that_outlives_the_shell(tmp_path):

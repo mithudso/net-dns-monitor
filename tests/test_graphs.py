@@ -25,6 +25,8 @@ needs_display = pytest.mark.skipif(
 FLAT = [60.0] * 60
 SPIKY = [60.0 if index % 2 else 300.0 for index in range(60)]
 WITH_GAP = [60.0] * 20 + [None] * 10 + [60.0] * 30
+# 50% loss: every measured point sits between two failures.
+ALTERNATING = [60.0 if index % 2 == 0 else None for index in range(60)]
 
 
 def opaque_fraction(image, stride=3):
@@ -201,6 +203,67 @@ def test_the_throughput_formatter_is_used_for_the_axis():
     """A throughput axis labelled in raw bits per second would read 1200000."""
     assert format_bits(1_200_000) == "1.2M"
     render_series_graph([1.2e6] * 20, kind="download", format_value=format_bits)
+
+
+def test_sub_kilobit_throughput_is_labelled_in_bits_not_zero():
+    """format_rate rounds anything under 1K to "0" because the menu bar has no
+    room for "587". A graph axis does, and an idle link reading 0, 0, 0, 0 up
+    its whole axis while a real trickle is flowing claims nothing is moving.
+    """
+    assert format_bits(586.7) == "587"
+    assert format_bits(0) == "0"
+    assert format_bits(None) == ""
+    assert format_bits(300_000) == "300K"
+
+
+# --- the headline value ------------------------------------------------------
+
+
+def test_the_headline_is_the_latest_sample_not_the_last_measured_one():
+    """Ten failed pings after fifty good ones used to headline "61ms" -- the
+    last *measured* value -- while the stats pane beside it said "no reply".
+    """
+    assert latest_label([61.0] * 50 + [None] * 10, unit="ms") == "--"
+    assert latest_label([61.0, None]) == "--"
+
+
+def test_the_headline_formats_a_measured_latest_sample():
+    assert latest_label([None, 61.4], unit="ms") == "61ms"
+    assert latest_label([586.7], formatter=format_bits) == "587"
+
+
+def test_the_headline_of_an_empty_series_is_a_placeholder():
+    assert latest_label([]) == "--"
+
+
+def line_colour_pixels(image, stride=2):
+    """Opaque pixels in the blue latency line's colour.
+
+    Blue well above red excludes the grey text and grid and the faint red outage
+    markers, so this counts the series itself and nothing drawn around it.
+    """
+    rep = AppKit.NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
+    w, h = int(rep.pixelsWide()), int(rep.pixelsHigh())
+    count = 0
+    for x in range(0, w, stride):
+        for y in range(0, h, stride):
+            c = rep.colorAtX_y_(x, y)
+            if c.alphaComponent() > 0.5 and c.blueComponent() - c.redComponent() > 0.4:
+                count += 1
+    return count
+
+
+def test_an_isolated_measured_point_is_still_drawn():
+    """A subpath of one moveToPoint strokes nothing, so alternating 50% loss --
+    every good sample flanked by two failures -- drew no line at all and read as
+    a total outage. Each isolated point gets a dot instead.
+    """
+    # The helper must see an ordinary line, or a zero below proves nothing.
+    # Measured at stride 2: flat 1020, alternating 206, single sample 7; the last
+    # two were 0 before the dots.
+    assert line_colour_pixels(render_series_graph(FLAT, kind="latency")) > 0
+    assert line_colour_pixels(render_series_graph(ALTERNATING, kind="latency")) > 0
+    assert line_colour_pixels(render_series_graph([61.0], kind="latency")) > 0
 
 
 def test_each_kind_gets_its_own_colour():

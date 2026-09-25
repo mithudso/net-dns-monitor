@@ -20,7 +20,8 @@
 # Why launchd owns the process, and nothing else may start it
 #
 # All start/stop/restart goes through launchctl. Launching the bundle any other
-# way -- `open -n Net-DNS-Monitor.app`, or the project's own scripts/start.sh --
+# way -- `open -n Net-DNS-Monitor.app`, or a scripts/start.sh run from before
+# this agent was installed (start.sh refuses to launch while it is loaded) --
 # creates a process launchd does not track. `launchctl list` then shows no PID,
 # this script concludes the app is down, launches its own copy, and the user
 # gets two menu bar icons. `status` and `check` therefore also look for
@@ -70,12 +71,32 @@ THROTTLE_SECONDS=15
 # How long past the throttle window to keep waiting before calling it a failure.
 RESPAWN_GRACE_SECONDS=10
 
-# The py2app build output the bundle is installed *from*. It lives inside a git
-# worktree under .claude/worktrees/, which is disposable by convention -- which
-# is exactly why `install` copies the bundle out to ~/Applications instead of
-# pointing launchd straight at it. Only `install` and `update` read this path,
-# and both fail with a clear message if the worktree is gone.
-SOURCE_BUNDLE="${NDM_SOURCE_BUNDLE:-$HOME/dev/net-dns-monitor/.claude/worktrees/dns-resolution-monitor/dist/Net-DNS-Monitor.app}"
+# The py2app build output the bundle is installed *from*. It usually lives in a
+# checkout's dist/, and a checkout (a worktree especially) can be removed at any
+# time -- which is exactly why `install` copies the bundle out to ~/Applications
+# instead of pointing launchd straight at it. Only `install` and `update` read
+# this path, and both fail with a clear message if it is gone.
+#
+# Resolved in this order:
+#   1. NDM_SOURCE_BUNDLE, when set.
+#   2. The path the last successful install or update copied from, recorded in
+#      $SOURCE_BUNDLE_RECORD, while that directory still exists. scripts/install.sh
+#      copies this script to ~/.local/bin, where the script's own location says
+#      nothing about where the build is: without the record, `update` there looked
+#      for ~/.local/dist and died, and `install` kept the old bundle.
+#   3. The dist/ build of the checkout this script lives in.
+SOURCE_BUNDLE_RECORD="$SUPPORT_DIR/source-bundle"
+SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+if [ -n "${NDM_SOURCE_BUNDLE:-}" ]; then
+    SOURCE_BUNDLE="$NDM_SOURCE_BUNDLE"
+    SOURCE_BUNDLE_ORIGIN="NDM_SOURCE_BUNDLE"
+elif [ -s "$SOURCE_BUNDLE_RECORD" ] && [ -d "$(head -n 1 "$SOURCE_BUNDLE_RECORD")" ]; then
+    SOURCE_BUNDLE="$(head -n 1 "$SOURCE_BUNDLE_RECORD")"
+    SOURCE_BUNDLE_ORIGIN="recorded by the last install/update in $SOURCE_BUNDLE_RECORD"
+else
+    SOURCE_BUNDLE="$SCRIPT_REPO/dist/Net-DNS-Monitor.app"
+    SOURCE_BUNDLE_ORIGIN="the checkout this script is in"
+fi
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -246,26 +267,69 @@ reload_agent() {
     is_loaded || die "could not bootstrap $LABEL (try: launchctl bootstrap gui/$(id -u) '$PLIST')"
 }
 
+# Replace the installed bundle with $SOURCE_BUNDLE as a whole-bundle swap.
+#
+# Not `ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"` onto the existing bundle: ditto
+# merges into a destination that exists (checked: a file present only in the
+# destination survives the copy). A file the new build no longer contains -- a
+# deleted or renamed module, a dropped dependency -- stays behind in the
+# installed copy, where the frozen app can still import it, and where it is not
+# covered by the bundle's signature. Copying into a sibling first and swapping
+# also means a copy that fails part way leaves the installed bundle untouched
+# rather than half old and half new.
+#
+# ditto rather than cp -R for the copy itself: it preserves the bundle's
+# resource forks, symlinks and ad-hoc code signature, which cp -R can invalidate.
+replace_installed_bundle() {
+    local staged="$INSTALLED_APP.new" previous="$INSTALLED_APP.old"
+    rm -rf "$staged" "$previous"
+    if ! ditto "$SOURCE_BUNDLE" "$staged"; then
+        rm -rf "$staged"
+        die "copying $SOURCE_BUNDLE failed; $INSTALLED_APP was not changed"
+    fi
+    if [ ! -x "$staged/Contents/MacOS/$EXEC_NAME" ]; then
+        rm -rf "$staged"
+        die "$SOURCE_BUNDLE has no executable at Contents/MacOS/$EXEC_NAME; $INSTALLED_APP was not changed"
+    fi
+    if [ -e "$INSTALLED_APP" ]; then
+        mv "$INSTALLED_APP" "$previous" \
+            || die "could not move the old bundle aside; $INSTALLED_APP was not changed (new copy left at $staged)"
+    fi
+    if ! mv "$staged" "$INSTALLED_APP"; then
+        # Put the old bundle back so launchd still has something to run.
+        if [ -e "$previous" ]; then
+            mv "$previous" "$INSTALLED_APP" || true
+        fi
+        die "could not move the new bundle into place at $INSTALLED_APP"
+    fi
+    rm -rf "$previous"
+}
+
+# Remember where the bundle just installed came from, as an absolute path, so
+# a later `update` from a copy of this script outside any checkout finds it.
+record_source_bundle() {
+    mkdir -p "$SUPPORT_DIR"
+    printf '%s\n' "$(cd "$SOURCE_BUNDLE" && pwd)" > "$SOURCE_BUNDLE_RECORD"
+}
+
 # --- commands --------------------------------------------------------------
 
 cmd_install() {
     mkdir -p "$SUPPORT_DIR" "$HOME/Applications"
 
     if [ -d "$SOURCE_BUNDLE" ]; then
-        say "Installing bundle from build output:"
+        say "Installing bundle from build output ($SOURCE_BUNDLE_ORIGIN):"
         say "  $SOURCE_BUNDLE"
         say "  -> $INSTALLED_APP"
-        # ditto, not cp -R: it preserves the bundle's resource forks, symlinks
-        # and ad-hoc code signature. A cp -R copy can invalidate the signature.
-        ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"
+        replace_installed_bundle
+        record_source_bundle
     elif [ -x "$EXEC" ]; then
-        warn "note: build output not found at $SOURCE_BUNDLE"
+        warn "note: build output not found at $SOURCE_BUNDLE ($SOURCE_BUNDLE_ORIGIN)"
         warn "      keeping the already-installed bundle at $INSTALLED_APP"
     else
-        die "no bundle to install. Build it first:
-    cd ~/dev/net-dns-monitor/.claude/worktrees/dns-resolution-monitor
+        die "no bundle to install. Build it first, from the checkout you want to run:
     ./scripts/start.sh      # builds dist/Net-DNS-Monitor.app
-  then re-run: $0 install"
+  then re-run: NDM_SOURCE_BUNDLE=\"\$PWD/dist/Net-DNS-Monitor.app\" $0 install"
     fi
 
     [ -x "$EXEC" ] || die "installed bundle has no executable at $EXEC"
@@ -385,11 +449,13 @@ cmd_check() {
 }
 
 cmd_update() {
-    [ -d "$SOURCE_BUNDLE" ] || die "build output not found: $SOURCE_BUNDLE
-  Nothing to update from. If the git worktree was removed, rebuild the bundle
-  and either restore that path or set NDM_SOURCE_BUNDLE to the new one."
-    say "Updating $INSTALLED_APP from $SOURCE_BUNDLE"
-    ditto "$SOURCE_BUNDLE" "$INSTALLED_APP"
+    [ -d "$SOURCE_BUNDLE" ] || die "build output not found: $SOURCE_BUNDLE ($SOURCE_BUNDLE_ORIGIN)
+  Nothing to update from. If the checkout it was built in was removed, rebuild
+  the bundle and set NDM_SOURCE_BUNDLE to the new one; a successful update
+  records that path for next time."
+    say "Updating $INSTALLED_APP from $SOURCE_BUNDLE ($SOURCE_BUNDLE_ORIGIN)"
+    replace_installed_bundle
+    record_source_bundle
     audit "update: re-copied bundle from $SOURCE_BUNDLE"
     cmd_restart
 }
@@ -522,7 +588,7 @@ cmd_uninstall() {
 }
 
 usage() {
-    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 

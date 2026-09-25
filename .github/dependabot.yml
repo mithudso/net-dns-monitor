@@ -1,0 +1,15 @@
+# Dependency update PRs. Every Python dependency is pinned exactly (requirements*.txt
+# plus constraints.txt), so these PRs are the only way versions move. Review
+# each one against CLAUDE.md's dependency rule before merging, and regenerate
+# constraints.txt in the same PR.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

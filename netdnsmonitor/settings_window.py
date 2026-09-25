@@ -2,23 +2,28 @@
 
 **Saving rewrites the live config, and that loses its comments.** The repo's
 tracked default `config.yaml` carries ~100 lines of them, and they are not
-decoration -- the note explaining that an empty `domains` list latches a
-permanent false incident is the kind of thing someone needs to read again a year
-later. YAML round-tripping with comments intact needs ruamel.yaml, a dependency
-this project does not have and would have to freeze into the bundle.
+decoration -- the note explaining why `failover_probe_timeout_seconds` has to
+grow with the target list is the kind of thing someone needs to read again a
+year later. YAML round-tripping with comments intact needs ruamel.yaml, a
+dependency this project does not have and would have to freeze into the bundle.
 
 So instead:
 
-* Every save first copies the current file to `config.yaml.bak-<epoch>`. The
-  timestamp is the important part. A single fixed `.bak` would be overwritten by
-  the second save with the already-stripped version, and the only commented copy
-  would be gone -- exactly when someone is clicking Save repeatedly.
-* The written file carries a header pointing back at the repo's own tracked
-  `config.yaml`, which still has every explanation. That is a *different* file
-  from the one being overwritten: this window writes the per-machine copy at
-  `~/.config/net-dns-monitor/config.yaml`. Since both are now called config.yaml,
-  the header names each by full path rather than by filename alone.
+* Every save first copies the current file, byte for byte, to
+  `config.yaml.bak-<epoch>` (with `-1`, `-2`, ... appended if that name is
+  taken). A single fixed `.bak` would be overwritten by the second save with the
+  already-stripped version, and the only commented copy would be gone -- exactly
+  when someone is clicking Save repeatedly. A bare one-second timestamp fails the
+  same way for two saves inside one second.
+* The written file carries a header pointing back at the default `config.yaml`
+  that ships with the app, which still has every explanation. That is a
+  *different* file from the one being overwritten: this window writes the
+  per-machine copy at `~/.config/net-dns-monitor/config.yaml`, which install.sh
+  first copied from it. The header names the backup it took, and says nothing
+  about a backup when none could be taken.
 * The window says so before you click, not after.
+* Nothing is written unless the whole resulting config passes the same checks
+  `load_config` applies. A file it rejects would leave the app unable to start.
 
 **Most changes need a restart**, because they are read once in `App.__init__` --
 timer intervals, alert thresholds, the peer windows. The window says which, since
@@ -27,13 +32,21 @@ concludes the setting does not work.
 """
 
 import os
+import shutil
 import time
 import traceback
 from typing import Callable, Optional
 
 import yaml
 
-from netdnsmonitor.config import INTERVAL_KEYS, TIMEOUT_KEYS
+from netdnsmonitor.config import (
+    DEFAULT_CONFIG,
+    PATH_KEYS,
+    ConfigError,
+    normalize_config,
+    target_problem,
+    validate_config,
+)
 
 # (key, label, kind). Grouped in display order. `kind` drives parsing, and a
 # wrong kind is the difference between 5 and "5" reaching bind() or a timer.
@@ -52,8 +65,8 @@ GROUPS = [
     (
         "Incident detection",
         [
-            ("external_targets", "Internet targets (host:port, comma separated)", "targets"),
-            ("internal_targets", "LAN targets (host:port, comma separated)", "targets"),
+            ("external_targets", "Internet targets (IP:port, comma separated)", "targets"),
+            ("internal_targets", "LAN targets (IP:port, comma separated)", "targets"),
             ("poll_interval_seconds", "Probe every (seconds)", "int"),
             ("failure_threshold", "Incident after N failures", "int"),
             ("success_threshold", "Clear after N successes", "int"),
@@ -128,7 +141,7 @@ GROUPS = [
                 # would save ["192.168.68.1:53"] -- strings, not pairs -- and the
                 # prober would silently probe nothing.
                 "failover_probe_targets",
-                "Reachability probe targets (host:port, comma separated)",
+                "Reachability probe targets (IP:port, comma separated)",
                 "targets",
             ),
             ("failover_probe_timeout_seconds", "Reachability probe budget (0 = default)", "float"),
@@ -142,6 +155,8 @@ GROUPS = [
     (
         "Domain learning",
         [
+            # "float", not "int": the default is 2.0, and int(float("0.5")) is 0 --
+            # a timeout that makes every connect fail at once.
             ("probe_timeout_seconds", "Probe timeout (seconds)", "float"),
             ("control_domain", "Control domain (known-good name)", "str"),
             ("learn_domains_from_logs", "Learn domains from the log", "bool"),
@@ -181,11 +196,13 @@ GROUPS = [
         ],
     ),
     (
-        "Router",
+        # The in-app router conflicts with the standalone router/ stack: both
+        # rewrite pf NAT rules and run DHCP on the LAN interface.
+        "Router (not with the router/ stack)",
         [
-            ("router_enabled", "Run the router", "bool"),
-            ("wan_interface", "WAN interface", "str"),
-            ("lan_interface", "LAN interface", "str"),
+            ("router_enabled", "Enable Router menu (bootpd; admin)", "bool"),
+            ("wan_interface", "Upstream interface (e.g. en3)", "str"),
+            ("lan_interface", "LAN interface (e.g. en0)", "str"),
             ("lan_ip", "LAN address", "str"),
             ("lan_netmask", "LAN netmask", "str"),
             ("dhcp_start", "DHCP range start", "str"),
@@ -217,6 +234,10 @@ NEEDS_RESTART = {
     "resolution_interval_seconds",
     "ui_refresh_seconds",
     "history_max_samples",
+    # Turning discovery off at runtime only makes peer_tick return early. The
+    # socket and its reader keep answering PROBE with this machine's hostname and
+    # health until a restart closes them.
+    "peer_discovery_enabled",
     "peer_port",
     "peer_announce_seconds",
     "peer_current_seconds",
@@ -265,8 +286,9 @@ NEEDS_RESTART = {
     "failover_speedtest_port",
     "failover_speedtest_timeout_seconds",
     "failover_speedtest_max_bytes",
-    # The Router is built once in App.__init__ from these. The router window
-    # pushes its own edits into the live object; this window does not.
+    # The Router is built once in App.__init__ but never started there: only
+    # Router > Start or the router window starts it. That object is built from
+    # these keys at launch, so a change here needs a restart to reach it.
     "router_enabled",
     "wan_interface",
     "lan_interface",
@@ -277,17 +299,17 @@ NEEDS_RESTART = {
 }
 
 FIELDS = [(key, label, kind) for _group, fields in GROUPS for key, label, kind in fields]
+LABELS = {key: label for key, label, _kind in FIELDS}
 
 HEADER = """# Written by Net-DNS-Monitor's settings window.
 #
-# Comments from a hand-edited config are NOT preserved by that window. The repo's
-# tracked default config.yaml still carries the full explanation of every key
-# below, including the warning about leaving `domains` empty.
+# Comments from a hand-edited config are NOT preserved by that window. The
+# tracked default config.yaml in the Net-DNS-Monitor repository -- the file
+# install.sh copies into place on first install -- still explains every key below.
 """
 
-# Appended only when a backup was actually written. On a first save there is
-# nothing to back up, and a backup can fail; naming a file that does not exist
-# sends someone looking for it.
+# Appended only when a backup was actually written, so the file never claims a
+# copy that does not exist.
 BACKUP_NOTE = """#
 # The previous version of this file was saved alongside it as {name}.
 """
@@ -300,16 +322,15 @@ def format_field(kind: str, value) -> str:
     if kind == "list":
         return ", ".join(str(v) for v in (value or []))
     if kind == "targets":
-        # A hand-written `["1.1.1.1:443"]` is a list of strings, not pairs.
-        # load() runs from the menu callback that opens the window, so an
-        # unpack error here would kill the click; the entry is shown as
-        # written and parse_field rejects it by name on save.
+        # An entry that is not a pair is shown as written, not unpacked. An older
+        # window saved ["192.168.68.1:53"] as plain strings, and unpacking one
+        # raised inside open_settings, so the Settings window never opened.
         parts = []
-        for entry in value or []:
-            if isinstance(entry, (list, tuple)) and len(entry) == 2:
-                parts.append(f"{entry[0]}:{entry[1]}")
+        for target in value or []:
+            if isinstance(target, (list, tuple)) and len(target) == 2:
+                parts.append(f"{target[0]}:{target[1]}")
             else:
-                parts.append(str(entry))
+                parts.append(str(target))
         return ", ".join(parts)
     if value is None:
         return ""
@@ -338,26 +359,22 @@ def parse_field(kind: str, text: str, label: str = ""):
         # app.py does `tuple(t)` on each entry and the prober unpacks host, port,
         # so a malformed entry has to be rejected here rather than raising inside
         # a probe on a background timer.
+        # rpartition, so an IPv6 address keeps its own colons: fe80::1%en0:53.
         targets = []
         for part in (p.strip() for p in text.split(",")):
             if not part:
                 continue
             host, _, port = part.rpartition(":")
-            if not host or not port.strip().isdigit():
-                raise ValueError(f"{name}: expected host:port entries, got {part!r}")
-            number = int(port)
-            # Out of range reaches the probe as an OverflowError on a timer.
-            if not 1 <= number <= 65535:
-                raise ValueError(f"{name}: port must be 1-65535, got {part!r}")
-            host = host.strip()
-            # rpartition splits "::1" into host ":" and port "1", and would keep
-            # the brackets of "[::1]:53" as part of the host name.
-            bracketed = host.startswith("[") and host.endswith("]")
-            if bracketed:
+            host, port = host.strip(), port.strip()
+            if host.startswith("[") and host.endswith("]"):
                 host = host[1:-1]
-            elif ":" in host:
-                raise ValueError(f"{name}: bracket an IPv6 host, e.g. [::1]:53, got {part!r}")
-            targets.append([host, number])
+            if not host or not (port.isascii() and port.isdigit()):
+                raise ValueError(f"{name}: expected IP:port entries, got {part!r}")
+            target = [host, int(port)]
+            problem = target_problem(target)
+            if problem is not None:
+                raise ValueError(f"{name}: {problem} (in {part!r})")
+            targets.append(target)
         return targets
     if kind == "int":
         try:
@@ -397,26 +414,49 @@ def collect(values: dict) -> dict:
     for key, label, kind in FIELDS:
         if key in values:
             parsed[key] = parse_field(kind, values[key], label)
-            # parse_field allows 0 because it means "never" or "use the default"
-            # for several keys -- but load_config rejects 0 for a timer interval,
-            # so letting it through here would write a file the app then refuses
-            # to start on. Same error path as any other bad field: nothing is
-            # written.
-            if key in INTERVAL_KEYS + TIMEOUT_KEYS and parsed[key] <= 0:
-                raise ValueError(f"{label}: must be greater than 0, got {values[key]!r}")
+    # The checks load_config applies, on the fields that were sent. A value it
+    # would refuse has to be refused here, before a file the app cannot start
+    # from is written.
+    try:
+        validate_config(parsed)
+    except ConfigError as exc:
+        raise ValueError(f"{LABELS.get(exc.key, exc.key)}: {exc}") from None
     return parsed
 
 
-def backup_path(path: str, clock: Callable[[], float] = time.time) -> str:
-    # One-second resolution is not unique: Cmd-S twice inside a second would
-    # replace the only commented backup with the already-stripped version.
+def backup_path(
+    path: str,
+    clock: Callable[[], float] = time.time,
+    exists: Callable[[str], bool] = os.path.exists,
+) -> str:
+    """`<path>.bak-<epoch>`, with -1, -2, ... appended until the name is free.
+
+    The epoch has one-second resolution. Without the suffix, two saves inside
+    one second pick the same name, and the second backup -- already stripped of
+    comments -- replaces the only commented copy.
+    """
     base = f"{path}.bak-{int(clock())}"
-    candidate = base
-    n = 1
-    while os.path.exists(candidate):
-        candidate = f"{base}.{n}"
+    candidate, n = base, 1
+    while exists(candidate):
+        candidate = f"{base}-{n}"
         n += 1
     return candidate
+
+
+def _collapse_home(value):
+    """/Users/<name>/x -> ~/x. load_config expands `~` on every read, so the file
+    only needs the portable form. An absolute home path pins the file to one
+    account, and under the App Store sandbox `~` resolves inside the app's
+    container, so a saved absolute path would point outside it.
+    """
+    home = os.path.expanduser("~")
+    if not isinstance(value, str) or home in ("", "~", os.sep):
+        return value
+    if value == home:
+        return "~"
+    if value.startswith(home + os.sep):
+        return "~" + value[len(home) :]
+    return value
 
 
 def save_config(
@@ -428,23 +468,30 @@ def save_config(
 ) -> dict:
     """Write the config, backing up whatever was there first.
 
-    Returns {"path", "backup"}. backup is None both when there was nothing to
-    back up and when backing up failed -- the caller must not read it as "this
-    was the first save". The merge is onto the file's own contents rather than
-    onto the running config, so a key the window does not expose is preserved
-    rather than being silently reset to its default.
+    Returns {"path", "backup"} where backup is None if there was nothing to back
+    up. The merge is onto the file's own contents rather than onto the running
+    config, so a key the window does not expose is preserved rather than being
+    silently reset to its default.
+
+    Raises ValueError (a config.ConfigError naming the key), before anything is
+    written, if load_config would refuse the merged result.
     """
     if writer is None:
         from netdnsmonitor.report_storage import _atomic_write
 
         writer = _atomic_write
 
+    # A symlinked config.yaml (a dotfiles checkout, say) is written through to its
+    # target. os.replace on the link path swaps the link for a regular file, and
+    # the target silently stops receiving changes.
+    real = os.path.realpath(path)
+
     on_disk = {}
     if existing is not None:
         on_disk = dict(existing)
-    elif os.path.isfile(path):
+    elif os.path.isfile(real):
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(real, encoding="utf-8") as f:
                 loaded = yaml.safe_load(f)
             if isinstance(loaded, dict):
                 on_disk = loaded
@@ -455,40 +502,102 @@ def save_config(
             # UnicodeDecodeError, which is not an OSError, and it escaped.
             on_disk = {}
 
+    merged = {**on_disk, **updates}
+    candidate = {**DEFAULT_CONFIG, **merged}
+    normalize_config(candidate)
+    validate_config(candidate)
+    for key in PATH_KEYS:
+        if key in merged:
+            merged[key] = _collapse_home(merged[key])
+
     backup = None
-    if os.path.isfile(path):
-        backup = backup_path(path, clock)
+    if os.path.isfile(real):
+        backup = backup_path(real, clock)
         try:
-            with open(path, encoding="utf-8") as f:
-                writer(backup, f.read())
-        except (OSError, UnicodeError):
-            # Same reason as above. Failing to back up must not stop the save --
-            # but it must be reported as "no backup" rather than claimed.
+            with open(real, "rb") as f:
+                raw = f.read()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                # Not UTF-8, so the text writer cannot take it. Copy the bytes:
+                # skipping the backup here would overwrite the only copy of a
+                # file nobody has been able to read back.
+                shutil.copyfile(real, backup)
+            else:
+                writer(backup, text)
+        except OSError:
+            # Failing to back up must not stop the save -- but it must be
+            # reported as "no backup" rather than claimed.
             backup = None
 
-    merged = {**on_disk, **updates}
+    header = HEADER
+    if backup is not None:
+        header += BACKUP_NOTE.format(name=os.path.basename(backup))
     body = yaml.safe_dump(merged, default_flow_style=False, sort_keys=True, allow_unicode=True)
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    header = HEADER + (BACKUP_NOTE.format(name=os.path.basename(backup)) if backup else "")
-    writer(path, header + "\n" + body)
+    os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
+    writer(real, header + "\n" + body)
     return {"path": path, "backup": backup}
 
 
-def restart_note(updates: dict, changed: Optional[set] = None) -> str:
+def _same(before, after) -> bool:
+    # A null string setting is shown as a blank field, which parses back as "".
+    # That round trip is not a change.
+    return before == after or (before in (None, "") and after in (None, ""))
+
+
+# How each build restarts. The store build ships no service script, so naming
+# it there sends someone after a command that does not exist.
+SERVICE_RESTART_HINT = "Run: net-dns-monitor-service restart"
+STORE_RESTART_HINT = "Quit and reopen Net-DNS-Monitor."
+
+# Where the direct build keeps its config. The store build's is inside its
+# sandbox container, so the app passes the real path there instead.
+DEFAULT_CONFIG_PATH_DISPLAY = "~/.config/net-dns-monitor/config.yaml"
+
+
+def restart_note(
+    updates: dict,
+    previous: Optional[dict] = None,
+    restart_hint: str = SERVICE_RESTART_HINT,
+    changed: Optional[set] = None,
+) -> str:
     """Which of these need a restart, in words for the window.
 
-    `changed` is the subset of keys whose text differs from what the window
-    loaded. The window submits every field on Save, so without it the note
-    would name every restart key on every save and say nothing useful.
+    `changed` is an alternative to `previous`: the set of keys whose text differs
+    from what the window loaded.
+
+    The window sends every field, so `updates` alone names every restart-only key
+    whether or not it changed. Pass `previous` (the config as loaded before the
+    save) to name only the keys whose value actually changed.
     """
-    keys = updates if changed is None else (set(updates) & changed)
+    keys = list(updates)
+    if previous is not None:
+        keys = [key for key in keys if not _same(previous.get(key), updates[key])]
+    if changed is not None:
+        keys = [key for key in keys if key in changed]
     pending = sorted(key for key in keys if key in NEEDS_RESTART)
     if not pending:
         return "Saved. These take effect immediately."
     return (
         "Saved. These need a restart to take effect "
         f"({len(pending)}): {', '.join(pending)}.\n"
-        "Run: net-dns-monitor-service restart"
+        f"{restart_hint}"
+    )
+
+
+def settings_notice(
+    config_path_display: str = DEFAULT_CONFIG_PATH_DISPLAY,
+    restart_hint: str = SERVICE_RESTART_HINT,
+) -> str:
+    """The warning above the fields. The path gets a line of its own: a sandbox
+    container path is longer than the label is wide.
+    """
+    name = os.path.basename(config_path_display) or "config.yaml"
+    return (
+        "Saving rewrites this file and does not keep its comments:\n"
+        f"{config_path_display}\n"
+        f"The previous file is backed up as {name}.bak-<timestamp>.\n"
+        f"Most changes need a restart. {restart_hint}"
     )
 
 
@@ -499,13 +608,21 @@ ROW_HEIGHT = 26
 LABEL_WIDTH = 300
 FIELD_WIDTH = 210
 GROUP_GAP = 24
-CHROME_HEIGHT = 132
+# Room for the notice's path line to wrap once: a sandbox container path runs
+# past the width of the window.
+NOTICE_HEIGHT = 70
+CHROME_HEIGHT = 76 + NOTICE_HEIGHT
 
 
 class SettingsWindow:
     """A field per option, in a scrolling list. Retained by App, like the others."""
 
-    def __init__(self, on_save: Callable[[Optional[dict]], str]):
+    def __init__(
+        self,
+        on_save: Callable[[dict], str],
+        config_path_display: Optional[str] = None,
+        restart_hint: Optional[str] = None,
+    ):
         import AppKit
 
         from netdnsmonitor.dashboard import _label, _make_button_target
@@ -537,10 +654,11 @@ class SettingsWindow:
         # the comments are already gone.
         self.notice = _label(
             AppKit,
-            AppKit.NSMakeRect(16, visible_height + 62, WINDOW_WIDTH - 32, 56),
-            "Saving rewrites ~/.config/net-dns-monitor/config.yaml and does not keep its\n"
-            "comments. The previous file is backed up as config.yaml.bak-<timestamp>.\n"
-            "Most changes need: net-dns-monitor-service restart",
+            AppKit.NSMakeRect(16, visible_height + 62, WINDOW_WIDTH - 32, NOTICE_HEIGHT),
+            settings_notice(
+                config_path_display or DEFAULT_CONFIG_PATH_DISPLAY,
+                restart_hint or SERVICE_RESTART_HINT,
+            ),
             9.5,
         )
         outer.addSubview_(self.notice)
@@ -621,16 +739,19 @@ class SettingsWindow:
                 return
             self.status.setStringValue_(message)
         elif action == "reload":
-            # Reload re-reads the file through load_config, which raises on a
-            # malformed one. Same rule as Save: report it here, never into the
-            # AppKit callback -- and only claim "reloaded" once it has happened.
+            # load_config raises on a malformed or refused file (YAMLError,
+            # ValueError, UnicodeDecodeError). The status used to say "Reloaded
+            # from disk." first and let that escape into the AppKit callback, so
+            # the window claimed a reload that had not happened.
             try:
                 message = self.on_save(None)
             except Exception as exc:  # noqa: BLE001 - never raise into AppKit
                 traceback.print_exc()
                 self.status.setStringValue_(f"Not reloaded -- {type(exc).__name__}: {exc}")
                 return
-            self.status.setStringValue_(message or "Reloaded from disk.")
+            self.status.setStringValue_(
+                message if isinstance(message, str) and message else "Reloaded from disk."
+            )
 
     def load(self, config: dict):
         for key, _label, kind in FIELDS:
