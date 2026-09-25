@@ -384,3 +384,8 @@ lan_ip: "192.168.10.1"
 lan_netmask: "255.255.255.0"
 dhcp_start: "192.168.10.100"
 dhcp_end: "192.168.10.200"
+
+# --- Console ---------------------------------------------------------------
+# Open the console window on launch, docked below the log viewer on the right
+# of the screen. Set false to open it only from the menu or dashboard.
+auto_open_console: true

@@ -76,6 +76,7 @@ GROUPS = [
         "Windows and graphs",
         [
             ("open_dashboard_at_launch", "Open dashboard at launch", "bool"),
+            ("auto_open_console", "Open console at launch", "bool"),
             ("ui_refresh_seconds", "Window refresh (seconds)", "int"),
             ("dock_refresh_seconds", "Dock tile refresh (seconds)", "int"),
             ("history_max_samples", "Graph history samples", "int"),
