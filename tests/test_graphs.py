@@ -8,10 +8,19 @@ comments so a regression shows up as a number that moved rather than a vague
 """
 
 import math
+import os
 
 import AppKit
+import pytest
 
 from netdnsmonitor.graphs import format_bits, latest_label, render_series_graph, scale
+
+# GitHub's headless macOS runner has no window server, so NSImage lockFocus
+# draws almost nothing (measured opaque fraction ~0.0002 vs ~0.015 on a desktop
+# session). Absolute-ink assertions are only meaningful with a real display.
+needs_display = pytest.mark.skipif(
+    os.environ.get("CI") == "true", reason="headless CI runner does not rasterise NSImage drawing"
+)
 
 FLAT = [60.0] * 60
 SPIKY = [60.0 if index % 2 else 300.0 for index in range(60)]
@@ -119,6 +128,7 @@ def test_a_graph_is_the_requested_size():
     assert tuple(render_series_graph(FLAT, size=(400, 80)).size()) == (400.0, 80.0)
 
 
+@needs_display
 def test_a_series_is_actually_drawn():
     # Measured: ~0.015 of sampled pixels for a flat 60ms line.
     assert opaque_fraction(render_series_graph(FLAT, title="Latency", unit="ms")) > 0.005
@@ -170,6 +180,7 @@ def test_a_single_sample_does_not_divide_by_zero_on_the_x_step():
     render_series_graph([61.0], title="Latency")
 
 
+@needs_display
 def test_a_gap_is_drawn_as_a_gap_not_interpolated_across():
     """A straight line through an outage hides the one thing the graph exists to
     show. The gap also gets a faint marker, so this asserts the *marked* column
