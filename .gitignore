@@ -22,3 +22,6 @@ net-dns-monitor.log
 # Not a submodule: without this line `git add -A` would record it as a bare
 # gitlink that no clone can resolve.
 /net-dns-monitor/
+
+# Local Claude Code state (machine-specific settings/agents/worktrees)
+.claude/
