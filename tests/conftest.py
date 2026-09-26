@@ -47,6 +47,25 @@ def no_real_dock_icon(monkeypatch):
     monkeypatch.setattr("netdnsmonitor.app.set_dock_icon", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def no_dock_presence():
+    """Stop the test process from appearing in the Dock.
+
+    The first `NSApplication.sharedApplication()` call in a bare Python process
+    registers it as a regular foreground app, so a transient Python tile bounces in
+    the Dock for the length of the run. Several code paths and tests reach that call
+    (window activation, `setMainMenu_`). Prohibited keeps the process out of the
+    Dock and menu bar while leaving windows and menus constructible.
+    """
+    try:
+        import AppKit
+    except ImportError:
+        return
+    AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+        AppKit.NSApplicationActivationPolicyProhibited
+    )
+
+
 class _MemoryKeychain:
     """An empty Keychain that lives for one test. Same status codes as the real one."""
 
