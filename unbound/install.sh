@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# RETIRED 2026-09-22 (see router/docs/ROUTER.md): the LAN moved to 192.168.1.0/24, whose
+# gateway (192.168.1.254) already serves DHCP. Re-running this stack would put a second DHCP
+# server on the network. Set NDM_ROUTER_FORCE=1 only to deliberately rebuild the old subnet.
+if [[ "${NDM_ROUTER_FORCE:-0}" != "1" ]]; then
+    echo "router stack retired 2026-09-22; refusing to run (set NDM_ROUTER_FORCE=1 to override)" >&2
+    exit 1
+fi
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
