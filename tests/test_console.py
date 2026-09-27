@@ -525,6 +525,13 @@ def test_a_background_job_does_not_hold_the_console_open(tmp_path):
     elapsed = time.monotonic() - started
     assert result.timed_out is False
     assert elapsed < 3
+    # The reader threads wind down after run_command has returned, on the
+    # scheduler's timing, not before it: a count taken on the very next line
+    # saw 3 for 2 once on the CI runner. The claim is that they do not live
+    # the 20 s of the job, so give them a moment, not the job's lifetime.
+    deadline = time.monotonic() + 2
+    while threading.active_count() != before and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert threading.active_count() == before
 
 
