@@ -1,6 +1,7 @@
 # Mac App Store submission checklist
 
-State as of **2026-09-17**, branch `feat/appstore-prep`. This file orders the
+State as of **2026-09-27**, branch `master` (the App Store work merged in
+PR #6). This file orders the
 work and records what is done; `docs/APP_STORE_SUBMISSION.md` explains each
 step and holds the metadata text. Section numbers in the form §n refer to that
 document.
@@ -23,6 +24,7 @@ ship the full build outside the store instead (§10). Both can coexist.
 | Metadata drafts | Subtitle, category, description, keywords, review notes, privacy-label answers and the export answer: §6 |
 | Privacy policy | `docs/PRIVACY_POLICY.md` drafted; three placeholders remain (publisher, contact, date) |
 | Tooling | Xcode 27.0 (27A266a) on macOS 27.0, `altool` 27.0.5, Transporter installed, `.venv` on Python 3.13.15 with py2app 0.28.10 |
+| Rebuilt on `master` (2026-09-27) | After the dependency bumps (`anthropic` 1.8.0, `pyobjc` 12.2.2), with the repo `.venv` on Python 3.14.7: 81 MB, `LSMinimumSystemVersion` 26.0, signature valid, same three entitlements, probe result unchanged. The first rebuild said 27.0: Homebrew's `liblzma` bottle is built for macOS 27, and the build sets the minimum from the highest `minos` in the bundle. `setup.py` now excludes `lzma` from the store build; nothing uses xz |
 | Team ID | `L9ELX85ZFD`, from the OU field of the Apple Development certificate in the login keychain |
 
 Not verified, because it cannot be from a script: the sandboxed GUI app was
@@ -139,7 +141,9 @@ open build/appstore/adhoc/dist/Net-DNS-Monitor.app
 
 ### Step 6. Release build
 
-Run from this worktree (`.claude/worktrees/appstore-prep`) with its `.venv`.
+Run from the repository root with its `.venv`. Check that the build prints
+`Minimum macOS: 26.0`; a higher number means a newly bundled binary raised the
+floor (find it with `otool -l <file> | grep minos`).
 Replace the four placeholders; the identity strings must match
 `security find-identity -v` exactly.
 
@@ -206,11 +210,9 @@ Or drag the `.pkg` into `/Applications/Transporter.app` (§5).
 - [ ] On rejection, answer in Resolution Center; §8 lists the likely causes and
       the prepared responses. Only a code change needs a new build (bump
       `--build-number`).
-- [ ] After approval: tag this branch (`git tag v1.0-appstore-1`), record the App
-      Store Connect app ID in this file, and merge `feat/appstore-prep` into
-      `master`. That merge changes the live resolver on this Mac
-      (`unbound/unbound.conf` and `dnsmasq/dnsmasq.conf` are symlinked from
-      `/opt/homebrew/etc`), so plan an unbound restart.
+- [ ] After approval: tag the uploaded commit on `master`
+      (`git tag v1.0-appstore-1`) and record the App Store Connect app ID in
+      this file.
 
 ## 3. Every later upload
 
@@ -229,7 +231,3 @@ Or drag the `.pkg` into `/Applications/Transporter.app` (§5).
   is not part of this build; delete it or move it out of the repository.
 - `docs/MCP.md` and `docs/caching-and-optimization.md` arrived empty from
   `master`; fill or delete them.
-- The GitHub repository's default branch is `docs/scripts-manual`, not
-  `master`; PRs and CI default to it.
-- `master`'s working tree holds uncommitted lint edits (8 files) that this
-  branch has already superseded; discard them when `master` is fast-forwarded.
