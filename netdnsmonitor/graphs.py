@@ -19,6 +19,7 @@ throughput line share no sensible scale; on one pair of axes either the latency 
 a flat line at the bottom or the throughput is off the top.
 """
 
+import math
 from typing import Optional
 
 MARGIN_LEFT = 44  # room for the y-axis labels
@@ -27,12 +28,33 @@ MARGIN_TOP = 16  # room for the title
 MARGIN_BOTTOM = 12
 
 GRID_LINES = 3
+DOT_RADIUS = 1.5  # an isolated sample, drawn about as wide as the 1.5pt line
 
 COLOR_NAMES = {
     "latency": "systemBlueColor",
     "download": "systemGreenColor",
     "upload": "systemPurpleColor",
 }
+
+
+def _measured(value) -> bool:
+    # `is not None` alone lets NaN and inf through: max() of a series holding a
+    # NaN is NaN, every point then projects to the top edge and the axis reads
+    # "nan". A non-finite sample is not a measurement.
+    return value is not None and math.isfinite(value)
+
+
+def latest_label(values: list, formatter=None, unit: str = "") -> str:
+    """The headline number for a series, or "--" when the newest sample is a gap.
+
+    Reads the *last* slot, not the last measured value: during an outage the
+    latest measured value is the one from before it broke, and "60ms" on a
+    graph whose right edge is a gap claims the network is fine right now.
+    """
+    latest = values[-1] if values else None
+    if not _measured(latest):
+        return "--"
+    return f"{(formatter or _plain)(latest)}{unit}"
 
 
 def scale(values: list, height: float) -> tuple:
@@ -42,7 +64,7 @@ def scale(values: list, height: float) -> tuple:
     between 60 and 64ms would otherwise fill the whole graph and read as wild
     instability. A graph of network measurements is only honest with zero on it.
     """
-    real = [v for v in values if v is not None]
+    real = [v for v in values if _measured(v)]
     hi = max(real) if real else 1.0
     if hi <= 0:
         hi = 1.0
@@ -72,7 +94,7 @@ def render_series_graph(
     from Foundation import NSMakeRect
 
     width, height = int(size[0]), int(size[1])
-    formatter = format_value or (lambda v: f"{v:.0f}")
+    formatter = format_value or _plain
 
     image = AppKit.NSImage.alloc().initWithSize_((width, height))
     image.lockFocus()
@@ -83,7 +105,7 @@ def render_series_graph(
 
         _draw_text(AppKit, title, 8.5, MARGIN_LEFT, height - MARGIN_TOP + 2, "secondaryLabelColor")
 
-        real = [v for v in values if v is not None]
+        real = [v for v in values if _measured(v)]
         if not real:
             # A placeholder rather than an empty box: "no data yet" and "flat at
             # zero" are different states and must not look identical.
@@ -125,7 +147,7 @@ def render_series_graph(
         gap_color = AppKit.NSColor.systemRedColor().colorWithAlphaComponent_(0.18)
         gap_color.setFill()
         for index, value in enumerate(values):
-            if value is None:
+            if not _measured(value):
                 x = origin_x + index * step
                 AppKit.NSRectFillUsingOperation(
                     NSMakeRect(x - step / 2, origin_y, max(1.0, step), plot_height),
@@ -138,7 +160,7 @@ def render_series_graph(
         path.setLineWidth_(1.5)
         pen_down = False
         for index, value in enumerate(values):
-            if value is None:
+            if not _measured(value):
                 # Lift the pen. The next real point starts a new subpath, which is
                 # what makes the gap a gap rather than a line across it.
                 pen_down = False
@@ -151,10 +173,25 @@ def render_series_graph(
                 pen_down = True
         path.stroke()
 
+        # A measured sample with a gap on both sides is a subpath of one
+        # moveToPoint, and stroking that draws nothing -- so alternating 50% loss
+        # rendered exactly like a total outage. Those points get a dot instead.
+        color.setFill()
+        for index, value in enumerate(values):
+            if value is None:
+                continue
+            before = values[index - 1] if index > 0 else None
+            after = values[index + 1] if index + 1 < len(values) else None
+            if before is None and after is None:
+                x, y = origin_x + index * step, origin_y + project(value)
+                AppKit.NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(x - DOT_RADIUS, y - DOT_RADIUS, 2 * DOT_RADIUS, 2 * DOT_RADIUS)
+                ).fill()
+
         # The latest value, spelled out -- reading a number off a line is guesswork.
         _draw_text(
             AppKit,
-            f"{formatter(real[-1])}{unit}",
+            latest_label(values, formatter, unit),
             9.0,
             origin_x + plot_width - 52,
             height - MARGIN_TOP + 2,
@@ -166,6 +203,10 @@ def render_series_graph(
         # the menu bar's.
         image.unlockFocus()
     return image
+
+
+def _plain(value: float) -> str:
+    return f"{value:.0f}"
 
 
 def _draw_text(AppKit, text: str, point_size: float, x: float, y: float, color_name: str):
@@ -180,7 +221,14 @@ def _draw_text(AppKit, text: str, point_size: float, x: float, y: float, color_n
 
 
 def format_bits(value: Optional[float]) -> str:
-    """Axis labels for a throughput graph."""
+    """Throughput for the graph axes and the dashboard's stats pane.
+
+    Not plain `format_rate`: that rounds anything under 1K to "0" so the menu bar
+    stays short, which here labels a real trickle as nothing moving at all. There
+    is room for "587" on an axis.
+    """
     from netdnsmonitor.status import format_rate
 
+    if value is not None and 0 < value < 1e3:
+        return f"{value:.0f}"
     return format_rate(value)

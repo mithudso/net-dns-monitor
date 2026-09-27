@@ -127,8 +127,36 @@ def test_history_survives_a_restart(tmp_path):
 
     reloaded = make(tmp_path, max_samples=100)
     assert reloaded.load() == 2
-    assert reloaded.series("rtt_ms") == [61.0, None]
-    assert reloaded.latest()["down"] is True
+    # The trailing None is the restart gap marker, not a loaded sample.
+    assert reloaded.series("rtt_ms") == [61.0, None, None]
+    assert list(reloaded.samples)[1]["down"] is True
+
+
+def test_a_restart_is_a_gap_in_the_graph_not_a_line_across_the_downtime(tmp_path):
+    """The dashboard draws by index, so without a marker the last sample before
+    the app stopped and the first one after it restarted are adjacent points,
+    and the time it was not running renders as a continuous line.
+    """
+    history = make(tmp_path, max_samples=100)
+    for _ in range(3):
+        history.record(rtt_ms=61.0)
+
+    reloaded = make(tmp_path, max_samples=100)
+    assert reloaded.load() == 3
+    reloaded.record(rtt_ms=5)
+    assert reloaded.series("rtt_ms")[-2:] == [None, 5.0]
+    # Nothing was probed while the app was stopped, so "down" is unknown, not False.
+    assert list(reloaded.samples)[-2]["down"] is None
+    # In memory only: the file still holds exactly the recorded samples.
+    lines = (tmp_path / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 4
+
+
+def test_an_empty_previous_file_adds_no_gap_marker(tmp_path):
+    (tmp_path / "history.jsonl").write_text("", encoding="utf-8")
+    history = make(tmp_path)
+    assert history.load() == 0
+    assert history.series("rtt_ms") == []
 
 
 def test_only_the_retained_window_is_loaded_back(tmp_path):
@@ -138,7 +166,8 @@ def test_only_the_retained_window_is_loaded_back(tmp_path):
 
     reloaded = make(tmp_path, max_samples=5)
     assert reloaded.load() == 5
-    assert reloaded.series("rtt_ms") == [35.0, 36.0, 37.0, 38.0, 39.0]
+    # The window holds 5, and the restart gap marker takes the newest slot.
+    assert reloaded.series("rtt_ms") == [36.0, 37.0, 38.0, 39.0, None]
 
 
 def test_a_truncated_final_line_is_skipped_not_fatal(tmp_path):
@@ -152,7 +181,82 @@ def test_a_truncated_final_line_is_skipped_not_fatal(tmp_path):
     )
     history = make(tmp_path, max_samples=10)
     assert history.load() == 1
-    assert history.series("rtt_ms") == [61.0]
+    # 61.0 is the one intact line; the trailing None is the restart gap marker.
+    assert history.series("rtt_ms") == [61.0, None]
+
+
+def test_a_non_utf8_byte_does_not_stop_startup(tmp_path):
+    """`load()` runs inside `NetDnsMonitorApp.__init__`. UnicodeDecodeError is a
+    ValueError, not an OSError, so one undecodable byte in a torn or hand-edited
+    file escaped the OSError guard and the app never started under launchd.
+
+    The bad byte sits in the JSON *syntax* so the replacement character leaves a
+    line that cannot parse and is skipped like any torn line.
+    """
+    path = tmp_path / "history.jsonl"
+    path.write_bytes(
+        json.dumps({"at": "2026-08-04T12:00:00+00:00", "rtt_ms": 61.0}).encode()
+        + b"\n"
+        + b'{"at": "2026-08-04T12:00:05+00:00", \xff"rtt_ms": 62.0}\n'
+    )
+    history = make(tmp_path, max_samples=10)
+    assert history.load() == 1
+    # The trailing None is the restart gap marker load() appends.
+    assert history.series("rtt_ms") == [61.0, None]
+
+
+def test_a_non_finite_value_on_disk_is_a_gap_not_a_point(tmp_path):
+    """`float("Infinity")` passes the coercion, and one infinite point flattens
+    every other value in the graph to the baseline.
+    """
+    path = tmp_path / "history.jsonl"
+    path.write_text(
+        json.dumps({"at": "2026-08-04T12:00:00+00:00", "rtt_ms": float("inf")}) + "\n",
+        encoding="utf-8",
+    )
+    history = make(tmp_path)
+    history.load()
+    # The inf point reads as a gap, followed by load()'s restart gap marker.
+    assert history.series("rtt_ms") == [None, None]
+
+
+def test_the_compaction_bound_survives_a_restart(tmp_path):
+    """The line count on disk is what triggers compaction. A fresh instance that
+    started counting from zero would let the file grow to `compact_at` lines
+    beyond whatever the previous run left behind, once per restart.
+    """
+    history = make(tmp_path, max_samples=5, compact_at=10)
+    for index in range(10):
+        history.record(rtt_ms=float(index))
+
+    reloaded = make(tmp_path, max_samples=5, compact_at=10)
+    reloaded.load()
+    reloaded.record(rtt_ms=99.0)
+    lines = (tmp_path / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 5
+    assert json.loads(lines[-1])["rtt_ms"] == 99.0
+
+
+def test_a_failed_compaction_keeps_the_window_and_the_appended_lines(tmp_path):
+    """Compaction is a rewrite, and a rewrite that fails must cost nothing: the
+    in-memory window is untouched and every appended line is still on disk.
+    """
+
+    def boom(path, text):
+        raise OSError("disk full")
+
+    history = SampleHistory(
+        path=str(tmp_path / "history.jsonl"),
+        max_samples=5,
+        compact_at=10,
+        clock=Clock(),
+        writer=boom,
+    )
+    for index in range(12):
+        history.record(rtt_ms=float(index))
+    assert len(history.samples) == 5
+    lines = (tmp_path / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 12
 
 
 def test_a_hand_edited_string_value_cannot_reach_a_draw_call(tmp_path):
@@ -166,8 +270,8 @@ def test_a_hand_edited_string_value_cannot_reach_a_draw_call(tmp_path):
         encoding="utf-8",
     )
     history = make(tmp_path)
-    history.load()
-    assert history.series("rtt_ms") == [None]
+    assert history.load() == 1
+    assert history.samples[0]["rtt_ms"] is None
 
 
 def test_a_line_without_a_timestamp_is_ignored(tmp_path):

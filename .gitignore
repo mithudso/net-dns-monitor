@@ -18,3 +18,19 @@ dist/
 net-dns-monitor.log
 .chroma_db/
 *.old
+# Local credentials. .env.example documents the names; real values never enter git.
+.env
+# Session memory written by local tooling.
+.remember/
+# Apple signing material must never be committed.
+*.p8
+*.provisionprofile
+*.p12
+*.cer
+# A separate Xcode project with its own .git, checked out inside this one.
+# Not a submodule: without this line `git add -A` would record it as a bare
+# gitlink that no clone can resolve.
+/net-dns-monitor/
+
+# Local Claude Code state (machine-specific settings/agents/worktrees)
+.claude/

@@ -1,7 +1,1024 @@
 {
-  "unbound/unbound.conf": "DNS resolver config",
-  "dnsmasq/dnsmasq.conf": "DHCP server config",
-  "router/scripts/enable_nat.sh": "PF NAT routing",
-  "router/scripts/install_persistent_nat.sh": "LaunchDaemon boot script",
-  "router/scripts/test_router.sh": "Diagnostic suite"
+  "generated_from": "a6aab33",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "role": "infra",
+      "importance": "critical",
+      "purpose": "The CI gate: ruff check and ruff format --check on ubuntu-latest; pytest on macos-latest after pip install -r requirements-dev.txt -c constraints.txt; Python 3.13.",
+      "read_when": "A CI run fails, a tool or Python version changes, or a gate is added.",
+      "entry_symbols": [
+        "lint:",
+        "test:"
+      ]
+    },
+    {
+      "path": "config.yaml",
+      "role": "config",
+      "importance": "critical",
+      "purpose": "The shipped default configuration. tests/test_config.py checks it equals config.DEFAULT_CONFIG.",
+      "read_when": "Adding, renaming or changing the default of any config key; change netdnsmonitor/config.py in the same commit.",
+      "entry_symbols": [
+        "external_targets",
+        "control_domain",
+        "sensitive_strings",
+        "failover_enabled",
+        "router_enabled"
+      ]
+    },
+    {
+      "path": "constraints.txt",
+      "role": "config",
+      "importance": "critical",
+      "purpose": "Exact pins for every package in the tested environment, transitive ones included.",
+      "read_when": "Upgrading a dependency or diagnosing an install that resolves different versions.",
+      "entry_symbols": [
+        "rumps==",
+        "anthropic==",
+        "py2app=="
+      ]
+    },
+    {
+      "path": "netdnsmonitor/app.py",
+      "role": "entrypoint",
+      "importance": "critical",
+      "purpose": "The rumps menu bar app and main(): six timers plus a launch tick, the menu, windows, worker queues, and the Mac App Store capability gates.",
+      "read_when": "Wiring a module into the running app, changing a menu item, a timer or a store-build gate.",
+      "entry_symbols": [
+        "NetDnsMonitorApp",
+        "NetDnsMonitorApp.tick",
+        "NetDnsMonitorApp._menu_layout",
+        "NetDnsMonitorApp.toggle_login",
+        "build_state_machine",
+        "build_escalator",
+        "build_notifier",
+        "GATED_DASHBOARD_ACTIONS",
+        "main"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/cli.py",
+      "role": "cli",
+      "importance": "critical",
+      "purpose": "python3 -m netdnsmonitor.cli: status, interfaces, bench, failover, priority, ladder, commands, run, guide, console.",
+      "read_when": "Adding or changing a CLI subcommand, its exit code, or its confirmation rules.",
+      "entry_symbols": [
+        "main",
+        "build_parser",
+        "cmd_status",
+        "cmd_failover",
+        "cmd_priority",
+        "cmd_ladder",
+        "cmd_run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/config.py",
+      "role": "config",
+      "importance": "critical",
+      "purpose": "DEFAULT_CONFIG, load_config and validation; raises ConfigError naming the key.",
+      "read_when": "Adding a config key, a path key, or a validation rule.",
+      "entry_symbols": [
+        "DEFAULT_CONFIG",
+        "PATH_KEYS",
+        "load_config",
+        "validate_config",
+        "normalize_config",
+        "ConfigError"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/report.py",
+      "role": "schema",
+      "importance": "critical",
+      "purpose": "The incident report data contract (build_report) and its Markdown rendering.",
+      "read_when": "Changing what a report contains or how it reads; notifications, forensics and the LLM bundle read the same fields.",
+      "entry_symbols": [
+        "build_report",
+        "render_markdown"
+      ]
+    },
+    {
+      "path": "requirements-dev.txt",
+      "role": "config",
+      "importance": "critical",
+      "purpose": "Test and lint tooling on top of requirements.txt: pytest and ruff, pinned.",
+      "read_when": "Changing a test or lint tool version; keep .pre-commit-config.yaml in step.",
+      "entry_symbols": [
+        "pytest==",
+        "ruff=="
+      ]
+    },
+    {
+      "path": "requirements.txt",
+      "role": "config",
+      "importance": "critical",
+      "purpose": "The four runtime dependencies, pinned exactly: rumps, anthropic, PyYAML, pyobjc-framework-Cocoa.",
+      "read_when": "Before adding any dependency; the rule is four runtime dependencies.",
+      "entry_symbols": [
+        "rumps==",
+        "anthropic==",
+        "PyYAML==",
+        "pyobjc-framework-Cocoa=="
+      ]
+    },
+    {
+      "path": "scripts/install.sh",
+      "role": "script",
+      "importance": "critical",
+      "purpose": "One-step install and upgrade: preflight, .venv, pinned dependencies, default config, py2app bundle, then net-dns-monitor-service install.",
+      "read_when": "Installing on a new Mac or changing the install steps.",
+      "entry_symbols": [
+        "MIN_PYTHON_MINOR",
+        "NDM_SOURCE_BUNDLE"
+      ]
+    },
+    {
+      "path": "scripts/net-dns-monitor-service",
+      "role": "infra",
+      "importance": "critical",
+      "purpose": "The per-user launchd supervisor; generates LaunchAgent com.mitchhudson.net-dns-monitor with KeepAlive on a flag file and logs to ~/Library/Logs/net-dns-monitor.launchd.log.",
+      "read_when": "The supervised app does not start, restart or stop as expected, or the LaunchAgent plist must change.",
+      "entry_symbols": [
+        "LABEL=",
+        "write_plist",
+        "running_pid",
+        "untracked_pids",
+        "THROTTLE_SECONDS",
+        "APP_LOG="
+      ]
+    },
+    {
+      "path": "scripts/start.sh",
+      "role": "script",
+      "importance": "critical",
+      "purpose": "Development launcher: checks the environment, rebuilds the bundle when stale, refuses a second copy, launches with open -n.",
+      "read_when": "Running the app during development or changing the launch checks.",
+      "entry_symbols": [
+        "MIN_PYTHON_MINOR",
+        "LOG_FILE=",
+        "open -n"
+      ]
+    },
+    {
+      "path": "setup.py",
+      "role": "infra",
+      "importance": "critical",
+      "purpose": "py2app spec for Net-DNS-Monitor.app; NETDNS_BUILD=appstore switches to the store identity and LSEnvironment.",
+      "read_when": "Changing bundle contents, Info.plist keys, or the store build inputs.",
+      "entry_symbols": [
+        "APP",
+        "PLIST",
+        "OPTIONS"
+      ]
+    },
+    {
+      "path": "AGENTS.md",
+      "role": "meta",
+      "importance": "high",
+      "purpose": "Pointer to CLAUDE.md for every coding agent, with a short command reference.",
+      "read_when": "Starting work as an agent that does not read CLAUDE.md by default.",
+      "entry_symbols": []
+    },
+    {
+      "path": "CLAUDE.md",
+      "role": "meta",
+      "importance": "high",
+      "purpose": "Agent rules: what the app is, the non-negotiables, the verify loop, house style, known-unverified areas.",
+      "read_when": "Before changing any code.",
+      "entry_symbols": []
+    },
+    {
+      "path": "HOWTO.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Long-form install, configuration, usage and troubleshooting guide.",
+      "read_when": "Answering a user question about setup, configuration or the menu.",
+      "entry_symbols": []
+    },
+    {
+      "path": "README.md",
+      "role": "meta",
+      "importance": "high",
+      "purpose": "Product and developer README: scope, setup, run, CLI, features, layout.",
+      "read_when": "Getting the product picture, or changing a user-visible feature.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/APP_STORE_SUBMISSION.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "The authoritative guide to the Mac App Store build: the measured sandbox feature table, Apple setup, builds, upload, review notes.",
+      "read_when": "Changing anything a store build does, or preparing a store submission.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "System context, the incident data flow, design decisions, the two routers, where the store edition plugs in.",
+      "read_when": "Before a change that crosses modules.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/DEVELOPMENT.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Developer prerequisites, setup, workflow, rules that are not style, troubleshooting.",
+      "read_when": "Setting up a development environment.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/SCRIPTS.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Operator's manual for every entry point and one-shot module invocation.",
+      "read_when": "Exercising a module against the real OS, or documenting a new entry point.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Threat model: assets, trust boundaries, mitigations with code names, residual risks.",
+      "read_when": "Changing anything that handles credentials, root, the shell console, peers or redaction.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/TESTING.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Test commands, CI gates, the injection rule, conftest fixtures, what the suite cannot cover.",
+      "read_when": "Writing tests or diagnosing a test failure.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/known-issues.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "The current defect list: by design, unproven, confirmed limitations, owner decisions, gaps, dossier findings.",
+      "read_when": "Before fixing a bug, to check whether it is by design or waiting for the owner.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/runbooks/manual-failover.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Switch to a backup or back to preferred from the CLI or menu, read the outcome, restore by hand.",
+      "read_when": "Operating failover by hand or checking what an outcome string means.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/runbooks/router-nat-recovery.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Diagnose and restore NAT for the router/ stack, reinstall the LaunchDaemon, roll back.",
+      "read_when": "The router/ stack stops routing after a reboot or a failover.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/runbooks/sudoers-grant.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Grant, verify and revoke /etc/sudoers.d/net-dns-monitor.",
+      "read_when": "A repair reports NEEDS_PRIVILEGE or partial, or the grant must be removed.",
+      "entry_symbols": []
+    },
+    {
+      "path": "router/docs/ROUTER.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Architecture of the router/ stack and how it differs from the app's Router menu.",
+      "read_when": "Working on the router/ stack or deciding which router is canonical.",
+      "entry_symbols": []
+    },
+    {
+      "path": "packaging/appstore/entitlements.plist",
+      "role": "infra",
+      "importance": "high",
+      "purpose": "Main-executable entitlements for the store build: app-sandbox, network.client, network.server.",
+      "read_when": "A sandboxed feature is refused, or an entitlement is added.",
+      "entry_symbols": [
+        "com.apple.security.app-sandbox",
+        "com.apple.security.network.client",
+        "com.apple.security.network.server"
+      ]
+    },
+    {
+      "path": "pytest.ini",
+      "role": "config",
+      "importance": "high",
+      "purpose": "testpaths = tests, python_files = test_*.py.",
+      "read_when": "Tests outside tests/ are not collected.",
+      "entry_symbols": [
+        "testpaths",
+        "python_files"
+      ]
+    },
+    {
+      "path": "ruff.toml",
+      "role": "config",
+      "importance": "high",
+      "purpose": "Ruff lint and format settings: target py313, line length 100, rule selection and ignores.",
+      "read_when": "The lint job fails or a rule is added or ignored.",
+      "entry_symbols": [
+        "target-version",
+        "select",
+        "ignore"
+      ]
+    },
+    {
+      "path": "router/scripts/enable_nat.sh",
+      "role": "infra",
+      "importance": "high",
+      "purpose": "Root-only: frees UDP 67 from bootpd, enables forwarding, detects the WAN interface, loads NAT for 192.168.4.0/24 into com.apple/custom_nat, enables pf.",
+      "read_when": "NAT for the router/ stack is wrong; re-run install_persistent_nat.sh after editing.",
+      "entry_symbols": [
+        "com.apple/custom_nat",
+        "WAN="
+      ]
+    },
+    {
+      "path": "router/scripts/install_persistent_nat.sh",
+      "role": "infra",
+      "importance": "high",
+      "purpose": "Root-only installer for a root-owned enable_nat.sh copy and LaunchDaemon com.custom.router.nat (StartInterval 60).",
+      "read_when": "Installing or repairing the router/ stack's LaunchDaemon.",
+      "entry_symbols": [
+        "PLIST_PATH",
+        "HELPER_PATH",
+        "StartInterval"
+      ]
+    },
+    {
+      "path": "scripts/appstore/build_appstore.py",
+      "role": "script",
+      "importance": "high",
+      "purpose": "Mac App Store build pipeline, adhoc and release: py2app build, launcher rebuild, itms-services removal, linkage check, signing, pkg.",
+      "read_when": "Building or signing a store bundle, or a build step fails.",
+      "entry_symbols": [
+        "main",
+        "py2app_build",
+        "rebuild_launchers",
+        "patch_stdlib_zip",
+        "check_linkage",
+        "sign_plan",
+        "codesign"
+      ]
+    },
+    {
+      "path": "tests/conftest.py",
+      "role": "test",
+      "importance": "high",
+      "purpose": "Autouse guards: HOME redirect, Dock stub, in-memory Keychain with store-build variables removed, stubbed privilege probes and log readers.",
+      "read_when": "A test reaches something real, or a new module-level lookup needs stubbing.",
+      "entry_symbols": [
+        "isolate_home",
+        "no_real_dock_icon",
+        "no_real_keychain_or_distribution",
+        "no_real_system_probes",
+        "_MemoryKeychain"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/ai_consent.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Explicit, versioned, revocable permission before incident data goes to Anthropic; gate_escalator enforces it per call.",
+      "read_when": "Changing what is sent to Anthropic (bump CONSENT_VERSION) or the consent flow.",
+      "entry_symbols": [
+        "ConsentStore",
+        "gate_escalator",
+        "DISCLOSURE",
+        "CONSENT_VERSION"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/anthropic_escalator.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Sends the tagged, escaped evidence bundle to Claude; errors keep class name and HTTP status only.",
+      "read_when": "Changing the model, prompt, timeout or error handling of escalation.",
+      "entry_symbols": [
+        "make_escalator",
+        "default_client",
+        "build_prompt",
+        "SYSTEM_PROMPT",
+        "DEFAULT_MODEL",
+        "DEFAULT_TIMEOUT_SECONDS"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/classifier.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "classify(external_reachable, dns_ok): healthy, network, dns or unclassified; None gives unclassified.",
+      "read_when": "Changing how a probe result maps to an incident type.",
+      "entry_symbols": [
+        "Classification",
+        "classify"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/cli_console.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The netdns console REPL; asks for yes before any mutating command, promote or switch.",
+      "read_when": "Changing the REPL's commands or confirmations.",
+      "entry_symbols": [
+        "run_console",
+        "handle",
+        "ConsoleState"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/commands.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The diagnostic command catalogue with mutates, needs_admin and per-command timeouts.",
+      "read_when": "Adding a catalogue command or changing whether it needs confirmation.",
+      "entry_symbols": [
+        "CATALOG",
+        "BY_KEY",
+        "DiagnosticCommand",
+        "resolve",
+        "missing_placeholder"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/console.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The GUI console's logic: built-ins, /bin/sh commands with timeout, output cap and process-group kill.",
+      "read_when": "Changing the arbitrary-shell console's behaviour or its safety guards.",
+      "entry_symbols": [
+        "handle",
+        "run_command",
+        "kill_running",
+        "child_env"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/console_window.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The GUI console window, shared by the menu item and the dashboard button.",
+      "read_when": "Changing the console window.",
+      "entry_symbols": [
+        "ConsoleWindowController"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/credentials.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Credentials from the environment, then the Keychain (SecItem* through PyObjC); describe never returns a value.",
+      "read_when": "Changing where a credential is read or saved.",
+      "entry_symbols": [
+        "CredentialStore",
+        "make_keychain_backend",
+        "NAMES",
+        "SERVICE"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/dashboard.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The dashboard window, its testable text, and the application menu.",
+      "read_when": "Adding a dashboard button or section.",
+      "entry_symbols": [
+        "DashboardWindow",
+        "dashboard_sections",
+        "render_dashboard_text",
+        "install_main_menu"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/distribution.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Detects the Mac App Store build from the environment and lists the capabilities it lacks; unavailable() builds the outcome text.",
+      "read_when": "Adding a feature that the sandbox or App Review might refuse.",
+      "entry_symbols": [
+        "detect",
+        "Capabilities",
+        "unavailable",
+        "is_unavailable",
+        "REASONS"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/escalation.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "should_escalate gate and redact for sensitive_strings.",
+      "read_when": "Changing when escalation fires or how redaction matches.",
+      "entry_symbols": [
+        "should_escalate",
+        "redact"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/failover.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Service-order failover, failback and manual switch; apply_service_order is the only writer of -ordernetworkservices.",
+      "read_when": "Anything that changes the network service order.",
+      "entry_symbols": [
+        "apply_service_order",
+        "NetworkFailover",
+        "FailoverStore",
+        "build_failover",
+        "default_run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/failover_policy.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Pure failover and failback decisions, cooldown and hourly budget, backup ranking.",
+      "read_when": "Changing when the app switches networks.",
+      "entry_symbols": [
+        "decide",
+        "rank_candidates",
+        "best_candidate",
+        "next_preferred_streak"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/flap_gate.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Consecutive-failure and consecutive-success debounce between healthy and incident.",
+      "read_when": "Changing when an incident is declared or cleared.",
+      "entry_symbols": [
+        "FlapGate"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/interface_probe.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "TCP reachability through one named interface with IP_BOUND_IF (25) / IPV6_BOUND_IF (125).",
+      "read_when": "Interface-bound probing reads wrong, or targets and budgets change.",
+      "entry_symbols": [
+        "make_interface_prober",
+        "default_bound_connect",
+        "default_device_index",
+        "IP_BOUND_IF",
+        "IPV6_BOUND_IF"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/ladder.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The troubleshooting steps per classification, as data.",
+      "read_when": "Adding, removing or reordering a ladder step.",
+      "entry_symbols": [
+        "ladder_for",
+        "step_by_name",
+        "LadderStep",
+        "NETWORK_LADDER",
+        "DNS_LADDER",
+        "FAILOVER_STEP"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/log_watcher.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Error lines from log show for the report, or one no-evidence line when the log cannot be read.",
+      "read_when": "Report log excerpts are missing or wrong.",
+      "entry_symbols": [
+        "make_log_watcher",
+        "NO_EVIDENCE_PREFIX",
+        "LOG_SHOW_TIMEOUT_SECONDS",
+        "ERROR_MARKERS"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/notifications.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Alert text and Slack and email delivery; errors never carry the webhook URL or SMTP credentials.",
+      "read_when": "Changing alert content or a delivery channel.",
+      "entry_symbols": [
+        "format_notification",
+        "make_slack_notifier",
+        "make_email_notifier",
+        "make_notifier"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/privileges.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The sudoers grant: build, validate, install, revoke and detect /etc/sudoers.d/net-dns-monitor; _osascript_admin is the one admin-dialog wrapper.",
+      "read_when": "Changing what runs as root or how the grant is detected.",
+      "entry_symbols": [
+        "grant",
+        "revoke",
+        "sudoers_body",
+        "granted_commands_now",
+        "covers",
+        "is_granted",
+        "primary_interface",
+        "_osascript_admin"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/prober.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "TCP reachability race and DNS resolution under one shared deadline; None means not probed.",
+      "read_when": "Changing incident detection probes or their timeouts.",
+      "entry_symbols": [
+        "make_prober",
+        "resolve_all",
+        "default_connect",
+        "default_resolve"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/repair_executor.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Maps each ladder step to a macOS action and reports exactly what happened.",
+      "read_when": "Changing a repair or check step, or its outcome wording.",
+      "entry_symbols": [
+        "make_repair_executor",
+        "GRANT_HINT"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/report_storage.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Writes report JSON and Markdown; _atomic_write is the package's file writer.",
+      "read_when": "Reports are missing, empty or unreadable.",
+      "entry_symbols": [
+        "save_report",
+        "_atomic_write"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/router.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "The app's bootpd and pf router mode behind the admin dialog; refuses while the router/ stack is installed.",
+      "read_when": "Working on the app's Router menu.",
+      "entry_symbols": [
+        "Router",
+        "validate",
+        "start_script",
+        "stop_script",
+        "PF_ANCHOR",
+        "ROUTER_STACK_DAEMON"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/service_order.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Parses networksetup -listnetworkserviceorder and guards every new order with is_order_intact.",
+      "read_when": "Anything that builds a service order.",
+      "entry_symbols": [
+        "parse_service_order",
+        "promote",
+        "is_order_intact",
+        "find_service",
+        "NetworkService"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/state_machine.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "One poll: probe, classify, anti-flap gate, and on the incident edge the ladder, recheck, escalation and report.",
+      "read_when": "Changing the incident pipeline.",
+      "entry_symbols": [
+        "StateMachine",
+        "StateMachine.tick",
+        "MAX_OUTBOUND_LOG_LINES"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/status.py",
+      "role": "library",
+      "importance": "high",
+      "purpose": "Menu bar title and status text.",
+      "read_when": "Changing what the menu bar or :status shows.",
+      "entry_symbols": [
+        "build_title",
+        "status_state",
+        "format_stats",
+        "build_status_report",
+        "build_failover_lines"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/alert.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Dock bounce, notification and an [alert] stderr line when the ping heartbeat fails or recovers.",
+      "read_when": "The network-failed alert does not appear.",
+      "entry_symbols": [
+        "network_failed",
+        "network_recovered",
+        "notify"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/credentials_prompt.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Modal dialogs for credentials and Claude permission.",
+      "read_when": "Changing the Credentials or consent dialogs.",
+      "entry_symbols": [
+        "prompt_for_secret",
+        "confirm"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/dns_query.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "One validated UDP A query to a public resolver; None when no reply.",
+      "read_when": "The public-resolver ladder step reads wrong.",
+      "entry_symbols": [
+        "query_public_dns"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/dock_icon.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Draws the Dock tile from status and round-trip time; skips identical repaints.",
+      "read_when": "Changing the Dock tile.",
+      "entry_symbols": [
+        "set_dock_icon",
+        "build_status_icon",
+        "dock_text"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/domain_learner.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Learns monitored domains from failed resolutions in the unified log and prunes dead ones against an anchor.",
+      "read_when": "Learned domains grow, vanish or pin a false DNS incident.",
+      "entry_symbols": [
+        "make_domain_learner",
+        "LearnedDomainStore",
+        "prune_dead_domains",
+        "extract_failed_domains"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/forensic_log.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "The forensic JSONL journal (rotated above 50 MiB) and per-episode documents.",
+      "read_when": "An outage record is missing or wrong.",
+      "entry_symbols": [
+        "ForensicRecorder",
+        "render_episode_markdown",
+        "MAX_JOURNAL_BYTES",
+        "MAX_EPISODE_OBSERVATIONS"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/graphs.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Line graphs of the heartbeat history as NSImage.",
+      "read_when": "Changing the dashboard graphs.",
+      "entry_symbols": [
+        "render_series_graph",
+        "scale",
+        "format_bits"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/history.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Rolling heartbeat history persisted as JSONL, reloaded with a gap marker.",
+      "read_when": "Graphs show wrong or missing history.",
+      "entry_symbols": [
+        "SampleHistory"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/localize.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Where an outage is, from this machine's and peers' readings.",
+      "read_when": "Changing the fault-localization verdicts.",
+      "entry_symbols": [
+        "localize"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/mini_window.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "The small always-on-top status panel.",
+      "read_when": "Changing the mini window.",
+      "entry_symbols": [
+        "MiniWindow",
+        "mini_text"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/net_stats.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Interface byte counters from netstat -ibn and throughput in bits per second.",
+      "read_when": "Menu bar throughput reads wrong.",
+      "entry_symbols": [
+        "read_interface_counters",
+        "parse_interface_counters",
+        "ThroughputMeter"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/peer_net.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "UDP peer discovery (ndm-peer/1): announce, probe, pong; unauthenticated.",
+      "read_when": "Changing peer discovery or its trust rules.",
+      "entry_symbols": [
+        "PeerNetwork",
+        "build_message",
+        "parse_message",
+        "broadcast_addresses",
+        "local_networks"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/peers.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "The registry of LAN peers, recency buckets, and peers.json.",
+      "read_when": "Peer lists or localization inputs read wrong.",
+      "entry_symbols": [
+        "PeerRegistry",
+        "save_record",
+        "load_record",
+        "sanitise"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/ping.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "One ICMP ping with /sbin/ping; never raises.",
+      "read_when": "The heartbeat reads wrong.",
+      "entry_symbols": [
+        "ping_once"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/ping_monitor.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Down state, loss rate and alert decision from ping results.",
+      "read_when": "Changing alert thresholds or loss calculation.",
+      "entry_symbols": [
+        "PingMonitor"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/query_log.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Most-queried domains from log show, for DNS prewarm.",
+      "read_when": "Changing the prewarm action.",
+      "entry_symbols": [
+        "make_query_log_reader",
+        "extract_top_domains"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/resolution_log.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Appends stalled-domain findings to resolution-log.jsonl with one checked_at per batch.",
+      "read_when": "Changing the resolution log format.",
+      "entry_symbols": [
+        "append_resolution_findings"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/resolution_prober.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Resolves a batch of domains in parallel under one batch deadline.",
+      "read_when": "The resolution batch is slow or wrong.",
+      "entry_symbols": [
+        "resolve_domains_parallel",
+        "default_resolve"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/router_window.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "The Router Management Console window: interfaces, start and stop, ping, diagnostics, AI check.",
+      "read_when": "Changing the router window.",
+      "entry_symbols": [
+        "RouterWindowController",
+        "ai_config_check",
+        "collect_diagnostics",
+        "get_interfaces",
+        "bootpd_status"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/settings_window.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "The settings window; save_config validates, backs up and writes config.yaml.",
+      "read_when": "Changing a settings field or how config is saved.",
+      "entry_symbols": [
+        "SettingsWindow",
+        "save_config",
+        "restart_note",
+        "collect"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/stall_log.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Picks every domain that has ever stalled from the resolution log.",
+      "read_when": "Changing which domains the resolution batch checks.",
+      "entry_symbols": [
+        "select_stalled_domains"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/system_log.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "The dashboard's unified-log reader, parser, noise filter and in-memory buffer.",
+      "read_when": "The dashboard log pane is wrong or empty.",
+      "entry_symbols": [
+        "make_log_reader",
+        "log_show_command",
+        "parse_lines",
+        "LogBuffer"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/throughput.py",
+      "role": "library",
+      "importance": "normal",
+      "purpose": "Per-interface HTTPS speed test pinned with IP_BOUND_IF; None when unmeasurable.",
+      "read_when": "Backup ranking or netdns bench reads wrong.",
+      "entry_symbols": [
+        "make_throughput_meter",
+        "default_measure",
+        "measure_all",
+        "resolve_addresses"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/__init__.py",
+      "role": "meta",
+      "importance": "peripheral",
+      "purpose": "Empty package marker.",
+      "read_when": "Never; it is empty.",
+      "entry_symbols": []
+    },
+    {
+      "path": "unbound/unbound.conf",
+      "role": "config",
+      "importance": "high",
+      "purpose": "Unbound resolver config for the router/ stack (192.168.4.1). Symlinked from /opt/homebrew/etc/unbound on the owner's Mac, so a change here reaches the live resolver at its next restart."
+    },
+    {
+      "path": "dnsmasq/dnsmasq.conf",
+      "role": "config",
+      "importance": "high",
+      "purpose": "dnsmasq DHCP config for the router/ stack; port=0 so DNS stays with unbound. Symlinked from /opt/homebrew/etc on the owner's Mac."
+    },
+    {
+      "path": "router/scripts/test_router.sh",
+      "role": "script",
+      "importance": "medium",
+      "purpose": "Read-only diagnostic suite for the router/ stack: forwarding sysctl, pf NAT anchor, dnsmasq/unbound liveness."
+    },
+    {
+      "path": "docs/APP_STORE_CHECKLIST.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Ordered Mac App Store submission checklist: what is verified in the repo, the owner-only steps with this Mac's Team ID and identity names filled in, the release command, metadata sections, and open items that do not block.",
+      "read_when": "Preparing or repeating a store submission, or asked what is left before the app can be submitted.",
+      "entry_symbols": []
+    }
+  ]
 }

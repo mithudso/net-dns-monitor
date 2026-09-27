@@ -20,6 +20,7 @@ opened to investigate.
 
 import contextlib
 import threading
+import traceback
 from typing import Callable, Optional
 
 from netdnsmonitor.console import BANNER, CLEAR, PROMPT, ConsoleState, handle, run_command
@@ -35,6 +36,12 @@ RESIZE_BOTH = 2 | 16
 RESIZE_PINNED_BOTTOM = 2 | 32
 
 BUSY_MESSAGE = "(a command is still running -- wait for it, or close the window)"
+
+# Characters kept in the transcript. The controller lives for the whole app
+# session and is never rebuilt, so without a ceiling the text storage grows
+# with every command until the window -- and the menu bar app behind it --
+# starts paying for it on every redraw.
+MAX_TRANSCRIPT_CHARS = 2_000_000
 
 
 def _make_target(controller):
@@ -58,7 +65,13 @@ def _make_target(controller):
         def submit_(self, sender):
             line = str(sender.stringValue())
             sender.setStringValue_("")
-            self._controller.submit(line)
+            # The field is already cleared, so a raise here loses the line
+            # with no trace of it -- and an exception out of an ObjC action
+            # is not reported anywhere a person would look.
+            try:
+                self._controller.submit(line)
+            except Exception:  # noqa: BLE001 - an ObjC action must not raise
+                traceback.print_exc()
 
     return _ConsoleTarget.alloc().initWithController_(controller)
 
@@ -101,6 +114,10 @@ class ConsoleWindowController:
 
         storage = self.text_view.textStorage()
         storage.appendAttributedString_(NSAttributedString.alloc().initWithString_(text + "\n"))
+        if storage.length() > MAX_TRANSCRIPT_CHARS:
+            storage.deleteCharactersInRange_(
+                NSMakeRange(0, storage.length() - MAX_TRANSCRIPT_CHARS)
+            )
         self.text_view.scrollRangeToVisible_(NSMakeRange(storage.length(), 0))
 
     def clear(self) -> None:
@@ -119,8 +136,14 @@ class ConsoleWindowController:
             from Foundation import NSOperationQueue
 
             NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
-        except Exception:  # noqa: BLE001 - headless fallback
-            fn()
+        except Exception:  # noqa: BLE001 - a worker thread must not die here
+            # Running `fn` inline would put `_finish`'s AppKit writes on this
+            # worker thread. Only the headless path -- no text view, where
+            # append is a print -- is safe to run inline.
+            if self.text_view is None:
+                fn()
+            else:
+                traceback.print_exc()
 
     # --- actions ---------------------------------------------------------
 
@@ -142,8 +165,9 @@ class ConsoleWindowController:
             threading.Thread(target=self.run_line, args=(line,), daemon=True).start()
         except RuntimeError as exc:
             # Thread creation can fail under resource pressure. The flag is
-            # cleared in `run_line`'s `finally`, which never runs if the thread
-            # never starts -- leaving the console refusing every later line.
+            # cleared once the output is drawn, which never happens if the
+            # thread never starts -- leaving the console refusing every later
+            # line.
             self._busy = False
             self.append(f"failed to start command: {exc}")
 
@@ -156,24 +180,32 @@ class ConsoleWindowController:
             text, self.state = handle(line, self.state, self.runner, self.status)
         except Exception as exc:  # noqa: BLE001 - a window must not die on a command
             text = f"failed: {type(exc).__name__}: {exc}"
-        finally:
-            # Cleared here rather than in `_finish`. If the hop to the main
-            # thread never runs -- no run loop, a drained queue, an AppKit
-            # oddity -- a flag cleared only over there leaves the console
-            # refusing every subsequent line as "still running" forever.
+        try:
+            self._on_main(lambda: self._finish(text))
+        except Exception:  # noqa: BLE001 - the flag must not outlive a failed hop
+            # The hop was never queued, so `_finish` will not clear the flag.
             self._busy = False
-        self._on_main(lambda: self._finish(text))
+            raise
 
     def _finish(self, text: str) -> None:
-        """Back on the main thread: AppKit redraws nowhere else."""
-        if self.state.closed:
-            self.state.closed = False  # so a reopened window is not born closed
-            self.close()
-            return
-        if text == CLEAR:
-            self.clear()
-            return
-        self.append(text)
+        """Back on the main thread: AppKit redraws nowhere else.
+
+        The busy flag is cleared here, after the output is drawn, not on the
+        worker. Cleared on the worker, it dropped before this hop was queued:
+        with the main thread busy, a second Return was accepted and its echo
+        was drawn above the first command's output.
+        """
+        try:
+            if self.state.closed:
+                self.state.closed = False  # so a reopened window is not born closed
+                self.close()
+                return
+            if text == CLEAR:
+                self.clear()
+                return
+            self.append(text)
+        finally:
+            self._busy = False
 
     def close(self) -> None:
         if self.window is not None:
@@ -247,7 +279,25 @@ class ConsoleWindowController:
         self.input_field.setAction_("submit:")
         content.addSubview_(self.input_field)
 
-        self.window.center()
+        positioned = False
+        try:
+            from AppKit import NSScreen
+
+            screen = NSScreen.mainScreen()
+            if screen is not None:
+                vf = screen.visibleFrame()
+                win_w = min(820.0, vf.size.width * 0.48)
+                win_h = min(520.0, vf.size.height * 0.46)
+                win_x = vf.origin.x + vf.size.width - win_w - 20.0
+                win_y = vf.origin.y + 20.0
+                self.window.setFrame_display_(NSMakeRect(win_x, win_y, win_w, win_h), True)
+                positioned = True
+        except Exception:  # noqa: BLE001
+            pass
+
+        if not positioned:
+            self.window.center()
+
         self.window.makeKeyAndOrderFront_(None)
         self.window.makeFirstResponder_(self.input_field)
 

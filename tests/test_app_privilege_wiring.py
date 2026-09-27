@@ -40,6 +40,9 @@ def _no_real_privilege_calls(monkeypatch):
     """
     monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: [])
     monkeypatch.setattr(privileges, "is_granted", lambda *a, **k: False)
+    # The executor's `covered_interfaces_fn` seam is wired to this in production;
+    # unstubbed it is a real `sudo -l` from inside the DHCP-renewal test below.
+    monkeypatch.setattr(privileges, "granted_interfaces", lambda *a, **k: [])
     monkeypatch.setattr(privileges, "dhcp_interfaces", lambda *a, **k: ["en0", "en9"])
     monkeypatch.setattr(privileges, "primary_interface", lambda *a, **k: "en9")
     monkeypatch.setattr(
@@ -357,6 +360,21 @@ def test_the_window_shows_a_permissions_section(tmp_path):
     assert "not granted" in stats
 
 
+def test_a_blanket_nopasswd_rule_is_granted_in_the_window_too(tmp_path, monkeypatch):
+    """`privileges.is_granted` already counts `(ALL) NOPASSWD: ALL`, so the repairs
+    run. The window derives its own answer from the same listing and must agree:
+    "Elevated permissions: not granted" beside "Interfaces the grant covers: (all,
+    via a blanket NOPASSWD rule)" tells someone the machine is in two states at once.
+    """
+    monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: ["ALL"])
+    app = build_app(tmp_path)
+    app._refresh_privilege_status()
+    finish(app)
+    assert app.privileges_granted is True
+    app.open_dashboard()
+    assert "not granted" not in str(app._dashboard.stats_view.string())
+
+
 def test_the_permissions_section_names_what_is_still_impossible(tmp_path):
     """Both of these look identical to "the grant did not work" otherwise: the
     interface toggle is withheld by choice, and the masked DNS names in the log are
@@ -400,26 +418,87 @@ def test_the_repair_executor_is_given_the_real_privilege_probes(tmp_path, monkey
     installed and then never consulted -- and nothing else in the suite would
     notice, because the ungranted behaviour is what every other test asserts.
 
-    The probes are bound when the executor is built, so they are patched before
-    `build_state_machine` runs. What that binding buys is a probe called per step
-    rather than a boolean captured at launch: granting mid-session takes effect
-    without a restart.
+    The probes are looked up per step rather than captured at launch, so granting
+    mid-session takes effect without a restart. The DHCP renewal asks about the
+    interface that holds the route, because the grant lists interfaces.
     """
     from netdnsmonitor.app import build_state_machine
     from netdnsmonitor.config import load_config
     from netdnsmonitor.ladder import LadderStep
 
     calls = []
-    monkeypatch.setattr(privileges, "is_granted", lambda *a, **k: calls.append("probed") or True)
-    monkeypatch.setattr(privileges, "primary_interface", lambda *a, **k: None)
-
-    machine = build_state_machine(load_config(str(tmp_path / "no-config.yaml")))
-    outcome = machine.repair_executor(
-        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    monkeypatch.setattr(privileges, "primary_interface", lambda *a, **k: "en9")
+    monkeypatch.setattr(
+        privileges,
+        "granted_commands_now",
+        # Covers en0 only, so the step must refuse before running anything.
+        lambda *a, **k: calls.append("probed") or ["/usr/sbin/ipconfig set en0 DHCP"],
     )
 
+    machine = build_state_machine(load_config(str(tmp_path / "no-config.yaml")))
+    renew = LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    outcome = machine.repair_executor(renew)
+
     assert calls == ["probed"]
-    # Granted, so it got as far as looking for an interface -- with the default
-    # `lambda: False` it would have stopped at NEEDS_PRIVILEGE instead.
-    assert "cannot renew" in outcome
-    assert "NEEDS_PRIVILEGE" not in outcome
+    assert outcome.startswith("NEEDS_PRIVILEGE")
+
+    machine.repair_executor(renew)
+    assert calls == ["probed", "probed"]  # asked again, not remembered
+
+
+def test_the_dhcp_probe_asks_about_the_interface_it_is_given(monkeypatch):
+    """The per-interface answer the executor's renew step consults. Called
+    directly: a covered interface would otherwise make the step run ipconfig.
+    """
+    from netdnsmonitor.app import dhcp_lease_granted
+
+    monkeypatch.setattr(
+        privileges, "granted_commands_now", lambda *a, **k: ["/usr/sbin/ipconfig set en9 DHCP"]
+    )
+    assert dhcp_lease_granted("en9") is True
+    assert dhcp_lease_granted("en0") is False
+
+    monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: ["ALL"])
+    assert dhcp_lease_granted("en0") is True
+
+
+def test_a_blanket_nopasswd_rule_reads_as_granted(tmp_path, monkeypatch):
+    """`(ALL) NOPASSWD: ALL` permits the restart. Matching the exact line alone
+    showed "not granted" on such a machine while the repair would have worked.
+    """
+    monkeypatch.setattr(privileges, "granted_commands_now", lambda *a, **k: ["ALL"])
+    app = build_app(tmp_path)
+    app._refresh_privilege_status()
+    finish(app)
+
+    assert app.privileges_granted is True
+    assert app.privileges_file_rule_listed is False
+    app.open_dashboard()
+    stats = str(app._dashboard.stats_view.string())
+    assert "not granted" not in stats
+    # No file from this app is behind the grant, and the window must not claim one.
+    assert "absent -- another NOPASSWD rule grants this" in stats
+
+
+def test_the_grant_names_the_account_the_process_runs_as(tmp_path, monkeypatch):
+    """Not $USER or $LOGNAME: getpass reads those first, and the name ends up in a
+    sudoers rule that grants root commands.
+    """
+    import os
+    import pwd
+
+    monkeypatch.setenv("USER", "someone-else")
+    monkeypatch.setenv("LOGNAME", "someone-else")
+    seen = {}
+
+    def fake_grant(user, interfaces, **kwargs):
+        seen["user"] = user
+        return {"ok": True, "cancelled": False, "message": "Granted."}
+
+    monkeypatch.setattr(privileges, "grant", fake_grant)
+    app = build_app(tmp_path)
+    app._append_output = lambda text: None
+    app.handle_dashboard_action("grant_privileges")
+    finish(app)
+
+    assert seen["user"] == pwd.getpwuid(os.getuid()).pw_name

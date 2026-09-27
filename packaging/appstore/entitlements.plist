@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the Mac App Store build's main executable.
+
+  app-sandbox      Required for every Mac App Store app (Guideline 2.4.5(i)).
+  network.client   Outgoing TCP and UDP: reachability probes, DNS lookups, HTTPS
+                   to the Anthropic API and a Slack webhook, SMTP.
+  network.server   Apple documents that UDP usually needs both client and server,
+                   and that ICMP ping needs both. Peer discovery also listens on a
+                   UDP port for other copies of the app on the same LAN.
+
+  build_appstore.py adds com.apple.application-identifier and
+  com.apple.developer.team-identifier for release builds, because they must
+  match the embedded provisioning profile. They are left out here so an ad-hoc
+  build does not claim a team it is not signed by.
+
+  Deliberately absent: any temporary-exception entitlement. The features that
+  would need one (network settings, root, the system log) are switched off in
+  this build instead. See netdnsmonitor/distribution.py.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>

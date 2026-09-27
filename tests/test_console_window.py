@@ -10,6 +10,8 @@ outcomes `handle` can return -- text, clear, close -- get routed. `runner` and
 falls back to `print`, so these tests capture stdout to see what was drawn.
 """
 
+import pytest
+
 from netdnsmonitor.console import CLEAR, CommandResult, ConsoleState
 from netdnsmonitor.console_window import BUSY_MESSAGE, ConsoleWindowController
 
@@ -31,13 +33,50 @@ def test_a_line_runs_and_its_output_is_drawn(capsys):
     assert "ok" in capsys.readouterr().out
 
 
-def test_busy_is_cleared_on_the_worker_thread_not_the_main_hop():
-    """If the main-thread hop never runs, a flag cleared only there would leave
-    the console refusing every later line as 'still running'.
+def test_busy_holds_until_the_output_is_drawn(capsys):
+    """Cleared on the worker, the flag dropped before the draw was queued: with
+    the main thread busy, a second Return was accepted and its echo landed
+    above the first command's output.
     """
-    console = controller(on_main=lambda fn: None)  # the hop never happens
+    queued = []
+    console = controller(on_main=queued.append)
     console._busy = True
-    console.run_line("echo hi")
+    console.run_line("echo a")
+
+    console.submit("echo b")
+    assert console._busy is True
+    assert BUSY_MESSAGE in capsys.readouterr().out
+
+    for fn in queued:
+        fn()
+    assert console._busy is False
+    assert "ok" in capsys.readouterr().out
+
+
+def test_busy_is_cleared_when_the_hop_to_the_main_thread_fails():
+    """No hop queued means no `_finish`, so the worker has to clear the flag or
+    the console refuses every later line as 'still running'.
+    """
+
+    def broken(fn):
+        raise RuntimeError("no main queue")
+
+    console = controller(on_main=broken)
+    console._busy = True
+    with pytest.raises(RuntimeError):
+        console.run_line("echo hi")
+    assert console._busy is False
+
+
+def test_busy_is_cleared_when_drawing_raises():
+    def explode(text):
+        raise RuntimeError("AppKit")
+
+    console = controller()
+    console.append = explode
+    console._busy = True
+    with pytest.raises(RuntimeError):
+        console._finish("output")
     assert console._busy is False
 
 
@@ -69,8 +108,8 @@ def test_submit_refuses_a_second_line_while_one_is_running(capsys):
 
 
 def test_a_failed_thread_start_does_not_strand_the_busy_flag(capsys, monkeypatch):
-    """`run_line`'s `finally` clears the flag, and it never runs if the thread
-    never starts -- leaving the console refusing every later line.
+    """The flag is cleared once the output is drawn, which never happens if the
+    thread never starts -- leaving the console refusing every later line.
     """
     import netdnsmonitor.console_window as module
 

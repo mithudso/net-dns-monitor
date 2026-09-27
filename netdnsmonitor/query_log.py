@@ -1,8 +1,9 @@
-"""Mine the macOS unified log for the domains actually being queried, so the
-resolution monitor can check the sites this machine cares about instead of a
-hand-maintained list. Reuses `log show`'s raw text output (same command
-`log_watcher.py` uses for error excerpts) but with a broader predicate --
-here we want every DNS query line, not just the failures.
+"""Mine the macOS unified log for the domains actually being queried. Its one
+consumer is the dashboard's DNS prewarm (`app._prewarm_dns`); the resolution
+monitor stopped selecting from it in 5c647c4 (see `stall_log.py`). Reuses
+`log show`'s raw text output (same command `log_watcher.py` uses for error
+excerpts) but with a broader predicate -- here we want every DNS query line,
+not just the failures.
 
 Domain extraction is a regex over raw log text, not a parse of mDNSResponder's
 internal log format (which isn't stable across macOS versions and isn't
@@ -15,7 +16,7 @@ counted as queried domains.
 import re
 import subprocess
 from collections import Counter
-from typing import Callable
+from typing import Callable, Optional
 
 RunFn = Callable[..., object]
 
@@ -39,10 +40,28 @@ def make_query_log_reader(
 ):
     predicate = 'process == "mDNSResponder" OR eventMessage CONTAINS "DNS"'
 
-    def reader() -> list[str]:
+    def reader() -> Optional[list[str]]:
+        """The log's lines, [] for an empty log, None when it could not be read.
+
+        None and [] are kept apart because the consumer turns [] into "no
+        queried domains found" -- a claim about the network. A timed-out,
+        refused, or missing `log show` is a claim about the read, and
+        collapsing it into [] would report a quiet machine.
+        """
         try:
             result = run_fn(
-                ["log", "show", "--style", "compact", "--last", lookback, "--predicate", predicate],
+                # Absolute path, as in system_log.py: a frozen .app launched via
+                # `open` does not inherit the shell's PATH.
+                [
+                    "/usr/bin/log",
+                    "show",
+                    "--style",
+                    "compact",
+                    "--last",
+                    lookback,
+                    "--predicate",
+                    predicate,
+                ],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -50,9 +69,9 @@ def make_query_log_reader(
                 timeout=10,
             )
         except (subprocess.SubprocessError, OSError, UnicodeError):
-            return []
+            return None
         if result.returncode != 0:
-            return []
+            return None
         return result.stdout.splitlines()
 
     return reader

@@ -93,12 +93,51 @@ def test_malformed_rows_are_skipped_rather_than_raising():
     """This runs every 5 seconds forever; one unexpected line must not take
     the heartbeat down.
     """
-    junk = NETSTAT_OUTPUT + "en0        1500  <Link#15>   4a:63:a4:bf:16:ed  -  -  -  -\n"
+    junk = NETSTAT_OUTPUT + (
+        "en0        1500  <Link#15>   4a:63:a4:bf:16:ed     1000     0"
+        "          �      900     0      40000     0\n"
+    )
     assert parse_interface_counters(junk) == (EN0_IN + EN9_IN, EN0_OUT + EN9_OUT)
 
 
-def test_empty_output_is_zero_not_an_error():
-    assert parse_interface_counters("") == (0, 0)
+def test_empty_output_is_unmeasured_not_an_idle_zero():
+    """(0, 0) would reach ThroughputMeter as a real reading and render "measured,
+    idle" forever. Nothing parsed means nothing was measured.
+    """
+    assert parse_interface_counters("") is None
+
+
+def test_output_with_no_matching_link_row_is_unmeasured_not_idle():
+    """A netstat format change, or a sandbox that hides interfaces, leaves no
+    `<Link#>` row for en*. Summing nothing to zero reported an idle link on no
+    evidence, on every tick for the life of the process.
+    """
+    only_other_interfaces = """Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+lo0        16384 <Link#1>                        546703     0  121334000   546703     0  121334000     0
+utun8      1300  <Link#34>                       193060     0   67107906   104358     0   67872775     0
+"""
+    assert parse_interface_counters(only_other_interfaces) is None
+
+
+def test_an_interface_that_really_carried_nothing_is_still_zero():
+    """The fix for the no-match case must not erase a genuine zero reading."""
+    fresh = """Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+en5        1500  <Link#20>   00:e0:4c:ff:bd:c0        0     0          0        0     0          0     0
+"""
+    assert parse_interface_counters(fresh) == (0, 0)
+
+
+def test_only_malformed_matching_rows_is_unmeasured():
+    junk_only = "en0        1500  <Link#15>   4a:63:a4:bf:16:ed  -  -  -  -  -  -  -\n"
+    assert parse_interface_counters(junk_only) is None
+
+
+def test_read_interface_counters_returns_none_when_nothing_matched():
+    def fake_run(args, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert read_interface_counters(run_fn=fake_run) is None
+    assert ThroughputMeter().sample(read_interface_counters(run_fn=fake_run)) == (None, None)
 
 
 def test_read_interface_counters_uses_the_absolute_netstat_path():
@@ -190,6 +229,16 @@ def test_recovers_on_the_sample_after_a_counter_reset():
     down, up = meter.sample((5_000 + 6250, 5_000 + 1250), now=110.0)
     assert down == 10_000
     assert up == 2_000
+
+
+def test_an_unmeasured_reading_keeps_the_baseline():
+    """One failed netstat read must cost one blank cycle, not two: the next
+    good reading still has the earlier baseline to diff against.
+    """
+    meter = ThroughputMeter()
+    meter.sample((1000, 500), now=100.0)
+    assert meter.sample(None, now=105.0) == (None, None)
+    assert meter.sample((7250, 1750), now=110.0) == (5000.0, 1000.0)
 
 
 def test_zero_elapsed_time_reports_no_rate_instead_of_dividing_by_zero():

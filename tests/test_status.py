@@ -292,6 +292,20 @@ def test_status_report_includes_classification_during_an_incident():
     assert "dns" in build_status_report("incident", "dns")
 
 
+def test_status_report_does_not_borrow_a_stale_classification_for_a_ping_failure():
+    """Same rule as build_title: last_classification is set only on the
+    healthy->incident edge and never cleared, so a ping-only incident printing
+    it would point the reader at a subsystem from an unrelated incident.
+    """
+    text = build_status_report("healthy", "dns", ping_down=True)
+    assert "dns" not in text
+    assert "classification: ping" in text
+
+
+def test_status_report_omits_classification_while_merely_flaky():
+    assert "classification" not in build_status_report("healthy", "dns", consecutive_failures=1)
+
+
 def test_status_report_says_so_when_no_report_has_been_written():
     assert "(none this session)" in build_status_report("healthy")
 
@@ -324,8 +338,10 @@ BACKUP_ROW = {"name": "Wi-Fi", "device": "en0", "found": True, "reachable": True
 
 def snapshot(**overrides):
     """`active_service` is what the system reports; `active_side` is derived
-    from it. A fixture where the two disagree describes a state that cannot
-    happen, so the helper keeps them consistent unless told otherwise.
+    from it: "backup" when a configured backup heads the order, "preferred"
+    otherwise -- including when a third service heads it. The helper derives
+    `active_service` from `active_side` unless told otherwise; passing a third
+    name with the default side reproduces what failover.snapshot reports for it.
     """
     snap = {
         "error": None,
@@ -373,6 +389,30 @@ def test_the_live_side_is_marked_and_the_other_is_not():
     assert on_backup[1].startswith("○") and on_backup[2].startswith("●")
 
 
+def test_a_third_service_at_the_head_fills_neither_marker():
+    """failover.snapshot reports `active_side` "preferred" for any head of the
+    order that is not a configured backup. Filling the preferred marker for a
+    Thunderbolt Bridge claims traffic is on a link that carries none.
+    """
+    lines = build_failover_lines(snapshot(active_service="Thunderbolt Bridge"))
+    assert lines[1].startswith("○")
+    assert lines[2].startswith("○")
+
+
+def test_the_backup_row_follows_the_one_actually_carrying_traffic():
+    second = {"name": "iPhone USB", "device": "en8", "found": True, "reachable": True}
+    lines = build_failover_lines(
+        snapshot(
+            active_side="backup",
+            active_service="iPhone USB",
+            backups=[dict(BACKUP_ROW), second],
+        )
+    )
+    assert lines[2].startswith("●")
+    assert "iPhone USB" in lines[2]
+    assert "Backup (of 2)" in lines[2]
+
+
 def test_rows_name_the_device():
     lines = build_failover_lines(snapshot())
     assert "(en6)" in lines[1] and "(en0)" in lines[2]
@@ -401,3 +441,32 @@ def test_a_missing_service_is_called_out():
 def test_manual_only_mode_is_visible_in_the_first_row():
     assert "manual only" in build_failover_lines(snapshot(auto_enabled=False))[0]
     assert "automatic" in build_failover_lines(snapshot(auto_enabled=True))[0]
+
+
+def test_the_first_row_says_failback_is_paused_after_a_manual_switch():
+    """Otherwise a user watching the preferred link come back sees "automatic"
+    and cannot tell why the machine stays on the backup.
+    """
+    lines = build_failover_lines(snapshot(active_side="backup", failback_paused=True))
+    assert "automatic" in lines[0]
+    assert "failback paused after a manual switch" in lines[0]
+    assert len(lines) == 3, "the menu has exactly three rows; a fourth is never shown"
+    # app.py cuts this row at the first " — " in a build that cannot write the
+    # order, so the pause must sit after that single separator.
+    assert lines[0].count(" — ") == 1
+
+
+def test_no_pause_is_mentioned_when_there_is_none():
+    assert "paused" not in build_failover_lines(snapshot(active_side="backup"))[0]
+    unpaused = snapshot(active_side="backup", failback_paused=False)
+    assert "paused" not in build_failover_lines(unpaused)[0]
+
+
+def test_manual_only_mode_does_not_claim_a_paused_failback():
+    """With automatic switching off there is no automatic failback to pause;
+    "manual only" is already the whole reason nothing moves.
+    """
+    snap = snapshot(active_side="backup", failback_paused=True, auto_enabled=False)
+    first = build_failover_lines(snap)[0]
+    assert "manual only" in first
+    assert "paused" not in first

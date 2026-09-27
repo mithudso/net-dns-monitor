@@ -29,14 +29,18 @@ recovery would lose exactly the outages worth investigating.
 values in here would produce timestamps like `847293.44`. This takes an injected
 `clock` returning timezone-aware datetimes, matching report.py.
 
-Writes go through report_storage._atomic_write, which already carries this
+Episode documents go through report_storage._atomic_write, which carries this
 project's two hard-won lessons: explicit UTF-8 (launchd sets no LANG, so the
 process encoding is ASCII and any curly quote raises) and write-to-temp then
-os.replace (so a failed write cannot truncate an existing record).
+os.replace (so a failed write cannot truncate an existing record). The journal
+is a plain UTF-8 append: an append cannot truncate what is already there, and
+the worst a crash mid-write leaves is one torn last line.
 """
 
 import json
 import os
+import sys
+import traceback
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -50,6 +54,18 @@ STEP = "step"
 OBSERVATION = "observation"
 RECHECK = "recheck"
 ESCALATION = "escalation"
+
+# app.py notes one OBSERVATION per coalesced system-log row while an episode is
+# open, and nothing else bounds that: one 13-day episode held thousands of them in
+# memory and re-serialised them all on close. Only observations are capped. The
+# other kinds are the episode's own story, so they are always kept. Capped
+# observations still reach the journal, and the document says how many there were.
+MAX_EPISODE_OBSERVATIONS = 5000
+MAX_OBSERVATIONS_PER_EPISODE = MAX_EPISODE_OBSERVATIONS
+
+# The journal is append-only and outlives every episode, so without a cap uptime
+# alone fills the disk. One previous generation is kept at `<path>.1`.
+MAX_JOURNAL_BYTES = 50 * 1024 * 1024
 
 
 def _utc_now() -> datetime:
@@ -65,12 +81,20 @@ class ForensicRecorder:
         episodes_dir: str,
         clock: Callable[[], datetime] = _utc_now,
         writer: Callable[[str, str], None] = _atomic_write,
+        max_episode_observations: int = MAX_EPISODE_OBSERVATIONS,
+        max_journal_bytes: int = MAX_JOURNAL_BYTES,
     ):
         self.journal_path = journal_path
         self.episodes_dir = episodes_dir
         self.clock = clock
         self.writer = writer
+        self.max_episode_observations = max(0, int(max_episode_observations))
+        self.max_journal_bytes = int(max_journal_bytes)
         self._episode: Optional[dict] = None
+        self._observations_kept = 0
+        # Exception class name of the latest failed journal append, or None once
+        # an append succeeds. Never the message.
+        self.journal_error: Optional[str] = None
 
     @property
     def is_open(self) -> bool:
@@ -113,12 +137,28 @@ class ForensicRecorder:
                 "trigger_reason": reason,
                 "events": [],
             }
+            self._observations_kept = 0
 
+        kept = True
         if self._episode is not None:
-            self._episode["events"].append(event)
             event["episode_started_at"] = self._episode["started_at"]
+            if kind == OBSERVATION:
+                kept = self._observations_kept < self.max_episode_observations
+                if kept:
+                    self._observations_kept += 1
+            if kept:
+                self._episode["events"].append(event)
 
-        self._append_journal(event)
+        journaled = self._append_journal(event)
+
+        if not kept:
+            episode = self._episode
+            episode["observations_omitted"] = episode.get("observations_omitted", 0) + 1
+            episode["journal_path"] = self.journal_path
+            if not journaled:
+                # Counted apart so the document never says the journal holds an
+                # observation the journal failed to take.
+                episode["observations_unjournaled"] = episode.get("observations_unjournaled", 0) + 1
 
         if kind == UP and self._episode is not None:
             return self._close(event)
@@ -136,16 +176,37 @@ class ForensicRecorder:
 
     # --- persistence -------------------------------------------------------
 
-    def _append_journal(self, event: dict) -> None:
+    def _append_journal(self, event: dict) -> bool:
+        """Append one event. Returns whether it reached the journal."""
+        path = self.journal_path
         try:
-            os.makedirs(os.path.dirname(self.journal_path) or ".", exist_ok=True)
-            with open(self.journal_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(event) + "\n")
-        except OSError:
-            # An unwritable journal must not take the monitor down. Deliberately
-            # not printed: this would be called every 5 seconds during an
-            # outage on a full disk and would bury the alert lines in the log.
-            pass
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            if os.path.exists(path) and os.path.getsize(path) > self.max_journal_bytes:
+                os.replace(path, path + ".1")
+                if self._episode is not None:
+                    self._episode["journal_rotations"] = (
+                        self._episode.get("journal_rotations", 0) + 1
+                    )
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event, default=str) + "\n")
+        except OSError as exc:
+            # An unwritable journal must not take the monitor down, but a silent
+            # one is evidence that quietly stops existing. Printed only on the
+            # failure edge: app.py notes one observation per coalesced system-log
+            # row, so a single log read is a burst of calls, and a line per call
+            # would bury the alert lines this shares stderr with.
+            name = type(exc).__name__
+            if self.journal_error is None:
+                print(
+                    f"[forensic] cannot append to journal {path} ({name}); "
+                    "further failures are not printed until an append succeeds",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            self.journal_error = name
+            return False
+        self.journal_error = None
+        return True
 
     def _write_episode(self, episode: dict) -> Optional[dict]:
         try:
@@ -153,24 +214,29 @@ class ForensicRecorder:
             stamp = episode["started_at"].replace(":", "-")
             json_path = os.path.join(self.episodes_dir, f"{stamp}-episode.json")
             markdown_path = os.path.join(self.episodes_dir, f"{stamp}-episode.md")
-            self.writer(json_path, json.dumps(episode, indent=2))
+            self.writer(json_path, json.dumps(episode, indent=2, default=str))
             self.writer(markdown_path, render_episode_markdown(episode))
             return {"json_path": json_path, "markdown_path": markdown_path}
         except Exception:  # noqa: BLE001 - note() promises never to raise
             # Broader than OSError on purpose. This runs from the heartbeat
-            # drain and the incident pipeline; an unserialisable event or a
-            # rendering bug must cost the document, not the monitor. The episode
-            # has already been cleared, so the next outage still records.
+            # drain and the incident pipeline; a rendering bug must cost the
+            # document, not the monitor (serialisation itself cannot raise --
+            # both dumps use default=str). The episode has already been
+            # cleared, so the next outage still records. The trace is printed
+            # because the document is the deliverable: an episode that silently
+            # never appeared is a hole nobody can explain later.
+            traceback.print_exc()
             return None
 
 
-def _duration_seconds(started_at: str, ended_at: str) -> float:
+def _duration_seconds(started_at: str, ended_at: str) -> Optional[float]:
     try:
         return (
             datetime.fromisoformat(ended_at) - datetime.fromisoformat(started_at)
         ).total_seconds()
     except ValueError:
-        return 0.0
+        # None renders as "unknown"; 0.0 would claim an instant recovery.
+        return None
 
 
 KIND_HEADINGS = {
@@ -218,6 +284,8 @@ def render_episode_markdown(episode: dict) -> str:
         lines.append(f"- **Result:** {event.get('result') or 'no result recorded'}")
         lines.append("")
 
+    lines.extend(_omitted_observation_lines(episode))
+
     lines.append("## Steps taken")
     lines.append("")
     if steps:
@@ -230,6 +298,13 @@ def render_episode_markdown(episode: dict) -> str:
                 f"| {_cell(step.get('reason'))} "
                 f"| {_cell(step.get('result'))} |"
             )
+    elif any(e.get("kind") == DOWN and e.get("detector") == "flap_gate" for e in events):
+        # An unclassified incident runs no ladder step, so an empty step list
+        # alone does not mean the gate never declared an incident.
+        lines.append(
+            "No remedial step ran. The anti-flap gate declared an incident, but no "
+            "troubleshooting step was recorded for it."
+        )
     else:
         lines.append(
             "No remedial step ran. The outage cleared before the anti-flap gate "
@@ -238,6 +313,31 @@ def render_episode_markdown(episode: dict) -> str:
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def _omitted_observation_lines(episode: dict) -> list:
+    omitted = episode.get("observations_omitted") or 0
+    if not omitted:
+        return []
+    unjournaled = episode.get("observations_unjournaled") or 0
+    journaled = omitted - unjournaled
+    journal = episode.get("journal_path") or "the forensic journal"
+    lines = []
+    if journaled:
+        lines.append(f"{journaled} more observations were recorded only in the journal: {journal}")
+        if episode.get("journal_rotations"):
+            lines.append(
+                f"The journal reached its size cap during this episode and rotated to "
+                f"{journal}.1, which keeps one previous generation; if it rotated more "
+                "than once, the oldest of those observations are gone."
+            )
+    if unjournaled:
+        lines.append(
+            f"{unjournaled} more observations were left out of this document and could "
+            "not be written to the journal either, so they are lost."
+        )
+    lines.append("")
+    return lines
 
 
 def _cell(value: Optional[str]) -> str:
@@ -255,6 +355,13 @@ def _cell(value: Optional[str]) -> str:
 def _format_duration(seconds: Optional[float]) -> str:
     if seconds is None:
         return "unknown"
+    if seconds < 0:
+        # Wall clock on purpose (see the module docstring), and wall clocks get
+        # stepped. "-70s" reads as a rendering bug; say what happened instead.
+        return (
+            f"unknown (recovery stamped {abs(seconds):.0f}s before the outage "
+            "began -- the wall clock moved)"
+        )
     if seconds < 60:
         return f"{seconds:.0f}s"
     minutes, secs = divmod(int(seconds), 60)

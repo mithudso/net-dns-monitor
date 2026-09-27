@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
+from netdnsmonitor import privileges
 from netdnsmonitor.ladder import LadderStep
-from netdnsmonitor.repair_executor import make_repair_executor
+from netdnsmonitor.repair_executor import DSCACHEUTIL, NETSTAT, SCUTIL, make_repair_executor
+
+KILLALL = privileges.KILLALL
 
 
 def fake_run_factory(returncode=0, stdout="ok output", stderr=""):
@@ -23,16 +26,21 @@ def test_flush_dns_cache_runs_flush_and_hup_and_reports_ok():
     # accepts `dscacheutil -statistics` (flushes nothing, still reports "ok")
     # and `killall -9 mDNSResponder` (kills the resolver daemon outright
     # instead of signalling it). Both mutations passed the old assertions.
-    assert ["dscacheutil", "-flushcache"] in calls
-    assert ["killall", "-HUP", "mDNSResponder"] in calls
+    #
+    # Absolute paths: this argv runs from a menu-bar app whose PATH is whatever
+    # launchd handed it, and privileges.py already names the same binaries by
+    # full path in the sudoers rule it writes.
+    assert [DSCACHEUTIL, "-flushcache"] in calls
+    assert [KILLALL, "-HUP", "mDNSResponder"] in calls
+    assert all(call[0].startswith("/") for call in calls)
 
 
 def test_flush_dns_cache_flushes_the_cache_before_signalling_the_resolver():
     run_fn, calls = fake_run_factory(returncode=0)
     executor = make_repair_executor(run_fn=run_fn)
     executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
-    assert calls.index(["dscacheutil", "-flushcache"]) < calls.index(
-        ["killall", "-HUP", "mDNSResponder"]
+    assert calls.index([DSCACHEUTIL, "-flushcache"]) < calls.index(
+        [KILLALL, "-HUP", "mDNSResponder"]
     )
 
 
@@ -48,7 +56,7 @@ def test_flush_dns_cache_reports_partial_when_only_hup_lacks_privilege():
     # Empirically confirmed: dscacheutil -flushcache succeeds unprivileged, but
     # killall -HUP mDNSResponder can't signal a daemon owned by another user.
     def run_fn(args, **kwargs):
-        if args[0] == "dscacheutil":
+        if args[0] == DSCACHEUTIL:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return SimpleNamespace(
             returncode=1, stdout="", stderr="No matching processes belonging to you were found"
@@ -84,6 +92,44 @@ def granted_executor(run_fn, interface="en0"):
     )
 
 
+# Trimmed from a real `ipconfig getpacket en0` on a DHCP-configured interface.
+LEASE_PACKET = """op = BOOTREPLY
+htype = 1
+yiaddr = 192.0.2.10
+options:
+Options count is 4
+dhcp_message_type (uint8): ACK 0x5
+lease_time (uint32): 0x15180
+router (ip_mult): {192.0.2.1}
+end (none):
+"""
+
+
+def getpacket_argv(interface):
+    return ["/usr/sbin/ipconfig", "getpacket", interface]
+
+
+def renewal_run_factory(
+    packet=LEASE_PACKET,
+    getpacket_returncode=0,
+    getpacket_stderr="",
+    set_returncode=0,
+    set_stderr="",
+):
+    """`ipconfig getpacket` answers with `packet`; everything else with the set result."""
+    calls = []
+
+    def run_fn(args, **kwargs):
+        calls.append(args)
+        if args[1:2] == ["getpacket"]:
+            return SimpleNamespace(
+                returncode=getpacket_returncode, stdout=packet, stderr=getpacket_stderr
+            )
+        return SimpleNamespace(returncode=set_returncode, stdout="", stderr=set_stderr)
+
+    return run_fn, calls
+
+
 def test_the_ungranted_stub_says_how_to_grant_it():
     """Otherwise the outcome is a dead end: it names a missing capability and no
     way to acquire it, which is what this whole feature was about.
@@ -100,7 +146,7 @@ def test_flush_dns_cache_retries_the_resolver_restart_with_sudo_when_granted():
     def run_fn(args, **kwargs):
         calls.append(args)
         # The unprivileged HUP still fails; the sudo one succeeds.
-        if args[0] == "killall":
+        if args[0] == KILLALL:
             return SimpleNamespace(returncode=1, stdout="", stderr="not permitted")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -129,9 +175,7 @@ def test_a_granted_rule_that_still_fails_is_reported_differently_from_no_grant()
     """
 
     def run_fn(args, **kwargs):
-        return SimpleNamespace(
-            returncode=0 if args[0] == "dscacheutil" else 1, stdout="", stderr=""
-        )
+        return SimpleNamespace(returncode=0 if args[0] == DSCACHEUTIL else 1, stdout="", stderr="")
 
     outcome = granted_executor(run_fn)(
         LadderStep("flush_dns_cache", "repair", needs_privilege=False)
@@ -142,7 +186,7 @@ def test_a_granted_rule_that_still_fails_is_reported_differently_from_no_grant()
 
 
 def test_renewing_a_lease_targets_the_default_route_interface():
-    run_fn, calls = fake_run_factory(returncode=0)
+    run_fn, calls = renewal_run_factory()
     outcome = granted_executor(run_fn, interface="en9")(
         LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
     )
@@ -157,16 +201,169 @@ def test_renewing_a_lease_with_no_default_route_does_not_shell_out():
         LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
     )
     assert "cannot renew" in outcome
+    # `primary_interface` answers None for a default route on a VPN tunnel too, so
+    # the outcome must not assert that no route exists.
+    assert "Ethernet or Wi-Fi" in outcome
+    assert "no interface currently carries" not in outcome
+    assert calls == []
+    # primary_interface only returns en* names, so None also covers a full
+    # tunnel VPN that holds the default route on utun. The old text said no
+    # interface carried the route, which is false in that case.
+    assert "no interface currently carries" not in outcome
+    assert "tunnel" in outcome
+
+
+def test_renewal_is_refused_when_the_grant_does_not_cover_this_interface():
+    """The grant lists `ipconfig set <name> DHCP` per interface. A machine that
+    now routes over an interface added after the grant has the mDNSResponder
+    rule but not this one, and `sudo -n` would fail with a password prompt.
+    """
+    run_fn, calls = fake_run_factory(returncode=0)
+    asked = []
+
+    def dhcp_granted_fn(interface):
+        asked.append(interface)
+        return False
+
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en7",
+        dhcp_granted_fn=dhcp_granted_fn,
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("NEEDS_PRIVILEGE")
+    assert asked == ["en7"]
     assert calls == []
 
 
+def test_renewal_runs_when_the_grant_covers_this_interface():
+    run_fn, calls = renewal_run_factory()
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        # The mDNSResponder rule is irrelevant to a DHCP renewal once the
+        # per-interface answer is available.
+        is_granted_fn=lambda: False,
+        primary_interface_fn=lambda: "en7",
+        dhcp_granted_fn=lambda interface: interface == "en7",
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("ok")
+    # The method check is the unprivileged read, and it comes first.
+    assert calls == [
+        getpacket_argv("en7"),
+        ["/usr/bin/sudo", "-n", "/usr/sbin/ipconfig", "set", "en7", "DHCP"],
+    ]
+
+
+def test_a_renewal_on_an_interface_the_grant_does_not_cover_reports_needs_privilege():
+    """`is_granted` answers only for the mDNSResponder restart; the DHCP rules are
+    separate lines enumerated at grant time. Dock a laptop and the default route
+    moves to an interface no rule names -- the sudo call would be refused, and it
+    is more honest (and cheaper) to say so than to run it and report the refusal.
+    """
+    run_fn, calls = fake_run_factory(returncode=0)
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en5",
+        covered_interfaces_fn=lambda: ["en0", "en9"],
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("NEEDS_PRIVILEGE")
+    assert "en5" in outcome
+    assert calls == []
+
+
+def test_a_blanket_grant_covers_whatever_interface_carries_the_default_route():
+    run_fn, calls = renewal_run_factory()
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en5",
+        covered_interfaces_fn=lambda: list(privileges.ALL_INTERFACES_SENTINEL),
+    )
+    outcome = executor(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    assert outcome.startswith("ok")
+    assert calls[-1] == ["/usr/bin/sudo", "-n", "/usr/sbin/ipconfig", "set", "en5", "DHCP"]
+
+
 def test_a_failed_renewal_reports_the_command_and_the_error():
-    run_fn, _calls = fake_run_factory(returncode=1, stderr="no such interface")
+    run_fn, _calls = renewal_run_factory(set_returncode=1, set_stderr="no such interface")
     outcome = granted_executor(run_fn)(
         LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
     )
     assert outcome.startswith("failed")
     assert "no such interface" in outcome
+
+
+def is_set_call(args):
+    return "set" in args
+
+
+def test_renew_refuses_an_interface_not_using_dhcp():
+    """`ipconfig set <if> DHCP` de-configures the interface's existing IPv4
+    service first. On a hand-configured interface that replaces the static
+    address with DHCP, and on a network with no DHCP server the interface is
+    left without usable IPv4 -- while the report said "ok". `getpacket` prints
+    nothing when DHCP is not active on the interface.
+    """
+    run_fn, calls = renewal_run_factory(packet="")
+    outcome = granted_executor(run_fn, interface="en4")(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("cannot renew:")
+    assert "en4" in outcome
+    assert "Nothing was changed" in outcome
+    assert calls == [getpacket_argv("en4")]
+    assert not any(is_set_call(c) for c in calls)
+
+
+def test_renew_refuses_a_packet_that_holds_no_lease():
+    """An INFORM service configures its address by hand and only asks the DHCP
+    server for options, so any packet it holds carries no lease time (RFC 2131
+    4.3.5). Non-empty output is not enough to call the interface DHCP.
+    """
+    inform_ack = "op = BOOTREPLY\noptions:\ndhcp_message_type (uint8): ACK 0x5\nend (none):\n"
+    run_fn, calls = renewal_run_factory(packet=inform_ack)
+    outcome = granted_executor(run_fn)(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("cannot renew:")
+    assert not any(is_set_call(c) for c in calls)
+
+
+def test_renew_does_not_guess_when_the_dhcp_state_cannot_be_read():
+    """A getpacket that failed says nothing about how the interface is
+    configured. Reporting it as "not using DHCP" would be a confident wrong
+    diagnosis, and renewing anyway is the hazard the check exists for.
+    """
+    run_fn, calls = renewal_run_factory(
+        packet="", getpacket_returncode=1, getpacket_stderr="interface doesn't exist"
+    )
+    outcome = granted_executor(run_fn)(
+        LadderStep("renew_dhcp_lease", "repair", needs_privilege=True)
+    )
+    assert outcome.startswith("failed:")
+    assert "not using DHCP" not in outcome
+    assert "interface doesn't exist" in outcome
+    assert "Nothing was changed" in outcome
+    assert not any(is_set_call(c) for c in calls)
+
+
+def test_the_dhcp_method_check_runs_unprivileged_and_bounded():
+    seen = []
+
+    def run_fn(args, **kwargs):
+        seen.append((args, kwargs))
+        stdout = LEASE_PACKET if args[1:2] == ["getpacket"] else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    granted_executor(run_fn)(LadderStep("renew_dhcp_lease", "repair", needs_privilege=True))
+    args, kwargs = seen[0]
+    assert args == getpacket_argv("en0")
+    assert "sudo" not in " ".join(args)
+    assert kwargs["timeout"] == 5
 
 
 def test_toggling_the_interface_is_never_automated_even_when_granted():
@@ -189,9 +386,9 @@ def test_check_interface_state_shells_out_to_scutil():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_interface_state", "check", needs_privilege=False))
     assert "Network reachable via Wi-Fi" in outcome
-    # `calls[0][0] == "scutil"` also lets this step silently become
+    # `calls[0][0] == SCUTIL` also lets this step silently become
     # `scutil --dns`, i.e. a different check entirely.
-    assert calls == [["scutil", "--nwi"]]
+    assert calls == [[SCUTIL, "--nwi"]]
 
 
 def test_check_default_route_shells_out_to_netstat():
@@ -203,7 +400,26 @@ def test_check_default_route_shells_out_to_netstat():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
     assert "default 192.0.2.1" in outcome
-    assert calls == [["netstat", "-rn", "-f", "inet"]]
+    assert calls == [[NETSTAT, "-rn", "-f", "inet"]]
+
+
+def test_a_failed_check_command_is_reported_as_failed():
+    """A check that exits non-zero used to report its (often empty) stdout as the
+    finding, so a broken `netstat` looked like "no routes" in the report, the LLM
+    bundle and the Slack alert.
+    """
+    run_fn, _calls = fake_run_factory(returncode=2, stdout="", stderr="")
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
+    assert outcome.startswith("failed")
+    assert "exited 2" in outcome
+
+
+def test_a_check_command_with_no_output_says_so_rather_than_reporting_nothing():
+    run_fn, _calls = fake_run_factory(returncode=0, stdout="", stderr="")
+    executor = make_repair_executor(run_fn=run_fn)
+    outcome = executor(LadderStep("check_interface_state", "check", needs_privilege=False))
+    assert outcome.startswith("no output")
 
 
 def test_check_configured_dns_servers_shells_out_to_scutil_dns():
@@ -211,13 +427,14 @@ def test_check_configured_dns_servers_shells_out_to_scutil_dns():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_configured_dns_servers", "check", needs_privilege=False))
     assert "192.0.2.53" in outcome
-    assert calls == [["scutil", "--dns"]]
+    assert calls == [[SCUTIL, "--dns"]]
 
 
 def test_check_resolver_overrides_reports_failure_instead_of_raising(tmp_path):
     """os.listdir can raise PermissionError, or FileNotFoundError via a TOCTOU
-    race with the isdir check. state_machine has no per-step guard, so an
-    escape aborts the incident and no report is written at all.
+    race with the isdir check. state_machine's per-step guard would keep the
+    incident alive, but it can only say the step raised; handling it here keeps
+    the path in the outcome.
     """
 
     def boom(path):
@@ -262,6 +479,30 @@ def test_resolve_against_public_resolver_reflects_query_result():
         LadderStep("resolve_against_public_resolver", "check", needs_privilege=False)
     )
     assert "resolved" in outcome.lower()
+
+
+def test_resolve_against_public_resolver_reports_a_real_negative_answer():
+    run_fn, _ = fake_run_factory()
+    executor = make_repair_executor(run_fn=run_fn, query_fn=lambda domain: False)
+    outcome = executor(
+        LadderStep("resolve_against_public_resolver", "check", needs_privilege=False)
+    )
+    assert "did NOT resolve" in outcome
+
+
+def test_an_unreachable_public_resolver_is_not_reported_as_a_failed_name():
+    """None means the query got no reply. Reporting it as "did NOT resolve"
+    tells someone the name is broken everywhere when nothing was learned.
+    """
+    run_fn, _ = fake_run_factory()
+    executor = make_repair_executor(run_fn=run_fn, query_fn=lambda domain: None)
+    outcome = executor(
+        LadderStep("resolve_against_public_resolver", "check", needs_privilege=False)
+    )
+    assert "did NOT resolve" not in outcome
+    assert "resolved via" not in outcome
+    assert outcome.startswith("could not reach the public resolver")
+    assert "example.com" in outcome
 
 
 def test_unknown_step_name_returns_a_clear_message_instead_of_raising():
@@ -316,3 +557,61 @@ def test_unicode_decode_error_is_reported_not_raised():
     executor = make_repair_executor(run_fn=bad_decode)
     outcome = executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
     assert outcome.startswith("failed")
+
+
+def test_a_build_without_privileged_repairs_runs_nothing_and_says_why():
+    from netdnsmonitor.distribution import is_unavailable, unavailable
+    from netdnsmonitor.ladder import LadderStep
+
+    calls = []
+
+    def run_fn(args, **kwargs):
+        calls.append(args)
+        raise AssertionError("no subprocess may run for an unavailable repair")
+
+    executor = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en0",
+        unavailable_fn=lambda what: unavailable("privileged_repairs", what),
+    )
+    for name in ("flush_dns_cache", "renew_dhcp_lease"):
+        outcome = executor(LadderStep(name, "repair", True))
+        assert is_unavailable(outcome)
+        assert "Nothing was changed." in outcome
+    assert calls == []
+
+
+# --- the failover step -----------------------------------------------------
+
+
+FAILOVER = LadderStep("switch_to_backup_network", "repair", needs_privilege=True)
+
+
+def test_the_failover_step_refuses_to_run_without_a_classification():
+    """The policy refuses classifications it was not configured for. Defaulting an
+    absent one to "network" -- the value most likely to be permitted -- turns a
+    caller's omission into a network switch the operator never authorised.
+    """
+    seen = []
+    executor = make_repair_executor(
+        run_fn=fake_run_factory()[0],
+        failover_fn=lambda classification: seen.append(classification) or "ok: switched",
+    )
+    outcome = executor(FAILOVER)
+    assert outcome.startswith("refused")
+    assert seen == []
+
+
+def test_a_failover_that_raises_is_reported_as_failed_not_raised():
+    """Every other step returns a string whatever happens. state_machine has no
+    per-step guard, so an exception here aborts the incident with no report.
+    """
+
+    def exploding(classification):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    executor = make_repair_executor(run_fn=fake_run_factory()[0], failover_fn=exploding)
+    outcome = executor(FAILOVER, "network")
+    assert outcome.startswith("failed")
+    assert "UnicodeDecodeError" in outcome

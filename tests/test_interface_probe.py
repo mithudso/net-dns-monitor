@@ -51,6 +51,21 @@ def test_no_targets_is_none_not_false():
     assert probe("en0") is None
 
 
+def test_non_positive_timeout_is_none_not_false():
+    """`probe_timeout_seconds` is user-settable YAML. A budget of zero asks
+    nothing, and False would say "dead" about a link nobody probed.
+    """
+    calls = []
+    probe = make_interface_prober(
+        TARGETS,
+        timeout=0.0,
+        connect_fn=lambda d, h, p, t: calls.append(h) or True,
+        index_fn=lambda d: 15,
+    )
+    assert probe("en0") is None
+    assert calls == []
+
+
 def test_binds_to_the_requested_device():
     seen = []
     probe = make_interface_prober(
@@ -134,20 +149,37 @@ def test_ipv6_targets_select_the_ipv6_bind_option():
     from netdnsmonitor import interface_probe
 
     real_socket = socket.socket
-    real_index = interface_probe.default_device_index
     socket.socket = lambda fam, typ: FakeSocket(fam, typ)
-    interface_probe.default_device_index = lambda d: 15
     try:
-        interface_probe.default_bound_connect("en0", "2606:4700:4700::1111", 443, 1.0)
-        interface_probe.default_bound_connect("en0", "1.1.1.1", 443, 1.0)
+        interface_probe.default_bound_connect(
+            "en0", "2606:4700:4700::1111", 443, 1.0, index_fn=lambda d: 15
+        )
+        interface_probe.default_bound_connect("en0", "1.1.1.1", 443, 1.0, index_fn=lambda d: 15)
     finally:
         socket.socket = real_socket
-        interface_probe.default_device_index = real_index
 
     assert seen[0] == socket.AF_INET6
     assert seen[1] == (socket.IPPROTO_IPV6, 125)
     assert seen[2] == socket.AF_INET
     assert seen[3] == (socket.IPPROTO_IP, 25)
+
+
+def test_the_injected_index_fn_reaches_the_default_connect():
+    """With the default connect, the index lookup on the connect side has to
+    be the same injected one probe() used, or a test pretending an adapter is
+    absent gets the real interface table underneath it. An absent index
+    returns False before any socket is opened, so this touches no network.
+    """
+    from netdnsmonitor.interface_probe import default_bound_connect
+
+    seen = []
+
+    def index_fn(device):
+        seen.append(device)
+        return None
+
+    assert default_bound_connect("en9", "1.1.1.1", 443, 1.0, index_fn=index_fn) is False
+    assert seen == ["en9"]
 
 
 def test_device_index_is_checked_before_connecting():
@@ -214,3 +246,41 @@ def test_the_total_deadline_is_still_bounded_by_the_timeout():
     started = time.monotonic()
     assert probe("en0") is False
     assert time.monotonic() - started < 1.2  # not 3 x 0.6 plus slack
+
+
+def test_time_a_fast_failure_leaves_behind_goes_to_the_next_target():
+    """Each slice is the remaining budget over the targets still to try, not a
+    fixed timeout / N. A target that fails instantly (ENETUNREACH) used to leave
+    its unspent share stranded, so a slow-but-working second target was cut off
+    at half the budget it could have had.
+    """
+    budgets = []
+
+    def connect_fn(device, host, port, timeout):
+        budgets.append(timeout)
+        return False
+
+    probe = make_interface_prober(
+        [("10.0.0.1", 53), ("192.168.1.1", 53)],
+        timeout=1.0,
+        connect_fn=connect_fn,
+        index_fn=lambda d: 1,
+    )
+    assert probe("en0") is False
+    assert budgets[0] <= 0.5
+    assert budgets[1] >= 0.9
+
+
+def test_no_budget_at_all_is_none_not_false():
+    """With nothing attempted there is no reading: False would tell the report
+    and the failover policy that the link was probed and is dead.
+    """
+    calls = []
+    probe = make_interface_prober(
+        TARGETS,
+        timeout=0,
+        connect_fn=lambda d, h, p, t: calls.append(h) or True,
+        index_fn=lambda d: 1,
+    )
+    assert probe("en0") is None
+    assert calls == []

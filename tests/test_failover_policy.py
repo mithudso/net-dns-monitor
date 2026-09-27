@@ -86,7 +86,19 @@ def test_no_failover_when_backup_was_never_probed():
 def test_no_failover_when_preferred_answers_on_its_own_interface():
     decision = failover_case(preferred_ok=True)
     assert decision.action == NONE
-    assert "not specific to this path" in decision.reason
+    assert "probe targets still answer" in decision.reason
+
+
+def test_the_preferred_answers_refusal_does_not_blame_another_path():
+    """With `failover_probe_targets` aimed at each link's gateway, a preferred
+    probe that answers proves only the local network. The old reason said the
+    outage "is not specific to this path", which during an ISP outage is false
+    and points the reader away from the dead link.
+    """
+    reason = failover_case(preferred_ok=True).reason
+    assert "not specific to this path" not in reason
+    assert "gateway" in reason
+    assert "only the local network, not the internet link" in reason
 
 
 def test_unprobed_preferred_still_allows_failover():
@@ -139,13 +151,32 @@ def test_backwards_clock_jump_does_not_freeze_the_cooldown():
 def test_zero_budget_disables_switching_entirely():
     decision = failover_case(max_switches_per_hour=0)
     assert decision.action == NONE
-    assert "budget exhausted" in decision.reason
+    assert "disabled" in decision.reason
+
+
+def test_disabled_switching_is_not_reported_as_an_exhausted_budget():
+    """A limit of 0 means switching is off; "0 switches, limit 0, exhausted"
+    reads as a brake that will release, and it never will.
+    """
+    decision = failover_case(max_switches_per_hour=0)
+    assert "disabled" in decision.reason
+    assert "exhausted" not in decision.reason
 
 
 def test_negative_budget_fails_closed_not_open():
     """A config typo must not silently remove the ceiling on a flapping link."""
     decision = failover_case(max_switches_per_hour=-4)
     assert decision.action == NONE
+    # The limit actually enforced is 0, so the reason must not name -4.
+    assert "-4" not in decision.reason
+
+
+def test_an_unprobed_preferred_is_not_reported_as_unreachable():
+    """None is not False: the reason must not claim a reading never taken."""
+    decision = failover_case(preferred_ok=None)
+    assert decision.action == FAILOVER
+    assert "could not be probed" in decision.reason
+    assert "unreachable" not in decision.reason
 
 
 # --- failback ---------------------------------------------------------------
@@ -160,6 +191,16 @@ def test_no_failback_before_the_streak_threshold():
     decision = failback_case(consecutive_preferred_ok=2, failback_threshold=3)
     assert decision.action == NONE
     assert "2/3 consecutive checks" in decision.reason
+
+
+def test_zero_failback_threshold_still_requires_one_healthy_check():
+    """The threshold is user-editable and reaches here unclamped. At 0 the
+    first good probe would fail back on no evidence of stability at all --
+    exactly the flap the streak exists to prevent.
+    """
+    assert failback_case(consecutive_preferred_ok=0, failback_threshold=0).action == NONE
+    assert failback_case(consecutive_preferred_ok=0, failback_threshold=-3).action == NONE
+    assert failback_case(consecutive_preferred_ok=1, failback_threshold=0).action == FAILBACK
 
 
 def test_no_failback_while_preferred_is_still_down():

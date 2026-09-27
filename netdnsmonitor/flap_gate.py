@@ -12,8 +12,13 @@ showing the user a "flaky" indicator before a full incident is declared.
 
 class FlapGate:
     def __init__(self, failure_threshold: int = 2, success_threshold: int = 2):
-        self.failure_threshold = failure_threshold
-        self.success_threshold = success_threshold
+        # Coerced here because an uncoerced "3" from YAML does not fail until
+        # `int >= str` on the first failing tick, inside the tick guard, so no
+        # incident is ever declared and nothing says why. A None still raises,
+        # but at construction. The clamp changes nothing observable: the counter
+        # is incremented before the comparison, so 0 already behaved like 1.
+        self.failure_threshold = max(1, int(failure_threshold))
+        self.success_threshold = max(1, int(success_threshold))
         self.state = "healthy"
         self.consecutive_failures = 0
         self.consecutive_successes = 0

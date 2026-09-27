@@ -4,11 +4,20 @@ actually rewrites, so the read-back verification is exercised for real.
 """
 
 import json
+import os
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
-from netdnsmonitor.failover import FailoverStore, NetworkFailover
+from netdnsmonitor.failover import (
+    FailoverStore,
+    NetworkFailover,
+    apply_service_order,
+    default_run,
+)
+from netdnsmonitor.service_order import parse_service_order
 
 ORDER = [
     "AX88179B",
@@ -43,8 +52,13 @@ class FakeRunner:
         list_fails_after_apply=False,
         enable_result=None,
         obey_enable=True,
+        list_fails_after_enable=False,
     ):
         self.order = list(order or ORDER)
+        # The enable exits 0, then the very next listing fails: the enable may
+        # have landed and nothing can confirm it either way.
+        self.list_fails_after_enable = list_fails_after_enable
+        self._fail_next_list = False
         self.disabled = set(DISABLED)
         self.enable_result = enable_result
         self.obey_enable = obey_enable  # False = exit 0 but stay disabled
@@ -53,6 +67,10 @@ class FakeRunner:
         # The nastiest case: the reorder lands, then the read-back fails -- the
         # system has been mutated and we cannot see it.
         self.list_fails_after_apply = list_fails_after_apply
+        # Same shape for the enable: the first listing after
+        # -setnetworkserviceenabled fails, once.
+        self.list_fails_after_enable = list_fails_after_enable
+        self.enable_pending_readback = False
         self.applied = False
         self.obey = obey  # False = exit 0 but ignore the request
         self.calls = []
@@ -60,7 +78,13 @@ class FakeRunner:
     def __call__(self, args):
         self.calls.append(args)
         if args[:2] == ["networksetup", "-listnetworkserviceorder"]:
+            if self._fail_next_list:
+                self._fail_next_list = False
+                return SimpleNamespace(returncode=1, stdout="", stderr="boom")
             if self.list_fails or (self.list_fails_after_apply and self.applied):
+                return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+            if self.list_fails_after_enable and self.enable_pending_readback:
+                self.enable_pending_readback = False
                 return SimpleNamespace(returncode=1, stdout="", stderr="boom")
             return SimpleNamespace(returncode=0, stdout=self._listing(), stderr="")
         if args[:2] == ["networksetup", "-ordernetworkservices"]:
@@ -73,6 +97,8 @@ class FakeRunner:
         if args[:2] == ["networksetup", "-setnetworkserviceenabled"]:
             if self.enable_result is not None:
                 return self.enable_result
+            self._fail_next_list = self.list_fails_after_enable
+            self.enable_pending_readback = True
             if self.obey_enable:
                 name, state = args[2], args[3]
                 self.disabled.discard(name) if state == "on" else self.disabled.add(name)
@@ -738,6 +764,98 @@ def test_an_enable_that_silently_does_nothing_is_not_claimed(store):
     assert runner.applied_orders == []
 
 
+# --- probe deadline ----------------------------------------------------------
+#
+# Every probe here runs on the rumps timer thread during the outage being
+# diagnosed. One after another, each backup adds a full probe timeout -- the
+# additive stall non-negotiable 7 forbids.
+
+THREE_BACKUPS = dict(backup_service=None, backup_services=["Wi-Fi", "iPhone USB", "M3100"])
+PROBE_DELAY = 0.25
+
+
+def sleeping_prober(dev):
+    time.sleep(PROBE_DELAY)
+    return True
+
+
+def test_candidate_probes_share_one_deadline(store):
+    failover = build(
+        store, FakeRunner(), prober=sleeping_prober, probe_timeout=2.0, **THREE_BACKUPS
+    )
+    services = failover._list_services()
+
+    started = time.monotonic()
+    candidates = failover.evaluate_candidates(services, measure=False)
+    elapsed = time.monotonic() - started
+
+    assert [c.reachable for c in candidates] == [True, True, True]
+    # Serially this is 3 probes; together it is about one.
+    assert elapsed < 2 * PROBE_DELAY
+
+
+def test_the_failover_step_does_not_add_a_probe_per_backup(store):
+    """The preferred link is probed first, then every backup at once: two probe
+    rounds whatever the number of backups, where serially it was four.
+    """
+    failover = build(
+        store, FakeRunner(), prober=sleeping_prober, probe_timeout=2.0, **THREE_BACKUPS
+    )
+
+    started = time.monotonic()
+    failover.attempt_failover("network")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 3 * PROBE_DELAY
+
+
+def test_snapshot_probes_every_side_under_one_deadline(store):
+    failover = build(
+        store, FakeRunner(), prober=sleeping_prober, probe_timeout=2.0, **THREE_BACKUPS
+    )
+
+    started = time.monotonic()
+    snap = failover.snapshot()
+    elapsed = time.monotonic() - started
+
+    assert snap["preferred"]["reachable"] is True
+    assert [b["reachable"] for b in snap["backups"]] == [True, True, True]
+    assert elapsed < 2 * PROBE_DELAY
+
+
+def test_a_probe_that_misses_the_deadline_reads_as_not_probed(store):
+    """No answer by the deadline is no reading. False would tell the policy and
+    the menu bar the link is dead when nothing was learned about it.
+    """
+    release = threading.Event()
+
+    def prober(dev):
+        if dev == "en0":  # Wi-Fi hangs past the deadline
+            release.wait(5)
+            return True
+        return False
+
+    failover = build(store, FakeRunner(), prober=prober, probe_timeout=0.05, **THREE_BACKUPS)
+    try:
+        started = time.monotonic()
+        candidates = failover.evaluate_candidates(failover._list_services(), measure=False)
+        snap = failover.snapshot()
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    reach = {c.name: c.reachable for c in candidates}
+    assert reach == {"Wi-Fi": None, "iPhone USB": False, "M3100": False}
+    assert {b["name"]: b["reachable"] for b in snap["backups"]} == reach
+    assert snap["preferred"]["reachable"] is False
+    # Two rounds, each cut off at the deadline rather than waiting out the hang.
+    assert elapsed < 3.0
+
+
+def test_the_probe_deadline_defaults_to_five_seconds(store):
+    assert build(store, FakeRunner()).probe_timeout == 5.0
+
+
 # --- snapshot (what the menu bar shows) -------------------------------------
 
 
@@ -902,3 +1020,662 @@ def test_a_named_backup_absent_from_the_order_is_reported_as_such(store):
     assert outcome.startswith("failed:")
     assert "not in the service order" in outcome
     assert runner.applied_orders == []
+
+
+# --- a backup-to-backup switch keeps the true restore point ------------------
+
+
+def test_a_backup_to_backup_switch_keeps_the_true_restore_point(store):
+    """Recording the order on the second switch would make the first backup the
+    "original", and a later failback would restore it and call that preferred.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+        prober=lambda dev: dev in {"en0", "en11"},
+    )
+    assert failover.switch_now("backup", service="Wi-Fi").startswith("ok:")
+    assert failover.switch_now("backup", service="iPhone USB").startswith("ok:")
+    assert store.original_order == ORDER
+
+    outcome = failover.switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert runner.order[0] == "AX88179B"
+    assert runner.order == ORDER
+
+
+def test_a_restore_point_that_starts_on_a_backup_is_not_restored_verbatim(store):
+    """Restoring it exactly would leave the machine on a backup while the
+    outcome says it failed back to the preferred link.
+    """
+    order = ["Wi-Fi"] + [n for n in ORDER if n != "Wi-Fi"]
+    runner = FakeRunner(order=order)
+    store.original_order = list(order)
+    outcome = build(store, runner).switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert runner.order[0] == "AX88179B"
+    assert "promoted" in outcome
+
+
+# --- concurrent entry points ------------------------------------------------
+
+
+def test_a_failback_tick_cannot_interleave_with_a_switch_in_progress(store):
+    """The dashboard worker runs the ladder while the timer tick runs failback.
+    Before the write lands the order still shows the preferred link, so an
+    interleaved failback would self-heal the record away mid-switch.
+    """
+    runner = FakeRunner()
+    during = []
+
+    def run_fn(args):
+        if args[:2] == ["networksetup", "-ordernetworkservices"]:
+            during.append((failover.attempt_failback(), failover.switch_now("preferred")))
+        return runner(args)
+
+    failover = build(store, run_fn)
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert during == [(None, "no switch: another switch attempt is in progress")]
+    assert store.original_order == ORDER
+    assert runner.order[0] == "Wi-Fi"
+
+
+def test_the_switch_lock_is_released_after_each_attempt(store):
+    runner = FakeRunner()
+    failover = build(store, runner)
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert failover.switch_now("preferred").startswith("ok:")
+    assert failover.switch_now("backup").startswith("ok:")
+
+
+# --- the failback gate closes on a refused switch from any order ------------
+
+
+def test_a_refused_switch_from_a_third_service_order_does_not_hold_the_gate_open(store):
+    """A third adapter at the head also reads as "not on a backup". If the write
+    was refused, the live order still equals the record, and the record has to
+    clear or every tick spends a networksetup subprocess forever.
+    """
+    order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
+    runner = FakeRunner(
+        order=order,
+        apply_result=SimpleNamespace(
+            returncode=1, stdout="", stderr="You must be running as root to use this command."
+        ),
+    )
+    failover = build(store, runner)
+    assert failover.attempt_failover("network").startswith("NEEDS_PRIVILEGE:")
+    assert store.original_order == order
+
+    assert failover.attempt_failback() is None
+    assert store.original_order is None
+
+    runner.calls.clear()
+    assert failover.attempt_failback() is None
+    assert runner.calls == []
+
+
+# --- the order is re-read right before the write ----------------------------
+
+
+def test_a_service_added_during_the_probes_stops_the_write(store):
+    """The order was listed seconds before the write. A service added in that
+    window is missing from the argv, and -ordernetworkservices would drop it.
+    """
+    runner = FakeRunner()
+
+    def prober(dev):
+        if "Bluetooth PAN" not in runner.order:
+            runner.order.append("Bluetooth PAN")
+        return {"en6": False, "en0": True}.get(dev)
+
+    outcome = build(store, runner, prober=prober).attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "changed" in outcome
+    assert runner.applied_orders == []
+    assert "Bluetooth PAN" in runner.order
+
+
+def test_an_unreadable_order_right_before_the_write_stops_it():
+    runner = FakeRunner()
+    services = parse_service_order(runner._listing())
+    runner.list_fails = True
+    new_order = ["Wi-Fi"] + [n for n in ORDER if n != "Wi-Fi"]
+    outcome = apply_service_order(runner, services, new_order)
+    assert outcome.startswith("failed:")
+    assert "nothing was applied" in outcome
+    assert runner.applied_orders == []
+
+
+# --- enabling is only claimed, and only undone, on evidence -----------------
+
+
+M3100_ONLY = dict(preferred_service="AX88179B", backup_services=["M3100"], backup_service=None)
+
+
+def test_an_enable_that_cannot_be_read_back_is_not_claimed(store):
+    runner = FakeRunner(obey_enable=False, list_fails_after_enable=True)
+    failover = build(store, runner, prober=lambda dev: dev == "en12", **M3100_ONLY)
+    outcome = failover.attempt_failover("network")
+    assert not outcome.startswith("ok:")
+    assert "confirm" in outcome
+    assert runner.applied_orders == []
+    assert store.enabled_by_us == "M3100", "the enable may have landed, so it stays undoable"
+
+
+def test_an_enable_left_behind_by_a_failed_reorder_is_disclosed_and_undone(store):
+    runner = FakeRunner(obey=False)
+    failover = build(store, runner, prober=lambda dev: dev == "en12", **M3100_ONLY)
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "'M3100' was enabled first and is still on" in outcome
+    assert "M3100" not in runner.disabled
+
+    # Still on the preferred link, so the next failback tick self-heals -- and
+    # has to take the enable with it rather than leave it for a later failback.
+    failover.interface_prober = lambda dev: True
+    failover.attempt_failback()
+    assert "M3100" in runner.disabled
+    assert store.enabled_by_us is None
+    assert store.original_order is None
+
+
+def test_a_re_disable_that_did_not_land_is_not_claimed(store):
+    runner = FakeRunner()
+    failover = build(store, runner, prober=lambda dev: dev == "en12", **M3100_ONLY)
+    assert failover.attempt_failover("network").startswith("ok:")
+    runner.obey_enable = False
+    outcome = failover.switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert "disabled 'M3100' again" not in outcome
+    assert "could not confirm" in outcome
+
+
+def test_a_second_enabled_backup_does_not_erase_the_first_from_the_record(store):
+    """One slot records the service this app turned on. Overwriting it on a
+    switch between two disabled backups would leave the first on forever.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100", "USB 10/100/1G/2.5G LAN"],
+        backup_service=None,
+        prober=lambda dev: dev in {"en12", "en9"},
+    )
+    assert failover.switch_now("backup", service="M3100").startswith("ok:")
+    outcome = failover.switch_now("backup", service="USB 10/100/1G/2.5G LAN")
+    assert outcome.startswith("ok:")
+    assert store.enabled_by_us == "M3100"
+    assert "stay on" in outcome
+
+
+# --- manual switch wording --------------------------------------------------
+
+
+def test_a_named_manual_target_that_did_not_answer_carries_the_warning(store):
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+        prober=lambda dev: {"en0": True, "en11": False}.get(dev),
+    )
+    outcome = failover.switch_now("backup", service="iPhone USB")
+    assert outcome.startswith("ok:")
+    assert "WARNING" in outcome
+    assert runner.order[0] == "iPhone USB"
+
+
+def test_a_named_manual_target_that_answered_carries_no_warning(store):
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+        prober=lambda dev: True,
+    )
+    assert "WARNING" not in failover.switch_now("backup", service="iPhone USB")
+
+
+def test_switch_now_to_preferred_names_a_third_service_at_the_head(store):
+    order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
+    runner = FakeRunner(order=order)
+    outcome = build(store, runner).switch_now("preferred")
+    assert outcome.startswith("no switch:")
+    assert "neither" in outcome and "Thunderbolt Bridge" in outcome
+    assert runner.applied_orders == []
+
+
+def test_a_named_backup_with_no_device_is_not_called_absent(store, monkeypatch):
+    """A VPN-style service sits in the order with no device. Calling it absent
+    sends someone looking for a service that is right there.
+    """
+    monkeypatch.setitem(DEVICES, "iPhone USB", "")
+    runner = FakeRunner()
+    failover = build(store, runner, backup_services=["Wi-Fi", "iPhone USB"], backup_service=None)
+    outcome = failover.switch_now("backup", service="iPhone USB")
+    assert outcome.startswith("failed:")
+    assert "not in the service order" not in outcome
+    assert "no device" in outcome
+    assert runner.applied_orders == []
+
+
+# --- only a real write surfaces from the tick -------------------------------
+
+
+def test_a_failback_that_never_reached_a_write_stays_silent(store):
+    """A pre-write failure (here a misspelt preferred service) returned on
+    every tick would make the app re-list and re-probe for its menu each time.
+    """
+    runner = FakeRunner()
+    store.original_order = list(ORDER)
+    failover = build(store, runner, preferred_service="typo", prober=lambda dev: True)
+    assert failover.attempt_failback() is None
+    assert failover.attempt_failback() is None
+
+
+# --- the state file is shared with the CLI ----------------------------------
+
+
+def test_a_failover_made_by_another_process_is_failed_back(tmp_path):
+    """Every process holds its own store on the same file. A record another
+    process wrote has to reach the running app, or the app never fails back.
+    The other process fails over automatically here: a manual switch pauses
+    failback, which the pause tests below cover.
+    """
+    path = str(tmp_path / "failover.json")
+    runner = FakeRunner()
+    app = build(FailoverStore(path), runner, prober=lambda dev: True)
+    other = build(FailoverStore(path), runner)
+
+    assert other.attempt_failover("network").startswith("ok:")
+    outcomes = [app.attempt_failback() for _ in range(3)]
+    assert outcomes[-1] is not None and outcomes[-1].startswith("ok:")
+    assert runner.order[0] == "AX88179B"
+    assert FailoverStore(path).original_order is None
+
+
+def test_a_failed_save_leaves_the_previous_record_loadable(tmp_path, monkeypatch):
+    """A save that fails must not truncate the record it replaces. `os.replace`
+    is the last step of the write, so this fails with every new byte already
+    written -- and the old record must still load.
+    """
+    path = str(tmp_path / "failover.json")
+    first = FailoverStore(path)
+    first.original_order = list(ORDER)
+    first.save()
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    first.original_order = ["Wi-Fi"]
+    first.save()  # must not raise
+    monkeypatch.undo()
+
+    assert FailoverStore(path).original_order == ORDER
+    assert list(tmp_path.glob("*.tmp")) == [], "no temp file left behind"
+
+
+def test_default_run_takes_a_timeout_and_fails_as_data():
+    result = default_run(["/nonexistent/networksetup-does-not-exist"], timeout=1)
+    assert result.returncode == 1
+
+
+def test_default_run_decodes_utf8_whatever_the_process_locale(monkeypatch):
+    """An app launched from Finder has no LANG, so text=True alone decoded with
+    US-ASCII and a service named "Thunderbolt-Brücke" raised on every tick.
+    surrogateescape, not replace, so a name that is not valid UTF-8 still
+    round-trips byte for byte into the -ordernetworkservices argv.
+    """
+    import netdnsmonitor.failover as failover_module
+
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="(1) Thunderbolt-Brücke\n", stderr="")
+
+    monkeypatch.setattr(failover_module.subprocess, "run", fake_run)
+
+    result = default_run(["networksetup", "-listnetworkserviceorder"])
+
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "surrogateescape"
+    assert result.stdout == "(1) Thunderbolt-Brücke\n"
+
+
+def test_default_run_turns_a_decode_error_into_a_failed_result(monkeypatch):
+    import netdnsmonitor.failover as failover_module
+
+    def fake_run(args, **kwargs):
+        raise UnicodeDecodeError("ascii", b"\xc3\xbc", 0, 1, "ordinal not in range(128)")
+
+    monkeypatch.setattr(failover_module.subprocess, "run", fake_run)
+
+    result = default_run(["networksetup", "-listnetworkserviceorder"])
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+
+
+# --- a manual switch to a backup pauses automatic failback ------------------
+#
+# With `failover_probe_targets` aimed at each link's gateway, a preferred probe
+# that answers proves only that the LAN is up. Failing back on that evidence
+# after a person chose the backup moved the machine onto a dead ISP link.
+
+
+def on_backup_by_hand(store, now, probes, **kwargs):
+    """A manual switch to the backup, then a clock past its cooldown and every
+    probe answering: the evidence that used to trigger the failback.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        prober=lambda dev: probes.append(dev) or True,
+        cooldown_seconds=300.0,
+        time_fn=lambda: now[0],
+        **kwargs,
+    )
+    assert failover.switch_now("backup").startswith("ok:")
+    now[0] += 301
+    return runner, failover
+
+
+def test_a_manual_switch_to_a_backup_pauses_automatic_failback(store):
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    assert store.failback_paused is True
+    runner.calls.clear()
+    probes.clear()
+
+    for _ in range(5):
+        assert failover.attempt_failback() is None
+        now[0] += 30
+    assert runner.calls == [], "a paused tick spends no subprocess"
+    assert probes == [], "a paused tick spends no probe"
+    assert runner.order[0] == "Wi-Fi"
+    assert store.original_order == ORDER, "the restore point is kept for the switch back"
+
+
+def test_switching_back_to_preferred_by_hand_ends_the_pause(tmp_path):
+    path = str(tmp_path / "failover.json")
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(FailoverStore(path), now, probes)
+
+    assert failover.switch_now("preferred").startswith("ok:")
+    assert runner.order == ORDER
+    assert failover.store.failback_paused is False
+    assert FailoverStore(path).failback_paused is False, "the end of the pause is saved"
+
+
+def test_a_refused_switch_back_keeps_the_pause(store):
+    """The machine is still on the backup the user chose, so a failed attempt
+    to leave it must not hand it to automatic failback.
+    """
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    runner.apply_result = SimpleNamespace(
+        returncode=1, stdout="", stderr="You must be running as root to use this command."
+    )
+    assert failover.switch_now("preferred").startswith("NEEDS_PRIVILEGE:")
+    assert store.failback_paused is True
+    now[0] += 301
+    runner.calls.clear()
+    assert failover.attempt_failback() is None
+    assert runner.calls == []
+
+
+def test_an_automatic_failover_still_fails_back(store):
+    now = [1_000_000.0]
+    runner = FakeRunner()
+    failover = build(store, runner, cooldown_seconds=300.0, time_fn=lambda: now[0])
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.failback_paused is False
+
+    failover.interface_prober = lambda dev: True
+    now[0] += 301
+    outcomes = [failover.attempt_failback() for _ in range(3)]
+    assert outcomes[:2] == [None, None]
+    assert outcomes[2].startswith("ok:")
+    assert runner.order == ORDER
+
+
+def test_an_automatic_failover_replaces_a_pause_left_behind(store):
+    """The pause belongs to the switch that set it. An automatic failover is a
+    new switch made on the app's own evidence, so its failback is not held.
+    A third service heads the order here, so the preferred-at-head self-heal
+    cannot be what clears the pause.
+    """
+    store.failback_paused = True
+    order = ["Thunderbolt Bridge"] + [n for n in ORDER if n != "Thunderbolt Bridge"]
+    runner = FakeRunner(order=order)
+    failover = build(store, runner)
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.failback_paused is False
+
+    failover.interface_prober = lambda dev: True
+    outcomes = [failover.attempt_failback() for _ in range(3)]
+    assert outcomes[2].startswith("ok:")
+    assert runner.order == order
+
+
+def test_a_request_that_finds_the_machine_already_on_a_backup_sets_no_pause(store):
+    """Nothing was switched, so an automatic failover stays automatic."""
+    runner = failed_over(store)
+    failover = build(store, runner)
+    assert failover.switch_now("backup") == "no switch: already on the backup network"
+    assert store.failback_paused is False
+
+
+def test_the_pause_survives_a_restart(tmp_path):
+    path = str(tmp_path / "failover.json")
+    now, probes = [1_000_000.0], []
+    runner, _ = on_backup_by_hand(FailoverStore(path), now, probes)
+
+    reloaded = FailoverStore(path)
+    assert reloaded.failback_paused is True
+    restarted = build(reloaded, runner, prober=lambda dev: probes.append(dev) or True)
+    runner.calls.clear()
+    probes.clear()
+    for _ in range(3):
+        assert restarted.attempt_failback() is None
+    assert runner.calls == [] and probes == []
+    assert runner.order[0] == "Wi-Fi"
+
+
+def test_a_pause_set_from_the_cli_reaches_the_running_app(tmp_path):
+    """`netdns failover backup` runs in its own process. The app sees the pause
+    through the store refresh its tick already does, and sees the switch back
+    end it the same way.
+    """
+    path = str(tmp_path / "failover.json")
+    runner = FakeRunner()
+    app = build(FailoverStore(path), runner, prober=lambda dev: True)
+    cli = build(FailoverStore(path), runner)
+
+    assert cli.switch_now("backup").startswith("ok:")
+    runner.calls.clear()
+    for _ in range(3):
+        assert app.attempt_failback() is None
+    assert runner.calls == []
+    assert app.store.failback_paused is True
+
+    assert cli.switch_now("preferred").startswith("ok:")
+    assert app.attempt_failback() is None
+    assert app.store.failback_paused is False
+
+
+def test_a_state_file_without_the_pause_field_loads_unpaused(tmp_path):
+    """Files written before the pause existed have no such key, and must keep
+    failing back as they did.
+    """
+    path = tmp_path / "failover.json"
+    path.write_text(
+        json.dumps(
+            {
+                "original_order": ORDER,
+                "enabled_by_us": None,
+                "last_switch_at": 1.0,
+                "switch_times": [1.0],
+            }
+        )
+    )
+    store = FailoverStore(str(path))
+    assert store.failback_paused is False
+
+    runner = FakeRunner(order=["Wi-Fi"] + [n for n in ORDER if n != "Wi-Fi"])
+    failover = build(store, runner, prober=lambda dev: True)
+    outcomes = [failover.attempt_failback() for _ in range(3)]
+    assert outcomes[2].startswith("ok:")
+    assert runner.order == ORDER
+
+
+def test_only_a_literal_true_pauses(tmp_path):
+    """A hand-edited "yes" or 1 is not the flag this app writes."""
+    path = tmp_path / "failover.json"
+    for value in ("yes", 1, None, [True]):
+        path.write_text(json.dumps({"failback_paused": value}))
+        assert FailoverStore(str(path)).failback_paused is False
+
+
+def test_a_reload_without_the_field_does_not_keep_an_old_pause(tmp_path):
+    """refresh() reloads a file another process wrote. A copy of the app that
+    predates the pause writes no such key, and must not leave this process
+    holding a pause the file no longer records.
+    """
+    path = tmp_path / "failover.json"
+    path.write_text(json.dumps({"failback_paused": True}))
+    store = FailoverStore(str(path))
+    assert store.failback_paused is True
+    path.write_text(json.dumps({"original_order": ORDER, "switch_times": []}))
+    store.load()
+    assert store.failback_paused is False
+
+
+def test_the_pause_ends_when_the_order_is_back_on_preferred(store):
+    """The user reordered by hand. Asking for the preferred link then finds the
+    machine already there, and the pause has nothing left to hold.
+    """
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    runner.order = list(ORDER)
+    assert failover.switch_now("preferred") == "no switch: already on the preferred network"
+    assert store.failback_paused is False
+
+
+def test_the_incident_path_ends_a_pause_left_on_the_preferred_side(store):
+    """Even when the failover step then refuses: the pause must not outlive the
+    backup the user chose.
+    """
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    runner.order = list(ORDER)
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("no switch:"), "every probe answers, so the step refuses"
+    assert store.failback_paused is False
+
+
+def test_snapshot_reports_the_pause_only_while_on_a_backup(store):
+    now, probes = [1_000_000.0], []
+    runner, failover = on_backup_by_hand(store, now, probes)
+    assert failover.snapshot()["failback_paused"] is True
+
+    runner.order = list(ORDER)
+    assert failover.snapshot()["failback_paused"] is False
+    assert store.failback_paused is True, "snapshot is a read; it clears nothing"
+
+
+def test_an_automatic_failover_snapshot_is_not_paused(store):
+    runner = failed_over(store)
+    assert build(store, runner).snapshot()["failback_paused"] is False
+
+
+def test_an_enable_whose_read_back_fails_is_not_claimed(store):
+    """The enable exited 0 but the listing could not be re-read, so whether the
+    service is on is unknown. An unknown must not become "also enabled the
+    service" in an ok: outcome, and nothing may be reordered on top of it.
+    """
+    runner = FakeRunner(list_fails_after_enable=True, obey_enable=False)
+    failover = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    outcome = failover.attempt_failover("network")
+    assert outcome.startswith("failed:")
+    assert "confirm" in outcome
+    assert runner.applied_orders == []
+
+
+def test_a_failover_written_by_another_process_is_seen_and_undone(tmp_path):
+    """`netdns failover backup` writes the same state file from its own
+    process. The app's store was loaded at startup, so without re-reading the
+    file that failover is invisible: the app never fails back, and its next
+    save() overwrites the record with nothing.
+    """
+    path = str(tmp_path / "failover.json")
+    runner = FakeRunner()
+    app_store = FailoverStore(path)  # constructed before the CLI acts
+    build(FailoverStore(path), runner).attempt_failover("network")
+
+    failover = build(app_store, runner, prober=lambda dev: True)
+    for _ in range(3):
+        outcome = failover.attempt_failback()
+    assert outcome.startswith("ok:")
+    assert runner.order == ORDER
+    assert FailoverStore(path).original_order is None
+
+
+def test_self_heal_forgets_the_enable_along_with_the_order(store):
+    """Once the user has put the order back by hand, the restore point is
+    gone. A remembered enable would then be undone by some later, unrelated
+    failback -- turning off a service the user may have kept on deliberately.
+    Leaving it on is the safer error.
+    """
+    runner = FakeRunner()
+    failover = build(
+        store,
+        runner,
+        preferred_service="AX88179B",
+        backup_services=["M3100"],
+        backup_service=None,
+        prober=lambda dev: dev == "en12",
+    )
+    assert failover.attempt_failover("network").startswith("ok:")
+    assert store.enabled_by_us == "M3100"
+
+    runner.order = list(ORDER)  # user restored the order by hand
+    assert failover.attempt_failback() is None
+    assert store.original_order is None
+    assert store.enabled_by_us is None
+
+
+def test_a_pre_policy_failure_arms_the_cooldown(store):
+    """A listing that cannot be read, or a preferred service that is not in it,
+    fails the same way on every tick. Without the cooldown, that is a
+    networksetup subprocess on the timer thread every 30 seconds until fixed.
+    """
+    runner = FakeRunner(list_fails=True)
+    build(store, runner, cooldown_seconds=300.0).attempt_failover("network")
+    assert store.last_switch_at == 1_000_000.0
+    assert store.switch_times == []
+
+
+def test_failover_refuses_to_be_built_without_a_store_or_a_prober():
+    with pytest.raises(ValueError):
+        NetworkFailover(preferred_service="AX88179B", interface_prober=lambda dev: True)
+    with pytest.raises(ValueError):
+        NetworkFailover(preferred_service="AX88179B", store=FailoverStore("/dev/null/nope"))

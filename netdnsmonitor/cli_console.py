@@ -3,8 +3,7 @@
 A REPL over the same catalogue, interface model and renderers the CLI uses, so
 nothing here reimplements a decision. The loop itself is one pure function --
 `handle` takes an input line and the current state and returns text plus the
-next state -- which is what makes a terminal REPL testable without a terminal,
-and what will let the menu bar window drive the same logic later.
+next state -- which is what makes a terminal REPL testable without a terminal.
 
 Two rules the loop enforces that a bare shell prompt would not:
 
@@ -14,6 +13,7 @@ Two rules the loop enforces that a bare shell prompt would not:
   in it -- it asks for the value instead.
 """
 
+import subprocess
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -51,21 +51,54 @@ class ConsoleState:
     quit: bool = False
 
 
-def _run_argv(argv: Optional[list[str]], runner: Callable) -> str:
+def _run_argv(argv: Optional[list[str]], runner: Callable, timeout: float = 5.0) -> str:
     if not argv:
         return "failed: could not build that command."
-    result = runner(argv)
+    header = f"$ {' '.join(argv)}"
+    try:
+        # The catalogue entry's own ceiling, not the runner's default. At a
+        # fixed 5s, `traceroute` (45s) and `ping-gw` (15s) printed a timeout
+        # where their output belonged.
+        result = runner(argv, timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        # An escaping exception ends the REPL. UnicodeDecodeError is a
+        # ValueError, and one undecodable byte of output is enough to raise it.
+        return f"{header}\nfailed: {type(exc).__name__}: {exc}"
     stdout = (getattr(result, "stdout", "") or "").rstrip()
     stderr = (getattr(result, "stderr", "") or "").rstrip()
+    returncode = getattr(result, "returncode", 0)
     body = stdout or stderr or f"(no output, exit {getattr(result, 'returncode', '?')})"
-    return f"$ {' '.join(argv)}\n{body}"
+    # `networksetup` refusing a change writes its reason to stdout and exits
+    # non-zero; output alone reads as success.
+    if returncode != 0:
+        return f"{header}\n{body}\nfailed: exited {returncode}"
+    return f"{header}\n{body}"
+
+
+def _run_command(command, values: dict, runner: Callable) -> str:
+    text = _run_argv(resolve(command.key, **values), runner, command.timeout)
+    return f"{text}\nnote: {command.notes}" if command.notes else text
+
+
+def _confirmation(command, values: dict) -> str:
+    """The prompt before a state-changing command: the exact argv, whether it
+    needs an administrator, and its caveat -- all before anything runs.
+    """
+    admin = " (needs admin)" if command.needs_admin else ""
+    note = f"\nnote: {command.notes}" if command.notes else ""
+    return (
+        f"'{command.key}' CHANGES SYSTEM STATE{admin}:\n"
+        f"  $ {' '.join(resolve(command.key, **values))}{note}\n"
+        "Type 'yes' to run it, anything else to cancel."
+    )
 
 
 def _lookup(token: str):
     """A catalogue entry by key, or by its 1-based position in the listing."""
     if token in BY_KEY:
         return BY_KEY[token]
-    if token.isdigit():
+    # `'²'.isdigit()` is True and `int('²')` raises, out of the REPL loop.
+    if token.isascii() and token.isdigit():
         index = int(token) - 1
         if 0 <= index < len(CATALOG):
             return CATALOG[index]
@@ -93,18 +126,15 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
                 return "cancelled.", ConsoleState()
             state.values[state.pending_needs] = text
             state.pending_needs = None
+            argv = resolve(command.key, **state.values)
+            if argv is None:
+                return f"failed: could not build '{command.key}' from '{text}'.", ConsoleState()
             if command.mutates and not state.pending_confirm:
                 state.pending_confirm = True
-                return (
-                    f"'{command.key}' CHANGES SYSTEM STATE:\n"
-                    f"  $ {' '.join(resolve(command.key, **state.values))}\n"
-                    "Type 'yes' to run it, anything else to cancel.",
-                    state,
-                )
+                return _confirmation(command, state.values), state
         if state.pending_confirm and text.lower() not in ("y", "yes"):
             return "cancelled.", ConsoleState()
-        argv = resolve(state.pending_key, **state.values)
-        return _run_argv(argv, runner), ConsoleState()
+        return _run_command(command, state.values, runner), ConsoleState()
 
     if not text:
         return "", state
@@ -163,8 +193,8 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
         return (f"unknown: '{text}'. `c` lists commands, `?` for the guide.", state)
 
     values = {}
-    # Offer the obvious default for a placeholder from the live service list
-    # rather than making the user retype a device name they can see above.
+    # List the live device/service names beside the prompt so the value can be
+    # copied rather than recalled.
     needs = missing_placeholder(command.key, **values)
     if needs:
         hint = ""
@@ -179,12 +209,10 @@ def handle(line: str, state: ConsoleState, services, runner: Callable) -> tuple[
         )
     if command.mutates:
         return (
-            f"'{command.key}' CHANGES SYSTEM STATE:\n"
-            f"  $ {' '.join(resolve(command.key, **values))}\n"
-            "Type 'yes' to run it, anything else to cancel.",
+            _confirmation(command, values),
             ConsoleState(pending_key=command.key, pending_confirm=True, values=values),
         )
-    return _run_argv(resolve(command.key, **values), runner), state
+    return _run_command(command, values, runner), state
 
 
 def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input) -> int:
@@ -195,8 +223,7 @@ def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input
 
     # Read once and refresh only when something could have changed it. Calling
     # networksetup on every input line -- blank lines and `?` included -- costs
-    # a subprocess each time, and in the menu bar window that runs on the main
-    # thread and can stall it for the full 5s ceiling per keystroke.
+    # a subprocess each time, up to its 5s ceiling before the prompt returns.
     cached = {"services": list_services(run_fn)}
 
     def refresh_services():
@@ -205,7 +232,7 @@ def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input
 
     out(BANNER)
     out("")
-    out(render_interfaces(interface_rows(run_fn, prober)))
+    out(render_interfaces(interface_rows(run_fn, prober, services=cached["services"])))
     state = ConsoleState()
     while not state.quit:
         try:
@@ -218,12 +245,12 @@ def run_console(config: dict, out: Callable[[str], None] = print, input_fn=input
         # The loop owns the handful of actions that need live context; `handle`
         # stays pure and names them instead of performing them.
         if text == "__INTERFACES__":
-            refresh_services()
-            text = render_interfaces(interface_rows(run_fn, prober))
+            text = render_interfaces(interface_rows(run_fn, prober, services=refresh_services()))
         elif text == "__BENCH__":
             out("benchmarking reachable interfaces, this takes a few seconds...")
-            refresh_services()
-            text = render_interfaces(interface_rows(run_fn, prober, meter, measure=True))
+            text = render_interfaces(
+                interface_rows(run_fn, prober, meter, measure=True, services=refresh_services())
+            )
         elif text == "__STATUS__":
             text = render_failover_status(failover.snapshot() if failover else None)
         elif text == "__PRIORITY__":

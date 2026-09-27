@@ -1,9 +1,14 @@
 """The catalogue of network diagnostic commands the console offers.
 
 Data, not behaviour: a list of commands with what each one answers and whether
-it changes anything. Both the CLI console and the menu bar window read this, so
-the two never drift apart, and the "is this safe to run" judgement lives in one
-place instead of being re-decided per surface.
+it changes anything. Read by `netdns run` and its REPL (cli_console.py), so the
+"is this safe to run" judgement lives in one place instead of being re-decided
+per surface. The menu bar console is arbitrary shell and does not use this
+catalogue.
+
+`notes` and `needs_admin` are shown wherever a command is listed, confirmed or
+run. A caveat such as flush-dns's "only half a flush" is part of the result; a
+surface that hides it reports a repair as more complete than it was.
 
 `mutates` is the load-bearing field. A console that offers `ifconfig en0 down`
 next to `scutil --nwi` with no distinction is a foot-gun; anything that changes
@@ -13,6 +18,9 @@ explicit confirmation.
 
 from dataclasses import dataclass
 from typing import Optional
+
+from netdnsmonitor.privileges import IPCONFIG
+from netdnsmonitor.repair_executor import DSCACHEUTIL, NETSTAT, SCUTIL
 
 
 @dataclass(frozen=True)
@@ -35,7 +43,7 @@ CATALOG: list[DiagnosticCommand] = [
     # --- what is the system actually doing right now ---
     DiagnosticCommand(
         "nwi",
-        ["scutil", "--nwi"],
+        [SCUTIL, "--nwi"],
         "which interfaces are active and reachable, and which is primary",
     ),
     DiagnosticCommand(
@@ -45,7 +53,7 @@ CATALOG: list[DiagnosticCommand] = [
     ),
     DiagnosticCommand(
         "routes",
-        ["netstat", "-rn", "-f", "inet"],
+        [NETSTAT, "-rn", "-f", "inet"],
         "the routing table -- which interface the default route points at",
     ),
     DiagnosticCommand(
@@ -67,7 +75,7 @@ CATALOG: list[DiagnosticCommand] = [
     # --- DNS ---
     DiagnosticCommand(
         "dns",
-        ["scutil", "--dns"],
+        [SCUTIL, "--dns"],
         "the resolver configuration, per search domain and per interface",
     ),
     DiagnosticCommand(
@@ -143,7 +151,7 @@ CATALOG: list[DiagnosticCommand] = [
     ),
     DiagnosticCommand(
         "renew-dhcp",
-        ["ipconfig", "set", "{device}", "DHCP"],
+        [IPCONFIG, "set", "{device}", "DHCP"],
         "force a fresh DHCP lease on one interface",
         mutates=True,
         needs_admin=True,
@@ -152,7 +160,7 @@ CATALOG: list[DiagnosticCommand] = [
     ),
     DiagnosticCommand(
         "flush-dns",
-        ["dscacheutil", "-flushcache"],
+        [DSCACHEUTIL, "-flushcache"],
         "drop the DNS cache",
         mutates=True,
         notes="Only half a flush: the mDNSResponder HUP needs privilege and is separate.",
@@ -165,9 +173,13 @@ BY_KEY = {c.key: c for c in CATALOG}
 def resolve(key: str, **values) -> Optional[list[str]]:
     """Turn a catalogue key plus placeholder values into a real argv.
 
-    Returns None for an unknown key, and leaves an unfilled placeholder in
-    place so the caller can see what is still needed rather than silently
-    running a command with a literal "{device}" in it.
+    Returns None for an unknown key and for an unfilled placeholder, so a caller
+    can never shell out with a literal `{device}` in the argv;
+    `missing_placeholder` names which one is missing.
+
+    A value starting with `-` is refused too: `ifconfig`, `ipconfig` and
+    `networksetup` read it as an option, so `iface` with device `-a` runs
+    `ifconfig -a` -- a different command from the one the user picked.
     """
     command = BY_KEY.get(key)
     if command is None:
@@ -178,7 +190,10 @@ def resolve(key: str, **values) -> Optional[list[str]]:
             name = token[1:-1]
             if name not in values or values[name] in (None, ""):
                 return None
-            argv.append(str(values[name]))
+            value = str(values[name])
+            if value.startswith("-"):
+                return None
+            argv.append(value)
         else:
             argv.append(token)
     return argv

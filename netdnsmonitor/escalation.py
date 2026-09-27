@@ -14,19 +14,50 @@ deliver: with the shipped default, unified-log excerpts and ``scutil --dns``
 output go to the API verbatim.
 """
 
-from typing import Any
+import re
+from typing import Any, Optional
+
+REDACTED = "[REDACTED]"
 
 
-def redact(value: Any, sensitive_strings: list[str]) -> Any:
+def redact(value: Any, sensitive_strings: Optional[list[str]]) -> Any:
+    # One alternation, longest needle first, instead of sequential
+    # str.replace: replacing "internal" before "internal-db.acme.com" left
+    # "[REDACTED]-db.acme.com" on the wire. The empty string is dropped because
+    # replace("", x) inserts x between every character, and entries are str()'d
+    # because a YAML list such as [8443] yields ints, whose TypeError escaped the
+    # incident pipeline and lost the report.
+    needles = sorted(
+        {str(s) for s in (sensitive_strings or ()) if s is not None and str(s) != ""},
+        key=len,
+        reverse=True,
+    )
+    pattern = re.compile("|".join(map(re.escape, needles))) if needles else None
+    return _redact(value, pattern)
+
+
+def _redact(value: Any, pattern: Optional["re.Pattern[str]"]) -> Any:
     if isinstance(value, str):
-        redacted = value
-        for needle in sensitive_strings:
-            redacted = redacted.replace(needle, "[REDACTED]")
-        return redacted
+        return pattern.sub(REDACTED, value) if pattern is not None else value
     if isinstance(value, dict):
-        return {k: redact(v, sensitive_strings) for k, v in value.items()}
+        # Keys are redacted too: probe_results.domain_results is keyed by
+        # domain, so value-only redaction sent every configured hostname as a
+        # key. Two sensitive keys can collapse to the same placeholder, and a
+        # plain comprehension would then drop one entry's evidence silently.
+        out = {}
+        for k, v in value.items():
+            key = _redact(k, pattern) if isinstance(k, str) else k
+            if key in out:
+                n = 2
+                while f"{key} ({n})" in out:
+                    n += 1
+                key = f"{key} ({n})"
+            out[key] = _redact(v, pattern)
+        return out
     if isinstance(value, list):
-        return [redact(item, sensitive_strings) for item in value]
+        return [_redact(item, pattern) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact(item, pattern) for item in value)
     return value
 
 

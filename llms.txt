@@ -1,0 +1,27 @@
+<!-- generated: llms-suite 1.0, 2026-09-25; verified-as-of 2026-09-25; local paths rewritten to repo-relative -->
+
+# net-dns-monitor
+
+> macOS menu bar app that monitors network and DNS connectivity, auto-diagnoses with an offline troubleshooting ladder, escalates to Claude when the ladder cannot resolve it, and saves an IT-ready incident report.
+
+## Start here
+
+- [README.md](README.md): Honest scope, setup, notifications, auto-learned domains, console, reports, tests, layout
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): Prerequisites, setup, running, env vars and troubleshooting
+
+## Design and safety
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): System context, one-incident data flow, key design decisions
+- [docs/known-issues.md](docs/known-issues.md): By-design behaviour and known gaps
+
+## Working in the repo
+
+- [CLAUDE.md](CLAUDE.md): Rules for agents working in this repository
+- [docs/TESTING.md](docs/TESTING.md): Test strategy and per-module fakes
+- [docs/SCRIPTS.md](docs/SCRIPTS.md): Operator manual for every runnable entry point
+
+## Companion files
+
+- [llms-full.txt](llms-full.txt): concatenated key docs
+- [llms-small.txt](llms-small.txt): condensed summary
+- [llms-facts.txt](llms-facts.txt): sourced one-line facts

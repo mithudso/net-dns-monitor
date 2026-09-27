@@ -25,9 +25,11 @@ def test_missing_probe_result_is_unclassified():
 def test_incomplete_probe_data_is_unclassified_even_when_the_network_is_down():
     """Completes the 3x3 truth table; these three cells were untested.
 
-    (False, None) is not hypothetical: with the shipped default `domains: []`
-    the prober returns dns_ok=None on every probe, so it is exactly the cell a
-    default install lands in the moment its network drops. The None check
+    (False, None) is not hypothetical: with control_domain set to null and the
+    shipped default `domains: []`, anchor_domains is empty and the prober
+    returns dns_ok=None on every probe, so it is exactly the cell such an
+    install lands in the moment its network drops. The default control domain
+    (api.anthropic.com) is what keeps a stock install out of it. The None check
     deliberately wins over the network check -- reordering the two keeps every
     other test in this file green while silently turning UNCLASSIFIED into
     NETWORK.

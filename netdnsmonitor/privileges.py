@@ -40,9 +40,15 @@ in its arguments -- would be equivalent to handing over unrestricted root, which
 is why the interfaces are enumerated at grant time and validated before they are
 written. Every use is logged by sudo.
 
-The worst realistic outcome of the grant being abused is a briefly interrupted
-network connection on this machine. The user can withdraw it at any time with the
-Revoke button, which deletes the file.
+The worst realistic outcome of the grant being abused is an interrupted network
+connection on this machine, and it is not always brief. `ipconfig set <interface>
+DHCP` de-configures the interface's existing IPv4 service first, so on an address
+set by hand it replaces that configuration with DHCP; with no DHCP server on the
+network, the interface then has no working IPv4 until the next network
+configuration change. The app's own renewal checks for a DHCP lease before it
+runs the command (repair_executor.py), but any other process using the grant does
+not have to. The user can withdraw the grant at any time with the Revoke button,
+which deletes the file.
 
 WHAT IS DELIBERATELY NOT GRANTED
 
@@ -121,6 +127,13 @@ _INTERFACE_RE = re.compile(r"^en\d+\Z")
 # reason as above.
 _USER_RE = re.compile(r"^[A-Za-z0-9._-]+\Z")
 
+# Names `_USER_RE` accepts that sudoers does not read as one account. `ALL` in the
+# user column is every account on the machine. A name of an uppercase letter then
+# uppercase letters, digits or underscores is alias syntax, so sudoers reads it as a
+# User_Alias. `Defaults` and the `*_Alias` words begin other kinds of line. Used
+# with `fullmatch`.
+_RESERVED_USER_RE = re.compile(r"[A-Z][A-Z0-9_]*|Defaults|(User|Runas|Host|Cmnd|Cmd)_Alias")
+
 # Stands in for "every interface", when a blanket `NOPASSWD: ALL` rule is what grants
 # this rather than the file this app writes.
 ALL_INTERFACES_SENTINEL = ("(all, via a blanket NOPASSWD rule)",)
@@ -153,8 +166,11 @@ without a password prompt:
 What that means: from then on, any process running as you -- not only this app --
 can run those specific commands as root with no prompt. sudo logs each use. The
 commands cannot take a file path, cannot read or write your data, and cannot run
-another program; the worst they can do is briefly interrupt this machine's own
-network. There are no wildcards in the file and no shell.
+another program. The worst they can do is interrupt this machine's own network,
+and not always briefly: on an interface whose address was set by hand, the DHCP
+command replaces that address, and with no DHCP server on the network the
+interface has no working IPv4 address until the network configuration next
+changes. There are no wildcards in the file and no shell.
 
 Without this, "Flush DNS cache" only half works (the cache is cleared but
 mDNSResponder is not restarted) and "renew DHCP lease" does not run at all.
@@ -187,11 +203,16 @@ def dhcp_interfaces(run_fn: RunFn = subprocess.run) -> list[str]:
 
 
 def primary_interface(run_fn: RunFn = subprocess.run) -> Optional[str]:
-    """Whichever interface currently carries the default route.
+    """The Ethernet or Wi-Fi interface that carries the default route, if one does.
 
     Read-only and unprivileged. Used to decide which interface a DHCP renewal
     should target; the grant covers all of them, so the answer only has to be
     right, not authorised.
+
+    None covers three different situations: no default route, a default route on
+    an interface other than Ethernet or Wi-Fi (a full-tunnel VPN puts it on utun),
+    or a failed lookup. A caller describing None must not pick one of them -- "no
+    default route" is false on a machine whose VPN is carrying all of its traffic.
     """
     try:
         result = run_fn(
@@ -242,6 +263,11 @@ def sudoers_body(user: str, interfaces: Iterable[str]) -> str:
         raise ValueError(
             f"refusing to write a sudoers rule for the account name {user!r}: "
             "only letters, digits, dot, underscore and hyphen are accepted"
+        )
+    if _RESERVED_USER_RE.fullmatch(user):
+        raise ValueError(
+            f"refusing to write a sudoers rule for the account name {user!r}: "
+            "sudoers reads it as a reserved word or an alias, not as one account"
         )
     names = list(interfaces)
     for name in names:
@@ -311,6 +337,13 @@ def _install_script(body: str) -> str:
             f'echo {encoded} | /usr/bin/base64 -D > "$tmp"',
             '/usr/sbin/chown root:wheel "$tmp"',
             '/bin/chmod 0440 "$tmp"',
+            # `set -e` does not notice a failing non-final member of the decode
+            # pipeline above, and `visudo -cf` accepts an empty file. A truncated
+            # decode would therefore validate, be moved into place, and be announced
+            # as "Granted" for a file that permits nothing. The byte count is the
+            # one thing about the decoded file this script can know in advance.
+            f'if [ "$(/usr/bin/wc -c < "$tmp")" -ne {len(body.encode("utf-8"))} ];'
+            f' then /bin/rm -f "$tmp"; echo {INVALID_SUDOERS} >&2; exit 4; fi',
             # Validated before it is anywhere sudo will read it. A syntax error
             # here would otherwise break sudo for every user on the machine.
             'if ! /usr/sbin/visudo -cf "$tmp" >/dev/null 2>&1; then /bin/rm -f "$tmp";'
@@ -367,8 +400,10 @@ def status_command() -> list[str]:
     Both failures are the same shape and it is the expensive one: the window
     reports a privilege the machine does not have, `flush_dns_cache` takes its
     granted branch, and the outcome then blames a sudoers rule that was never
-    installed. Reading the rule out of the listing cannot drift that way -- the
-    only thing that puts that exact line in the output is the grant.
+    installed. Reading the rule out of the listing cannot drift that way: the
+    policy-only `%admin ALL=(ALL) ALL` carries no NOPASSWD tag, so
+    `parse_granted_commands` never collects it, while a blanket `NOPASSWD: ALL`
+    is accepted on purpose because it genuinely does permit the command.
 
     `-n` so a missing grant fails instead of blocking on a password prompt nobody
     is there to answer. `-k` so a cached credential does not decide the answer.
@@ -376,6 +411,28 @@ def status_command() -> list[str]:
     than removing it, so an unrelated terminal `sudo` session is left alone.
     """
     return [SUDO, "-n", "-k", "-l"]
+
+
+# The runas column that opens a `sudo -l` entry: `(root)`, `(ALL : ALL)`,
+# `(root, _postgres)`. The group after the colon does not change the user.
+_RUNAS_RE = re.compile(r"^\s*\(([^)]*)\)")
+
+
+def _runs_as_root(head: str) -> bool:
+    """Does the runas column in front of a NOPASSWD tag include root?
+
+    Negation (`ALL, !root`) is refused rather than evaluated. Misreading it would
+    claim a root privilege the machine does not have; refusing costs only a repair
+    step. A later spec on the same line that carries its own runas column keeps
+    that column in its text, so it never equals `ALL` or an exact command.
+    """
+    match = _RUNAS_RE.match(head)
+    if not match:
+        return False
+    users = [name.strip() for name in match.group(1).partition(":")[0].split(",")]
+    if any(name.startswith("!") for name in users):
+        return False
+    return "root" in users or "ALL" in users
 
 
 def parse_granted_commands(stdout: str) -> list[str]:
@@ -389,11 +446,16 @@ def parse_granted_commands(stdout: str) -> list[str]:
     Only NOPASSWD lines are of interest: a password-gated entry is exactly what
     this module does not count as granted. Commas separate several specs on one
     line, which is how sudo renders a rule listing more than one command.
+
+    Only entries that run as root count. `(_postgres) NOPASSWD: ALL` is
+    passwordless but permits nothing as root, and the repair's `sudo -n` runs as
+    root -- reading it as granted sent the flush down its granted branch, whose
+    failure message then blamed a grant rule for not working.
     """
     specs: list[str] = []
     for line in (stdout or "").splitlines():
-        _, marker, rest = line.partition("NOPASSWD:")
-        if not marker:
+        head, marker, rest = line.partition("NOPASSWD:")
+        if not marker or not _runs_as_root(head):
             continue
         for spec in rest.split(","):
             collapsed = " ".join(spec.split())
@@ -439,13 +501,39 @@ def covers(specs: Iterable[str], command: Iterable[str]) -> bool:
     This does not reopen the false positive that `status_command` guards against: macOS's
     shipped `%admin ALL=(ALL) ALL` carries no `NOPASSWD:` prefix, so it never reaches this
     function -- `parse_granted_commands` only collects specs from NOPASSWD lines.
+
+    A spec naming the bare command with no arguments also counts: sudoers(5) says a Cmnd
+    without arguments matches that command run with any arguments.
     """
-    return "ALL" in specs or " ".join(command) in specs
+    argv = list(command)
+    joined = " ".join(argv)
+    return any(spec == "ALL" or spec == joined or spec == argv[0] for spec in specs)
 
 
 def is_granted(run_fn: RunFn = subprocess.run) -> bool:
     """Is the mDNSResponder restart actually granted, by rule and not by policy?"""
-    return covers(granted_commands_now(run_fn), MDNS_HUP)
+    return is_granted_from(granted_commands_now(run_fn))
+
+
+def is_granted_from(specs: Iterable[str]) -> bool:
+    """Same question as `is_granted`, from an already-fetched listing.
+
+    The app parses one `sudo -l` listing and asks two questions of it. It must ask
+    this one here rather than compare the joined argv against the spec list itself:
+    exact matching is what `covers` replaced, and bypassing it reports a blanket
+    NOPASSWD rule as "not granted" in the window while the repairs run under it.
+    """
+    return covers(specs, MDNS_HUP)
+
+
+def own_rule_listed(specs: Iterable[str]) -> bool:
+    """Is this app's own mDNSResponder rule in the listing, exactly as written?
+
+    Not the same question as `covers`. A blanket `NOPASSWD: ALL` grants the restart
+    with no file from this app on disk, so "granted" cannot say whether
+    `SUDOERS_PATH` is there. The exact line can: only the grant writes it.
+    """
+    return " ".join(MDNS_HUP) in specs
 
 
 def granted_interfaces_from(specs: Iterable[str]) -> list[str]:
@@ -573,14 +661,21 @@ def revoke(run_fn: RunFn = subprocess.run) -> dict:
     outcome = _run_privileged(revoke_command(), run_fn)
     if outcome["ok"]:
         outcome["message"] = (
-            f"Revoked. {SUDOERS_PATH} is gone; nothing runs as root without a "
-            "prompt any more. Flushing DNS will go back to reporting a partial "
-            "result, and DHCP renewal to reporting that it needs privilege."
+            f"Revoked. {SUDOERS_PATH} is gone, so this app's grant no longer lets "
+            "anything run as root without a prompt. Other sudoers rules on this Mac "
+            "are unaffected: unless one of them permits the same commands, Flush DNS "
+            "goes back to reporting a partial result and DHCP renewal to reporting "
+            "that it needs privilege."
         )
     return outcome
 
 
-def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]) -> list:
+def status_rows(
+    granted: bool,
+    interfaces: Iterable[str],
+    primary: Optional[str],
+    file_rule_listed: Optional[bool] = None,
+) -> list:
     """(label, value) pairs for the window's Permissions section.
 
     States what each right actually unlocks rather than only whether it is held: a
@@ -591,12 +686,19 @@ def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]
     the machine currently has (`dhcp_interfaces`). Those diverge the moment a dock
     or adapter appears, and the divergence matters: it is exactly when the DHCP step
     is about to fail on the new interface while this section says it is covered.
+
+    `file_rule_listed` is `own_rule_listed` of the same listing. It decides the
+    "Sudoers file" row, because `granted` alone cannot: a blanket `NOPASSWD: ALL`
+    grants the restart with no file from this app on disk. None keeps the older
+    behaviour of following `granted`.
     """
     names = list(interfaces)
     # The step targets whichever interface carries the default route, so a covered
-    # set that does not include it is not a working DHCP renewal.
+    # set that does not include it is not a working DHCP renewal. A blanket rule
+    # covers every interface, but a renewal still needs one to target; checking
+    # `blanket` alone made this row read "yes -- on None".
     blanket = list(names) == list(ALL_INTERFACES_SENTINEL)
-    primary_covered = blanket or (bool(primary) and primary in names)
+    primary_covered = bool(primary) and (blanket or primary in names)
     if not granted:
         renew = "no -- the ladder step reports NEEDS_PRIVILEGE instead of running"
     elif primary_covered:
@@ -607,11 +709,22 @@ def status_rows(granted: bool, interfaces: Iterable[str], primary: Optional[str]
             "Re-grant to include it."
         )
     else:
-        renew = "unknown -- nothing currently carries the default route"
+        renew = (
+            "unknown -- no Ethernet or Wi-Fi interface was found on the default route "
+            "(there may be none, a VPN or tunnel may hold it, or the lookup failed)"
+        )
+
+    listed = granted if file_rule_listed is None else file_rule_listed
+    if listed:
+        sudoers_file = SUDOERS_PATH
+    elif granted:
+        sudoers_file = f"{SUDOERS_PATH} (absent -- another NOPASSWD rule grants this)"
+    else:
+        sudoers_file = f"{SUDOERS_PATH} (absent)"
 
     rows = [
         ("Elevated permissions", "granted" if granted else "not granted"),
-        ("Sudoers file", SUDOERS_PATH if granted else f"{SUDOERS_PATH} (absent)"),
+        ("Sudoers file", sudoers_file),
         (
             "Restart mDNSResponder",
             "yes -- Flush DNS cache fully clears DNS"

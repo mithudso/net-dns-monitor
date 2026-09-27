@@ -73,6 +73,22 @@ def test_opening_the_console_builds_it(tmp_path):
     assert app.console is not None
 
 
+def test_quitting_the_app_kills_console_commands_still_running(tmp_path):
+    """A console command runs in its own process group, so nothing else ends it
+    when the app quits. Registered once however many apps are built: rumps keeps
+    its quit callbacks in a set.
+    """
+    import rumps
+
+    from netdnsmonitor import console
+
+    make_app(tmp_path)
+    make_app(tmp_path / "second")
+
+    registered = [cb for cb in rumps.events.before_quit.callbacks if cb is console.kill_running]
+    assert registered == [console.kill_running]
+
+
 # --- the invariant that makes it one console ---------------------------------
 
 

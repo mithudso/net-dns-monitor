@@ -5,7 +5,12 @@ user should choose, not a silent default (see the plan's probing-strategy
 section).
 """
 
+import copy
+import ipaddress
+import math
 import os
+import re
+from typing import Optional
 
 import yaml
 
@@ -178,6 +183,8 @@ DEFAULT_CONFIG = {
     "learned_domains_path": ("~/Library/Application Support/net-dns-monitor/learned_domains.json"),
     "max_learned_domains": 20,
     "domain_learn_interval_seconds": 300,
+    # Automatically open console window below log viewer on right-hand side on startup.
+    "auto_open_console": True,
     # Notifications. Secrets are NOT here: the Slack webhook URL comes from
     # SLACK_WEBHOOK_URL and the SMTP password from SMTP_PASSWORD, so a config
     # file that gets shared or synced carries no credential.
@@ -211,7 +218,7 @@ DEFAULT_CONFIG = {
     # from an interface-bound socket.
     # What the interface prober aims at, when that must differ from
     # `external_targets`. Empty means "use external_targets". See
-    # app.failover_probe_targets for why the two are separable.
+    # failover.failover_probe_targets for why the two are separable.
     "failover_probe_targets": [],
     # One deadline is spent across ALL failover probe targets, so the budget is
     # a function of how many are listed. 0 means "use probe_timeout_seconds".
@@ -239,11 +246,342 @@ DEFAULT_CONFIG = {
     # has supplied the judgement the brakes stand in for.
     "failover_max_switches_per_hour": 4,
     "failover_state_path": ("~/Library/Application Support/net-dns-monitor/failover.json"),
+    # --- in-app router (NAT + DHCP) ----------------------------------------
+    # Off by default. When on, App.__init__ builds netdnsmonitor/router.py's
+    # Router from these but never starts it; Router > Start (or the router
+    # window) starts it with administrator rights. That router
+    # and the standalone router/ stack both rewrite pf NAT rules and serve DHCP
+    # on the LAN interface, so they conflict: run one or the other, never both.
+    # The values match the fallbacks app.py used before these keys existed.
+    "router_enabled": False,
+    "wan_interface": "en3",
+    "lan_interface": "en0",
+    "lan_ip": "192.168.10.1",
+    "lan_netmask": "255.255.255.0",
+    "dhcp_start": "192.168.10.100",
+    "dhcp_end": "192.168.10.200",
 }
+
+# Every key load_config runs through expanduser. One list, so a new path-valued
+# key is added in one place -- the settings window collapses the same keys back
+# to "~" when it saves.
+PATH_KEYS = (
+    "reports_dir",
+    "resolution_log_path",
+    "forensic_log_path",
+    "forensic_episodes_dir",
+    "peer_record_path",
+    "history_path",
+    "learned_domains_path",
+    "failover_state_path",
+)
+
+# Keys whose consumers iterate them. A str is iterable too, so a bare string is
+# refused rather than iterated a character at a time.
+LIST_KEYS = (
+    "domains",
+    "sensitive_strings",
+    "log_view_noise_patterns",
+    "email_recipients",
+    "failover_backup_services",
+    "failover_trigger_classifications",
+)
+
+# `key:` with every item beneath it commented out loads as None, not []. For
+# these keys an empty list is the only reading, and None reaches code that
+# iterates it: redact(text, None) raises TypeError on the incident edge, and the
+# notification and forensic record for that incident are lost.
+# failover_trigger_classifications is deliberately absent -- null there means
+# "use the default"; see normalize_config.
+EMPTY_WHEN_NULL = (
+    "domains",
+    "sensitive_strings",
+    "log_view_noise_patterns",
+    "email_recipients",
+    "failover_backup_services",
+    "internal_targets",
+    "failover_probe_targets",
+)
+
+TARGET_KEYS = ("external_targets", "internal_targets", "failover_probe_targets")
+
+# A timeout or interval of 0 is not "fast". A socket timeout of 0 makes connect
+# non-blocking, so it fails at once with BlockingIOError; every tick then reads
+# as a network incident on a healthy link, and the app runs repairs, fails over
+# and escalates. A negative timeout raises ValueError instead of OSError.
+POSITIVE_KEYS = (
+    "poll_interval_seconds",
+    "probe_timeout_seconds",
+    "ping_interval_seconds",
+    "ping_timeout_seconds",
+    "resolution_interval_seconds",
+    "domain_learn_interval_seconds",
+    "resolution_batch_deadline_seconds",
+    "resolution_timeout_seconds",
+    "ui_refresh_seconds",
+    "dock_refresh_seconds",
+    "peer_announce_seconds",
+    "log_view_poll_seconds",
+    "log_view_timeout_seconds",
+    "notify_timeout_seconds",
+    "failover_speedtest_timeout_seconds",
+    # ThreadPoolExecutor(max_workers=0) raises ValueError, so every resolution
+    # batch failed.
+    "resolution_max_workers",
+)
+
+PORT_KEYS = ("peer_port", "smtp_port", "failover_speedtest_port")
+
+# Every other numeric key. 0 is meaningful for some of these (no re-alert, no
+# automatic switching), so only the type is checked. A null loads as None, and
+# None reached float() inside load_config itself, or a comparison on every tick.
+NUMBER_KEYS = (
+    "failure_threshold",
+    "success_threshold",
+    "resolution_stall_seconds",
+    "ping_failure_threshold",
+    "ping_alert_repeat_seconds",
+    "ping_loss_window",
+    "peer_current_seconds",
+    "peer_recent_seconds",
+    "peer_probe_wait_seconds",
+    "history_max_samples",
+    "log_view_max_entries",
+    "log_view_row_limit",
+    "log_view_announce_limit",
+    "max_learned_domains",
+    "domain_learn_interval_seconds",
+    "failover_probe_timeout_seconds",
+    "failover_speedtest_max_bytes",
+    "failover_failback_threshold",
+    "failover_cooldown_seconds",
+    "failover_max_switches_per_hour",
+)
+
+# router.py interpolates these into a shell script that runs with administrator
+# rights, so anything but an address or an interface name is refused before it
+# can get there. Checked only while router_enabled is on: nothing reads them
+# otherwise, and a stale value must not stop the monitor from starting.
+ROUTER_ADDRESS_KEYS = ("lan_ip", "lan_netmask", "dhcp_start", "dhcp_end")
+ROUTER_INTERFACE_KEYS = ("wan_interface", "lan_interface")
+# BSD interface names: a letter, then letters or digits (en0, bridge100, utun3),
+# at most 15 characters because IFNAMSIZ is 16 including the terminator.
+_INTERFACE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]{0,14}")
+
+
+class ConfigError(ValueError):
+    """A value load_config refuses. `key` names the offending config key, so the
+    settings window can put the field's label in front of the message.
+    """
+
+    def __init__(self, key: str, message: str):
+        super().__init__(message)
+        self.key = key
+
+
+def _is_port(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 65535
+
+
+def _is_number(value) -> bool:
+    # bool is an int subclass, and `true` for a threshold is a typo, not 1.
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _is_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def target_problem(entry) -> Optional[str]:
+    """Why `entry` is not an [IP address, port] pair, or None if it is one.
+
+    IP literals only. A hostname is resolved inside create_connection, where the
+    probe timeout does not bound the lookup, and a resolver failure there reads
+    as "internet unreachable" -- a DNS fault reported as a network one. A scoped
+    IPv6 address such as fe80::1%en0 is an IP literal and is accepted.
+    """
+    if isinstance(entry, str) or not isinstance(entry, (list, tuple)) or len(entry) != 2:
+        return f"expected an [IP, port] pair, got {entry!r}"
+    host, port = entry
+    try:
+        if not isinstance(host, str):
+            raise ValueError(host)
+        ipaddress.ip_address(host)
+    except ValueError:
+        return f"expected an IP address (hostnames are not accepted), got {host!r}"
+    if not _is_port(port):
+        return f"expected a port from 1 to 65535, got {port!r}"
+    return None
+
+
+# `log show --last` windows. YAML reads `300` as an int, and an int in a
+# subprocess argv raises TypeError inside the log reader -- which the incident
+# pipeline turns into an empty excerpt list that reads as "nothing matched".
+# A bare number is valid `--last` syntax (seconds), so the int has one safe
+# reading: its text.
+LOG_WINDOW_KEYS = ("log_lookback", "log_view_poll_window", "log_view_backfill_window")
+
+
+def normalize_config(config: dict) -> None:
+    """Replace a null that has exactly one safe reading with that reading, in place."""
+    for key in LOG_WINDOW_KEYS:
+        value = config.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            config[key] = str(value)
+    for key in EMPTY_WHEN_NULL:
+        if key in config and config[key] is None:
+            config[key] = []
+    if config.get("failover_trigger_classifications", []) is None:
+        # Null means the default. It is written out rather than left null so the
+        # settings window shows the list in force: shown blank, a save would
+        # write [] and silently disable automatic failover.
+        config["failover_trigger_classifications"] = list(
+            DEFAULT_CONFIG["failover_trigger_classifications"]
+        )
+
+
+def validate_config(config: dict) -> None:
+    """Raise ConfigError, naming the key, for a value the app would misread.
+
+    Checks only the keys present, so the settings window can check just the
+    fields it was sent.
+    """
+    # Catch the wrong type that fails silently instead of loudly. `domains:
+    # example.com` -- the natural way to write a single entry -- becomes 11
+    # single-character lookups. Every one fails, dns_ok goes False on a healthy
+    # network, the flap gate latches an incident, and the app runs real repairs
+    # and escalates, forever. `sensitive_strings` as a bare string redacts every
+    # occurrence of each letter from the report. `log_view_noise_patterns` makes
+    # every character a suppression pattern, so the log pane shows nothing.
+    # `failover_trigger_classifications: network` becomes a set of letters that
+    # no classification matches, so failover never triggers, and a bare
+    # `email_recipients` address is mailed one character at a time.
+    for key in LIST_KEYS:
+        if key in config and isinstance(config[key], str):
+            raise ConfigError(
+                key,
+                f"config key '{key}' must be a list of strings, not the "
+                f"single string {config[key]!r} -- wrap it in a list, e.g. "
+                f"[{config[key]!r}]. A bare string is iterated "
+                f"character-by-character by the code that consumes it.",
+            )
+
+    # A mapping iterates its keys and an int does not iterate at all; neither is
+    # "a list of strings". None is left to normalize_config.
+    for key in LIST_KEYS:
+        value = config.get(key)
+        if value is not None and not isinstance(value, (str, list, tuple)):
+            raise ConfigError(
+                key,
+                f"config key '{key}' must be a list of strings, got {type(value).__name__}",
+            )
+
+    # Items must be strings too. YAML reads an unquoted `-1009` as an int, and
+    # an int in log_view_noise_patterns raises TypeError on `in` inside the log
+    # filter, so the dashboard never opens and log announcements are lost.
+    # sensitive_strings is exempt: redact() already reads each item with str().
+    for key in LIST_KEYS:
+        if key == "sensitive_strings" or not isinstance(config.get(key), (list, tuple)):
+            continue
+        for item in config[key]:
+            if not isinstance(item, str):
+                raise ConfigError(
+                    key,
+                    f"config key '{key}' must be a list of strings; {item!r} is not a "
+                    f"string -- quote it",
+                )
+
+    for key in LOG_WINDOW_KEYS:
+        if key in config and not (isinstance(config[key], str) and config[key].strip()):
+            raise ConfigError(
+                key,
+                f"config key '{key}' must be a `log show --last` window such as "
+                f"'5m' or '300', got {config[key]!r}",
+            )
+
+    for key in TARGET_KEYS:
+        if key not in config:
+            continue
+        targets = config[key]
+        if not isinstance(targets, (list, tuple)):
+            raise ConfigError(
+                key, f"config key '{key}' must be a list of [IP, port] pairs, got {targets!r}"
+            )
+        for entry in targets:
+            problem = target_problem(entry)
+            if problem is not None:
+                raise ConfigError(key, f"config key '{key}': {problem}")
+
+    for key in POSITIVE_KEYS:
+        if key in config and not (_is_number(config[key]) and config[key] > 0):
+            raise ConfigError(
+                key, f"config key '{key}' must be a number greater than 0, got {config[key]!r}"
+            )
+
+    for key in NUMBER_KEYS:
+        if key in config and not _is_number(config[key]):
+            raise ConfigError(key, f"config key '{key}' must be a number, got {config[key]!r}")
+
+    # Blank is not "don't ping": `ping ""` cannot resolve the host and exits 68,
+    # so every heartbeat is a lost ping and the alert fires on a healthy network.
+    if "ping_host" in config and not _is_text(config["ping_host"]):
+        raise ConfigError(
+            "ping_host",
+            f"config key 'ping_host' must be a host name or address, got {config['ping_host']!r}",
+        )
+
+    # `reports_dir:` with nothing after it loads as None, and expanduser(None)
+    # raises TypeError, which names no key. A blank path is refused too: it
+    # expands to "", and every write to it fails.
+    for key in PATH_KEYS:
+        if key in config and not _is_text(config[key]):
+            raise ConfigError(key, f"config key '{key}' must be a path, got {config[key]!r}")
+
+    for key in PORT_KEYS:
+        if key in config and not _is_port(config[key]):
+            raise ConfigError(
+                key, f"config key '{key}' must be a port from 1 to 65535, got {config[key]!r}"
+            )
+
+    # With no configured domain and no control domain, the DNS probe has no name
+    # to resolve until one is learned. dns_ok is then None, classify() returns
+    # UNCLASSIFIED, and the state machine counts that as a failing tick -- a
+    # permanent incident, with its alert and escalation, on a healthy network.
+    has_both = "domains" in config and "control_domain" in config
+    if has_both and not config["domains"] and not config["control_domain"]:
+        raise ConfigError(
+            "control_domain",
+            "config key 'control_domain' cannot be empty while 'domains' is "
+            "empty: with no name to resolve, every check reads as unclassified "
+            "and latches a permanent incident. Set control_domain or add a domain.",
+        )
+
+    if config.get("router_enabled"):
+        for key in ROUTER_ADDRESS_KEYS:
+            if key not in config:
+                continue
+            try:
+                if not isinstance(config[key], str):
+                    raise ValueError(config[key])
+                ipaddress.IPv4Address(config[key])
+            except ValueError:
+                raise ConfigError(
+                    key, f"config key '{key}' must be an IPv4 address, got {config[key]!r}"
+                ) from None
+        for key in ROUTER_INTERFACE_KEYS:
+            value = config.get(key)
+            if key in config and not (isinstance(value, str) and _INTERFACE_NAME.fullmatch(value)):
+                raise ConfigError(
+                    key,
+                    f"config key '{key}' must be an interface name such as en0, got {value!r}",
+                )
 
 
 def load_config(path: str) -> dict:
-    config = dict(DEFAULT_CONFIG)
+    # deepcopy, not dict(): the list defaults would otherwise be the same
+    # objects in every load, and an append to one config's `domains` would
+    # show up in the next.
+    config = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
             user_config = yaml.safe_load(f) or {}
@@ -260,41 +598,15 @@ def load_config(path: str) -> dict:
             )
         config.update(user_config)
 
-    # Catch the one wrong type that fails silently instead of loudly. These two
-    # keys are iterated, and a str is iterable, so `domains: example.com` --
-    # the natural way to write a single entry -- becomes 11 single-character
-    # lookups. Every one fails, dns_ok goes False on a healthy network, the
-    # flap gate latches an incident, and the app runs real repairs and
-    # escalates, forever. `sensitive_strings` as a bare string redacts every
-    # occurrence of each letter from the report. Neither raises on its own.
-    # (external_targets/internal_targets need no check: app.py unpacks them and
-    # raises loudly on a string.)
-    # log_view_noise_patterns joins the same club for the same reason: as a bare
-    # string it is iterated character by character, every character becomes a
-    # suppression pattern, and the log pane silently shows nothing at all.
-    for list_key in ("domains", "sensitive_strings", "log_view_noise_patterns"):
-        if isinstance(config[list_key], str):
-            raise ValueError(
-                f"config key '{list_key}' must be a list of strings, not the "
-                f"single string {config[list_key]!r} -- wrap it in a list, e.g. "
-                f"[{config[list_key]!r}]. A bare string is iterated "
-                f"character-by-character by the code that consumes it."
-            )
+    normalize_config(config)
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        # Name the file as well as the key: the app can be launched from the
+        # Dock, where nothing else says which config was read.
+        raise ConfigError(exc.key, f"{exc} (in {path})") from None
 
-    for path_key in (
-        "reports_dir",
-        "resolution_log_path",
-        "forensic_log_path",
-        "forensic_episodes_dir",
-        "peer_record_path",
-        "history_path",
-        # Folded into this loop during the reconcile rather than kept as the
-        # separate expanduser call the console-window line had: one list is the
-        # place a new path-valued key gets added, and two would guarantee the
-        # next one is added to only one of them.
-        "learned_domains_path",
-        "failover_state_path",
-    ):
+    for path_key in PATH_KEYS:
         config[path_key] = os.path.expanduser(config[path_key])
 
     # A learn interval at or below the poll interval re-adds a dead domain on

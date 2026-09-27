@@ -321,6 +321,22 @@ def test_torn_and_blank_lines_are_skipped(tmp_path):
     ]
 
 
+def test_a_boolean_elapsed_is_not_a_stall(tmp_path):
+    """`bool` is a subclass of `int`, so `"elapsed_seconds": true` reads as 1 and
+    clears the default threshold. The stall set is closed and never shrinks, so
+    one such line would buy a permanent re-probe.
+    """
+    path = _write_log(
+        tmp_path,
+        [
+            {"domain": "bool.example.com", "elapsed_seconds": True},
+            _record("real.example.com", 9.0),
+        ],
+    )
+
+    assert select_stalled_domains(path, stall_seconds=1.0) == ["real.example.com"]
+
+
 def test_records_without_usable_fields_are_ignored(tmp_path):
     path = _write_log(
         tmp_path,

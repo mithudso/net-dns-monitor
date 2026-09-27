@@ -1,32 +1,237 @@
+"""The Router Management Console window.
+
+Everything that decides something lives in the plain functions at the top of
+this file, which the offline suite covers; the controller below them only reads
+widgets and draws text. AppKit, PyObjC and `anthropic` are imported lazily so
+the module imports on a machine with no GUI session and costs nothing at app
+start.
+
+Every subprocess, the Anthropic client, and the hop back to the main thread
+are injected. Anything slow runs on a worker thread: a blocking wait on the
+main thread freezes the window, the menu bar, and the rumps timers doing the
+actual monitoring.
+"""
+
+import contextlib
+import ipaddress
+import os
+import re
 import subprocess
 import threading
-import traceback
-import anthropic
-from typing import Optional
+from collections.abc import Mapping
+from typing import Callable, Optional
 
-try:
-    import objc
-    import AppKit
-    from Foundation import NSObject, NSMakeRect, NSAttributedString, NSMakeRange
-    from AppKit import NSBackingStoreBuffered, NSFont
-except ImportError:
-    pass  # Not on macOS or no PyObjC
+import yaml
+
+from netdnsmonitor.router import DEFAULTS
+
+RunFn = Callable[..., object]
 
 STYLE_MASK = 1 | 2 | 4 | 8
 RESIZE_BOTH = 18
 
+COMMAND_TIMEOUT_SECONDS = 5.0
+# `ping -c 4` takes about four seconds when every reply arrives and longer when
+# they do not; this bounds the worst case without cutting off a normal run.
+PING_TIMEOUT_SECONDS = 20.0
+AI_MAX_TOKENS = 1000
+
+ROUTER_KEYS = tuple(DEFAULTS)
+# Config key -> Router attribute. Router validates these when it starts, so
+# writing them here cannot put an unchecked value into the root script.
+_ROUTER_ATTRS = {
+    "wan_interface": "wan_if",
+    "lan_interface": "lan_if",
+    "lan_ip": "lan_ip",
+    "lan_netmask": "lan_netmask",
+    "dhcp_start": "dhcp_start",
+    "dhcp_end": "dhcp_end",
+}
+
+_HOSTNAME_RE = re.compile(
+    r"(?=.{1,253}\.?$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?"
+)
+# Client MAC addresses appear in `netstat -rn` link-layer rows. Judging a router
+# config does not need them, so they never leave the machine.
+_MAC_RE = re.compile(r"\b[0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5}\b")
+
+
+# --- pure helpers ----------------------------------------------------------
+
+
+def _capture(run_fn: RunFn, argv: list, timeout: float = COMMAND_TIMEOUT_SECONDS):
+    """(stdout, None) on success, or (None, reason). Never raises."""
+    try:
+        result = run_fn(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        return None, type(exc).__name__
+    if getattr(result, "returncode", 1) != 0:
+        return None, f"exit {getattr(result, 'returncode', '?')}"
+    return getattr(result, "stdout", "") or "", None
+
+
+def parse_interfaces(output: str) -> list:
+    interfaces = []
+    current_name = None
+    for line in output.splitlines():
+        if line.startswith("Hardware Port:"):
+            current_name = line.split(":", 1)[1].strip()
+        elif line.startswith("Device:") and current_name:
+            device = line.split(":", 1)[1].strip()
+            interfaces.append(f"{current_name} ({device})")
+            current_name = None
+    return interfaces
+
+
+def get_interfaces(run_fn: RunFn = subprocess.run) -> list:
+    """Interface titles like "Wi-Fi (en0)", or [] if they could not be listed."""
+    out, _error = _capture(run_fn, ["networksetup", "-listallhardwareports"])
+    return parse_interfaces(out) if out is not None else []
+
+
+def device_from_title(title) -> Optional[str]:
+    """`None` when nothing is selected. Guessing "en0" here once meant an empty
+    popup could start a router on an interface nobody chose.
+    """
+    if not title or "(" not in title:
+        return None
+    return str(title).rsplit("(", 1)[-1].strip(")") or None
+
+
+def router_updates(values: Mapping) -> dict:
+    """Only the router's own keys, so a save cannot rewrite anything else."""
+    return {key: values[key] for key in ROUTER_KEYS if key in values}
+
+
+def ping_target(text) -> Optional[str]:
+    """The target if it is an IPv4 address or a hostname, else None.
+
+    The text is passed to `ping` as an argument, so a leading `-` would be read
+    as an option.
+    """
+    candidate = (text or "").strip()
+    if not candidate:
+        return None
+    try:
+        return str(ipaddress.IPv4Address(candidate))
+    except ValueError:
+        pass
+    if _HOSTNAME_RE.fullmatch(candidate):
+        return candidate
+    return None
+
+
+def bootpd_status(run_fn: RunFn = subprocess.run) -> str:
+    """bootpd is socket-activated: launchd holds UDP 67 while the job is loaded
+    and bootpd itself only runs when a request arrives, so `bootpd` in `ps` says
+    nothing about whether the port is taken.
+    """
+    try:
+        result = run_fn(
+            ["/bin/launchctl", "print", "system/com.apple.bootpd"],
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        return f"bootpd job: not checked ({type(exc).__name__})"
+    if getattr(result, "returncode", 1) == 0:
+        return "bootpd job loaded (UDP 67 held)"
+    return "bootpd job not loaded"
+
+
+def collect_diagnostics(run_fn: RunFn, wan: Optional[str], lan: Optional[str]) -> list:
+    lines = ["--- Diagnostics & Routing Status ---"]
+    routes, error = _capture(run_fn, ["netstat", "-rn", "-f", "inet"])
+    lines.append(
+        "\nRouting Table:\n" + routes
+        if routes is not None
+        else f"\nRouting table: not checked ({error})"
+    )
+    fwd, error = _capture(run_fn, ["sysctl", "net.inet.ip.forwarding"])
+    lines.append(
+        "\n" + fwd.strip() if fwd is not None else f"\nIP forwarding: not checked ({error})"
+    )
+    lines.append(bootpd_status(run_fn))
+    if wan is not None and wan == lan:
+        lines.append("\n!!! OBVIOUS CONFLICT: WAN and LAN are set to the same interface !!!")
+    return lines
+
+
+def build_ai_prompt(values: Mapping, routes: str, forwarding: str) -> str:
+    return (
+        "Analyze this macOS router/Internet Sharing config:\n"
+        f"WAN: {values.get('wan_interface')}\nLAN: {values.get('lan_interface')}\n"
+        f"LAN IP: {values.get('lan_ip')}\nNetmask: {values.get('lan_netmask')}\n"
+        f"DHCP: {values.get('dhcp_start')}-{values.get('dhcp_end')}\n"
+        f"\nRouting table:\n{routes}\n\nIP Forwarding: {forwarding}\n"
+        "Is this config logically sound? Provide brief feedback and subnet/route suggestions."
+    )
+
+
+def redact_prompt(prompt: str, sensitive_strings) -> str:
+    from netdnsmonitor.escalation import redact
+
+    return redact(_MAC_RE.sub("[MAC]", prompt), list(sensitive_strings or []))
+
+
+def ai_config_check(
+    values: Mapping,
+    run_fn: RunFn,
+    sensitive_strings,
+    api_key: Optional[str],
+    client_factory: Optional[Callable[[], object]] = None,
+) -> str:
+    """Run the check and return the text to show. Never raises."""
+    if not api_key:
+        return "skipped: ANTHROPIC_API_KEY not set"
+    from netdnsmonitor.anthropic_escalator import (
+        DEFAULT_MODEL,
+        DEFAULT_TIMEOUT_SECONDS,
+        default_client,
+    )
+
+    routes, error = _capture(run_fn, ["netstat", "-rn", "-f", "inet"])
+    if routes is None:
+        routes = f"(not available: {error})"
+    fwd, error = _capture(run_fn, ["sysctl", "net.inet.ip.forwarding"])
+    fwd = fwd.strip() if fwd is not None else f"(not available: {error})"
+    prompt = redact_prompt(build_ai_prompt(values, routes, fwd), sensitive_strings)
+    try:
+        client = (client_factory or (lambda: default_client(api_key=api_key)))()
+        response = client.messages.create(
+            model=DEFAULT_MODEL,
+            max_tokens=AI_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+        text = response.content[0].text
+    except Exception as exc:  # noqa: BLE001 - shown in the window, never raised into it
+        # The class name only: an authentication error's message can carry
+        # request details, and this text is drawn on screen.
+        return f"\nAI Check Failed: {type(exc).__name__}"
+    return "\n[AI Analysis]\n" + text
+
+
+# --- AppKit shell ----------------------------------------------------------
+
 _ROUTER_TARGET_CLASS = None
+
 
 def _router_target_class():
     global _ROUTER_TARGET_CLASS
     if _ROUTER_TARGET_CLASS is None:
+        import objc
+        from Foundation import NSObject
+
         class _RouterTarget(NSObject):
             def initWithController_(self, ctrl):
                 self = objc.super(_RouterTarget, self).init()
-                if self is None: return None
+                if self is None:
+                    return None
                 self._controller = ctrl
                 return self
-            
+
             def onStart_(self, sender):
                 self._controller.on_start()
 
@@ -41,27 +246,18 @@ def _router_target_class():
 
             def onAiCheck_(self, sender):
                 self._controller.on_ai_check()
-                
+
             def onSaveConfig_(self, sender):
                 self._controller.on_save_config()
 
         _ROUTER_TARGET_CLASS = _RouterTarget
     return _ROUTER_TARGET_CLASS
 
-def get_interfaces():
-    out = subprocess.check_output(["networksetup", "-listallhardwareports"], text=True)
-    interfaces = []
-    current_name = None
-    for line in out.splitlines():
-        if line.startswith("Hardware Port:"):
-            current_name = line.split(":", 1)[1].strip()
-        elif line.startswith("Device:") and current_name:
-            device = line.split(":", 1)[1].strip()
-            interfaces.append(f"{current_name} ({device})")
-            current_name = None
-    return interfaces
 
 def make_label(x, y, w, h, text):
+    import AppKit
+    from Foundation import NSMakeRect
+
     lbl = AppKit.NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
     lbl.setStringValue_(text)
     lbl.setBezeled_(False)
@@ -70,27 +266,150 @@ def make_label(x, y, w, h, text):
     lbl.setSelectable_(False)
     return lbl
 
+
 def make_textfield(x, y, w, h, text):
+    import AppKit
+    from Foundation import NSMakeRect
+
     tf = AppKit.NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
     tf.setStringValue_(text)
     return tf
 
+
+def _default_post(fn, *args):
+    from PyObjCTools.AppHelper import callAfter
+
+    callAfter(fn, *args)
+
+
+def _default_spawn(fn):
+    threading.Thread(target=fn, daemon=True).start()
+
+
 class RouterWindowController:
-    def __init__(self, config: dict, app):
-        self.config = config
+    def __init__(
+        self,
+        config_getter: Optional[Callable[[], Mapping]] = None,
+        config_path: Optional[str] = None,
+        app=None,
+        run_fn: RunFn = subprocess.run,
+        client_factory: Optional[Callable[[], object]] = None,
+        post: Optional[Callable[..., None]] = None,
+        spawn: Optional[Callable[[Callable[[], None]], None]] = None,
+        environ: Optional[Mapping] = None,
+        config: Optional[Mapping] = None,
+        api_key_getter: Optional[Callable[[], Optional[str]]] = None,
+    ):
+        # `config` is the old keyword: a dict captured once. A getter sees the
+        # app's current config instead of whatever it was when the window opened.
+        if config_getter is None:
+            captured = config if config is not None else {}
+
+            def config_getter():
+                return captured
+
+        if config_path is None and app is not None:
+            config_path = getattr(app, "config_path", None)
+        self.config_getter = config_getter
+        self.config_path = config_path
         self.app = app
+        self.run_fn = run_fn
+        self.client_factory = client_factory
+        self.post = post or _default_post
+        self.spawn = spawn or _default_spawn
+        self.environ = environ if environ is not None else os.environ
+        # A getter over the app's credential store reaches a key kept in the
+        # Keychain; an app launched by LaunchServices has no shell environment.
+        self.api_key_getter = api_key_getter or (lambda: self.environ.get("ANTHROPIC_API_KEY"))
         self.window = None
-        self.interfaces = get_interfaces()
+        self.text_view = None
+        self.interfaces: list = []
+        self._busy = False
+
+    # --- config ------------------------------------------------------------
+
+    def _config(self) -> Mapping:
+        try:
+            current = self.config_getter()
+        except Exception:  # noqa: BLE001 - a broken getter must not break the window
+            return {}
+        return current if isinstance(current, Mapping) else {}
+
+    def _default(self, key):
+        return self._config().get(key, DEFAULTS[key])
+
+    # --- window ------------------------------------------------------------
 
     def show(self):
-        if self.window is None:
+        import AppKit
+
+        first_open = self.window is None
+        if first_open:
+            # Built with empty popups: `networksetup` can take its whole timeout,
+            # and on the main thread that freezes the menu bar and the timers.
             self._target = _router_target_class().alloc().initWithController_(self)
             self._build_window()
         self.window.makeKeyAndOrderFront_(None)
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        self.on_refresh()
+        if first_open:
+            # The first diagnostics wait for the list, so the same-interface
+            # check reads the configured WAN and LAN rather than two empty popups.
+            self._request_interfaces(refresh=True)
+        else:
+            self.on_refresh()
+
+    def _request_interfaces(self, refresh: bool = False) -> bool:
+        """List interfaces on a worker and fill the popups on the main thread."""
+        run_fn = self.run_fn
+
+        def runner():
+            try:
+                names = get_interfaces(run_fn)
+            except Exception:  # noqa: BLE001 - an empty list is reported as one
+                names = []
+            self.post(self._populate_interfaces, names, refresh)
+
+        try:
+            self.spawn(runner)
+        except RuntimeError as exc:
+            self.append_log(f"failed: could not start a worker ({type(exc).__name__})")
+            return False
+        return True
+
+    def _populate_interfaces(self, names, refresh: bool = False) -> None:
+        self.interfaces = list(names)
+        for popup, key in (
+            (getattr(self, "wan_popup", None), "wan_interface"),
+            (getattr(self, "lan_popup", None), "lan_interface"),
+        ):
+            if popup is None:
+                continue
+            popup.removeAllItems()
+            popup.addItemsWithTitles_(self.interfaces)
+            self._select_interface(popup, self._default(key))
+        if refresh:
+            self.on_refresh()
+        # After the refresh, which clears the log and would erase this line.
+        if not self.interfaces:
+            self.append_log("Could not list network interfaces.")
+
+    def _button(self, content, frame, title, action):
+        import AppKit
+        from Foundation import NSMakeRect
+
+        btn = AppKit.NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
+        btn.setTitle_(title)
+        btn.setTarget_(self._target)
+        btn.setAction_(action)
+        btn.setBezelStyle_(1)  # NSRoundedBezelStyle
+        content.addSubview_(btn)
+        return btn
 
     def _build_window(self):
+        import AppKit
+        from AppKit import NSBackingStoreBuffered, NSFont
+        from Foundation import NSMakeRect
+
         self.window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, 800, 600), STYLE_MASK, NSBackingStoreBuffered, False
         )
@@ -101,85 +420,53 @@ class RouterWindowController:
 
         y = 550
         content.addSubview_(make_label(10, y, 100, 24, "WAN Interface:"))
-        self.wan_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(120, y, 250, 24), False)
+        self.wan_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(120, y, 250, 24), False
+        )
         self.wan_popup.addItemsWithTitles_(self.interfaces)
-        self._select_interface(self.wan_popup, self.config.get("wan_interface", "en0"))
+        self._select_interface(self.wan_popup, self._default("wan_interface"))
         content.addSubview_(self.wan_popup)
 
         content.addSubview_(make_label(400, y, 100, 24, "LAN Interface:"))
-        self.lan_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(500, y, 250, 24), False)
+        self.lan_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(500, y, 250, 24), False
+        )
         self.lan_popup.addItemsWithTitles_(self.interfaces)
-        self._select_interface(self.lan_popup, self.config.get("lan_interface", "en1"))
+        self._select_interface(self.lan_popup, self._default("lan_interface"))
         content.addSubview_(self.lan_popup)
 
         y -= 40
         content.addSubview_(make_label(10, y, 100, 24, "LAN IP:"))
-        self.lan_ip = make_textfield(120, y, 150, 24, self.config.get("lan_ip", "192.168.10.1"))
+        self.lan_ip = make_textfield(120, y, 150, 24, str(self._default("lan_ip")))
         content.addSubview_(self.lan_ip)
 
         content.addSubview_(make_label(290, y, 80, 24, "Netmask:"))
-        self.lan_nm = make_textfield(370, y, 150, 24, self.config.get("lan_netmask", "255.255.255.0"))
+        self.lan_nm = make_textfield(370, y, 150, 24, str(self._default("lan_netmask")))
         content.addSubview_(self.lan_nm)
 
         y -= 40
         content.addSubview_(make_label(10, y, 100, 24, "DHCP Start:"))
-        self.dhcp_s = make_textfield(120, y, 150, 24, self.config.get("dhcp_start", "192.168.10.100"))
+        self.dhcp_s = make_textfield(120, y, 150, 24, str(self._default("dhcp_start")))
         content.addSubview_(self.dhcp_s)
 
         content.addSubview_(make_label(290, y, 80, 24, "DHCP End:"))
-        self.dhcp_e = make_textfield(370, y, 150, 24, self.config.get("dhcp_end", "192.168.10.200"))
+        self.dhcp_e = make_textfield(370, y, 150, 24, str(self._default("dhcp_end")))
         content.addSubview_(self.dhcp_e)
 
         y -= 40
-        btn_save = AppKit.NSButton.alloc().initWithFrame_(NSMakeRect(10, y, 120, 24))
-        btn_save.setTitle_("Save Config")
-        btn_save.setTarget_(self._target)
-        btn_save.setAction_("onSaveConfig:")
-        btn_save.setBezelStyle_(1) # NSRoundedBezelStyle
-        content.addSubview_(btn_save)
-
-        btn_start = AppKit.NSButton.alloc().initWithFrame_(NSMakeRect(140, y, 120, 24))
-        btn_start.setTitle_("Start Router")
-        btn_start.setTarget_(self._target)
-        btn_start.setAction_("onStart:")
-        btn_start.setBezelStyle_(1)
-        content.addSubview_(btn_start)
-
-        btn_stop = AppKit.NSButton.alloc().initWithFrame_(NSMakeRect(270, y, 120, 24))
-        btn_stop.setTitle_("Stop Router")
-        btn_stop.setTarget_(self._target)
-        btn_stop.setAction_("onStop:")
-        btn_stop.setBezelStyle_(1)
-        content.addSubview_(btn_stop)
-
-        btn_ref = AppKit.NSButton.alloc().initWithFrame_(NSMakeRect(400, y, 150, 24))
-        btn_ref.setTitle_("Refresh Diagnostics")
-        btn_ref.setTarget_(self._target)
-        btn_ref.setAction_("onRefresh:")
-        btn_ref.setBezelStyle_(1)
-        content.addSubview_(btn_ref)
-
-        btn_ai = AppKit.NSButton.alloc().initWithFrame_(NSMakeRect(560, y, 150, 24))
-        btn_ai.setTitle_("AI Config Check")
-        btn_ai.setTarget_(self._target)
-        btn_ai.setAction_("onAiCheck:")
-        btn_ai.setBezelStyle_(1)
-        content.addSubview_(btn_ai)
+        self._button(content, (10, y, 120, 24), "Save Config", "onSaveConfig:")
+        self._button(content, (140, y, 120, 24), "Start Router", "onStart:")
+        self._button(content, (270, y, 120, 24), "Stop Router", "onStop:")
+        self._button(content, (400, y, 150, 24), "Refresh Diagnostics", "onRefresh:")
+        self._button(content, (560, y, 150, 24), "AI Config Check", "onAiCheck:")
 
         y -= 40
         content.addSubview_(make_label(10, y, 100, 24, "Ping Target:"))
-        self.ping_target = make_textfield(120, y, 200, 24, "8.8.8.8")
-        content.addSubview_(self.ping_target)
-
-        btn_ping = AppKit.NSButton.alloc().initWithFrame_(NSMakeRect(330, y, 100, 24))
-        btn_ping.setTitle_("Ping")
-        btn_ping.setTarget_(self._target)
-        btn_ping.setAction_("onPing:")
-        btn_ping.setBezelStyle_(1)
-        content.addSubview_(btn_ping)
+        self.ping_field = make_textfield(120, y, 200, 24, "8.8.8.8")
+        content.addSubview_(self.ping_field)
+        self._button(content, (330, y, 100, 24), "Ping", "onPing:")
 
         y -= 20
-        # Text view for output
         scroll = AppKit.NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 780, y))
         scroll.setHasVerticalScroller_(True)
         scroll.setAutoresizingMask_(RESIZE_BOTH)
@@ -198,125 +485,194 @@ class RouterWindowController:
                 popup.selectItemAtIndex_(i)
                 break
 
-    def _get_device(self, popup):
-        title = popup.titleOfSelectedItem()
-        if not title: return "en0"
-        return title.split("(")[-1].strip(")")
+    def _form_values(self) -> dict:
+        return {
+            "wan_interface": device_from_title(self.wan_popup.titleOfSelectedItem()),
+            "lan_interface": device_from_title(self.lan_popup.titleOfSelectedItem()),
+            "lan_ip": str(self.lan_ip.stringValue()).strip(),
+            "lan_netmask": str(self.lan_nm.stringValue()).strip(),
+            "dhcp_start": str(self.dhcp_s.stringValue()).strip(),
+            "dhcp_end": str(self.dhcp_e.stringValue()).strip(),
+        }
 
     def append_log(self, text):
+        if self.text_view is None:
+            print(text)  # headless fallback, used by the tests
+            return
+        from Foundation import NSMakeRange
+
         current = self.text_view.string() or ""
         self.text_view.setString_(current + text + "\n")
         self.text_view.scrollRangeToVisible_(NSMakeRange(len(self.text_view.string()), 0))
 
-    def on_save_config(self):
-        self.config["wan_interface"] = self._get_device(self.wan_popup)
-        self.config["lan_interface"] = self._get_device(self.lan_popup)
-        self.config["lan_ip"] = self.lan_ip.stringValue()
-        self.config["lan_netmask"] = self.lan_nm.stringValue()
-        self.config["dhcp_start"] = self.dhcp_s.stringValue()
-        self.config["dhcp_end"] = self.dhcp_e.stringValue()
-        
-        # update router object if exists
-        if self.app.router:
-            self.app.router.wan_if = self.config["wan_interface"]
-            self.app.router.lan_if = self.config["lan_interface"]
-            self.app.router.lan_ip = self.config["lan_ip"]
-            self.app.router.lan_netmask = self.config["lan_netmask"]
-            self.app.router.dhcp_start = self.config["dhcp_start"]
-            self.app.router.dhcp_end = self.config["dhcp_end"]
-            
-        import yaml
-        config_path = os.path.expanduser("~/.config/net-dns-monitor/config.yaml")
-        try:
-            with open(config_path, "r") as f:
-                data = yaml.safe_load(f) or {}
-            data.update(self.config)
-            with open(config_path, "w") as f:
-                yaml.dump(data, f)
-            self.append_log("Configuration saved to config.yaml.")
-        except Exception as e:
-            self.append_log(f"Error saving config: {e}")
+    def _clear_log(self):
+        if self.text_view is not None:
+            self.text_view.setString_("")
 
-    def on_start(self):
+    def _in_background(self, work: Callable[[], Optional[str]]) -> bool:
+        """Run `work` off the main thread and post the text it returns."""
+
+        def runner():
+            try:
+                result = work()
+            except Exception as exc:  # noqa: BLE001 - a worker must not die silently
+                result = f"failed: {type(exc).__name__}"
+            if result:
+                self.post(self.append_log, result)
+
+        try:
+            self.spawn(runner)
+        except RuntimeError as exc:
+            self.append_log(f"failed: could not start a worker ({type(exc).__name__})")
+            return False
+        return True
+
+    # --- actions -----------------------------------------------------------
+
+    def on_save_config(self, values: Optional[Mapping] = None) -> bool:
+        values = dict(values) if values is not None else self._form_values()
+        if not values.get("wan_interface") or not values.get("lan_interface"):
+            self.append_log("not saved: select both a WAN and a LAN interface")
+            return False
+        updates = router_updates(values)
+
+        router = getattr(self.app, "router", None)
+        if router is not None:
+            for key, attr in _ROUTER_ATTRS.items():
+                if key in updates:
+                    setattr(router, attr, updates[key])
+
+        if not self.config_path:
+            self.append_log("not saved: no config file path")
+            return False
+        from netdnsmonitor.settings_window import save_config
+
+        try:
+            result = save_config(self.config_path, updates)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            self.append_log(f"Error saving config: {type(exc).__name__}")
+            return False
+        current = self._config()
+        if isinstance(current, dict):
+            current.update(updates)
+        backup = result.get("backup") if isinstance(result, Mapping) else None
+        suffix = f" (previous file backed up to {backup})" if backup else ""
+        self.append_log(f"Configuration saved to {self.config_path}{suffix}.")
+        return True
+
+    def _router_action(self, label: str, action: Callable[[], object]) -> None:
+        starter = getattr(self.app, "_start_router_worker", None)
+        if callable(starter):
+            self._router_action_on_app(starter, label, action)
+            return
+        if self._busy:
+            self.append_log("(the previous router action is still running)")
+            return
+        self._busy = True
+
+        def work():
+            try:
+                outcome = action()
+            finally:
+                self._busy = False
+            return f"{label}: {outcome}"
+
+        if not self._in_background(work):
+            # The worker's `finally` never ran, so the flag is cleared here or
+            # every later click is refused as "still running".
+            self._busy = False
+
+    def _router_action_on_app(self, starter, label: str, action: Callable[[], object]) -> None:
+        """The menu's Start/Stop use the app's `_router_thread` slot. A second
+        guard here let both run a root script at once, so this window takes the
+        same slot and the app refuses (and says so) while it is taken.
+        """
+
+        def work():
+            try:
+                outcome = action()
+            except Exception as exc:  # noqa: BLE001 - reported, never raised
+                outcome = f"failed: {type(exc).__name__}"
+            # A failed hop to the window must not turn a finished action into
+            # a failure: the app still shows the outcome this returns.
+            with contextlib.suppress(Exception):
+                self.post(self.append_log, f"{label}: {outcome}")
+            return outcome
+
+        if not starter("_router_thread", label, work):
+            self.append_log(f"{label}: not started (the notification says why)")
+
+    def on_start(self, values: Optional[Mapping] = None):
+        values = dict(values) if values is not None else self._form_values()
         self.append_log("Starting router...")
-        if self.app.router:
-            self.on_save_config()
-            self.app.router.start()
-            self.append_log("Router started via osascript.")
-        else:
+        if not values.get("wan_interface") or not values.get("lan_interface"):
+            # on_save_config refuses this too, but returns before it updates the
+            # router, which would then start on interfaces nobody selected here.
+            self.append_log("refused: select both a WAN and a LAN interface")
+            return
+        if values.get("wan_interface") == values.get("lan_interface"):
+            self.append_log("refused: WAN and LAN are the same interface")
+            return
+        router = getattr(self.app, "router", None)
+        if router is None:
             self.append_log("Router module not loaded.")
+            return
+        self.on_save_config(values)
+        self._router_action("Start router", router.start)
 
     def on_stop(self):
         self.append_log("Stopping router...")
-        if self.app.router:
-            self.app.router.stop()
-            self.append_log("Router stopped via osascript.")
+        router = getattr(self.app, "router", None)
+        if router is None:
+            self.append_log("Router module not loaded.")
+            return
+        self._router_action("Stop router", router.stop)
 
-    def on_ping(self):
-        target = self.ping_target.stringValue()
-        self.append_log(f"\\nPinging {target}...")
-        def run():
+    def on_ping(self, text: Optional[str] = None):
+        raw = text if text is not None else str(self.ping_field.stringValue())
+        target = ping_target(raw)
+        if target is None:
+            self.append_log(f"\nrefused: {raw!r} is not an IPv4 address or hostname")
+            return
+        self.append_log(f"\nPinging {target}...")
+        run_fn = self.run_fn
+
+        def work():
             try:
-                res = subprocess.check_output(["ping", "-c", "4", target], text=True, stderr=subprocess.STDOUT)
-                AppKit.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    self.append_log, res, False
+                result = run_fn(
+                    ["ping", "-c", "4", target],
+                    capture_output=True,
+                    text=True,
+                    timeout=PING_TIMEOUT_SECONDS,
                 )
-            except subprocess.CalledProcessError as e:
-                AppKit.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    self.append_log, f"Ping failed:\\n{e.output}", False
-                )
-        threading.Thread(target=run, daemon=True).start()
+            except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+                return f"Ping failed: {type(exc).__name__}"
+            output = (getattr(result, "stdout", "") or "") + (getattr(result, "stderr", "") or "")
+            if getattr(result, "returncode", 1) == 0:
+                return output
+            return f"Ping failed:\n{output}"
 
-    def on_refresh(self):
-        self.text_view.setString_("")
-        self.append_log("--- Diagnostics & Routing Status ---")
-        try:
-            routes = subprocess.check_output(["netstat", "-rn", "-f", "inet"], text=True)
-            self.append_log("\\nRouting Table:\\n" + routes)
-            
-            fwd = subprocess.check_output(["sysctl", "net.inet.ip.forwarding"], text=True).strip()
-            self.append_log("\\n" + fwd)
-            
-            ps = subprocess.check_output(["ps", "aux"], text=True)
-            self.append_log(f"DHCP/bootpd running: {'bootpd' in ps}")
-            
-            if self._get_device(self.wan_popup) == self._get_device(self.lan_popup):
-                self.append_log("\\n!!! OBVIOUS CONFLICT: WAN and LAN are set to the same interface !!!")
-                
-        except Exception as e:
-            self.append_log(f"Error running diagnostics: {e}")
+        self._in_background(work)
 
-    def on_ai_check(self):
-        self.append_log("\\nAnalyzing config with Anthropic AI...")
-        wan = self._get_device(self.wan_popup)
-        lan = self._get_device(self.lan_popup)
-        ip = self.lan_ip.stringValue()
-        nm = self.lan_nm.stringValue()
-        start = self.dhcp_s.stringValue()
-        end = self.dhcp_e.stringValue()
+    def on_refresh(self, values: Optional[Mapping] = None):
+        values = dict(values) if values is not None else self._form_values()
+        self._clear_log()
+        run_fn = self.run_fn
+        wan, lan = values.get("wan_interface"), values.get("lan_interface")
+        self._in_background(lambda: "\n".join(collect_diagnostics(run_fn, wan, lan)))
 
-        def run():
+    def on_ai_check(self, values: Optional[Mapping] = None):
+        values = dict(values) if values is not None else self._form_values()
+        self.append_log("\nAnalyzing config with Anthropic AI...")
+        sensitive = self._config().get("sensitive_strings", [])
+        run_fn, factory, getter = self.run_fn, self.client_factory, self.api_key_getter
+
+        def work():
+            # On the worker: a Keychain read can block on an access prompt.
             try:
-                routes = subprocess.check_output(["netstat", "-rn", "-f", "inet"], text=True)
-                fwd = subprocess.check_output(["sysctl", "net.inet.ip.forwarding"], text=True).strip()
-                prompt = (
-                    f"Analyze this macOS router/Internet Sharing config:\\n"
-                    f"WAN: {wan}\\nLAN: {lan}\\nLAN IP: {ip}\\nNetmask: {nm}\\nDHCP: {start}-{end}\\n"
-                    f"\\nRouting table:\\n{routes}\\n\\nIP Forwarding: {fwd}\\n"
-                    f"Is this config logically sound? Provide brief feedback and subnet/route suggestions."
-                )
-                client = anthropic.Anthropic()
-                res = client.messages.create(
-                    model="claude-3-haiku-20240307",
-                    max_tokens=1000,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                txt = res.content[0].text
-                AppKit.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    self.append_log, "\\n[AI Analysis]\\n" + txt, False
-                )
-            except Exception as e:
-                AppKit.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    self.append_log, f"\\nAI Check Failed: {e}", False
-                )
-        threading.Thread(target=run, daemon=True).start()
+                api_key = getter()
+            except Exception as exc:  # noqa: BLE001 - class name only, never the message
+                return f"skipped: could not read ANTHROPIC_API_KEY ({type(exc).__name__})"
+            return ai_config_check(values, run_fn, sensitive, api_key, client_factory=factory)
+
+        self._in_background(work)

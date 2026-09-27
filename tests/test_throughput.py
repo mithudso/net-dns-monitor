@@ -3,26 +3,59 @@ en0 measured 3.8 Mbps against Cloudflare's endpoint, and every inactive
 interface returned None rather than 0.0.
 """
 
+import errno
+import socket
 import time
+
+import pytest
 
 from netdnsmonitor.failover_policy import Candidate, best_candidate, rank_candidates
 from netdnsmonitor.throughput import (
+    default_measure,
     is_success_status,
     make_throughput_meter,
     mbps,
     measure_all,
+    resolve_addresses,
 )
+
+V6 = "2606:4700::6810:84e5"
+V4 = "104.16.132.229"
+
+
+def no_lookup(host, timeout):
+    """The meter resolves before it measures; a real lookup would leave the
+    machine, so every meter here gets this instead.
+    """
+    return [V4]
+
 
 # --- meter ------------------------------------------------------------------
 
 
+def resolved(host, timeout):
+    return "192.0.2.1"
+
+
 def test_meter_returns_the_measurement():
-    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2)
+    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2, resolve_fn=no_lookup)
     assert meter("en0") == 94.2
 
 
+def test_meter_does_not_touch_the_resolver(monkeypatch):
+    """The lookup enters through `resolve_fn`; with a fake injected, the suite
+    must never reach the real resolver. Guarded at the socket boundary because
+    that is the only place an accidental real lookup would show.
+    """
+    calls = []
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: calls.append(a) or [])
+    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 1.0, resolve_fn=resolved)
+    assert meter("en0") == 1.0
+    assert calls == []
+
+
 def test_no_device_is_not_measured():
-    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2)
+    meter = make_throughput_meter(measure_fn=lambda dev, **kw: 94.2, resolve_fn=no_lookup)
     assert meter(None) is None
     assert meter("") is None
 
@@ -30,7 +63,9 @@ def test_no_device_is_not_measured():
 def test_an_empty_host_disables_measurement_entirely():
     """Ranking then falls back to reachability rather than inventing numbers."""
     calls = []
-    meter = make_throughput_meter(host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0)
+    meter = make_throughput_meter(
+        host="", measure_fn=lambda dev, **kw: calls.append(dev) or 1.0, resolve_fn=resolved
+    )
     assert meter("en0") is None
     assert calls == []
 
@@ -39,7 +74,7 @@ def test_a_raising_measurement_is_not_measured_rather_than_an_error():
     def boom(dev, **kw):
         raise OSError("interface went away mid-benchmark")
 
-    assert make_throughput_meter(measure_fn=boom)("en0") is None
+    assert make_throughput_meter(measure_fn=boom, resolve_fn=no_lookup)("en0") is None
 
 
 def test_measurement_parameters_reach_the_measure_function():
@@ -51,18 +86,302 @@ def test_measurement_parameters_reach_the_measure_function():
         return 1.0
 
     meter = make_throughput_meter(
-        host="h", path="/p", port=8443, timeout=9.0, max_bytes=5, measure_fn=capture
+        host="h",
+        path="/p",
+        port=8443,
+        timeout=9.0,
+        max_bytes=5,
+        measure_fn=capture,
+        resolve_fn=no_lookup,
     )
     meter("en3")
-    seen.pop("address", None)  # resolved once by the meter, not a caller concern
+    assert seen.pop("address") == [V4]
+    # Whatever the lookup cost comes off the top, so the meter sees the rest.
+    assert seen.pop("timeout") == pytest.approx(9.0, abs=0.5)
     assert seen == {
         "device": "en3",
         "host": "h",
         "path": "/p",
         "port": 8443,
-        "timeout": 9.0,
         "max_bytes": 5,
     }
+
+
+def test_meter_resolves_once_and_shares_every_family_across_interfaces():
+    """The lookup is the same for every interface, so it is paid once. What is
+    cached is one literal per family, not just the first answer: a v4-only
+    backup handed only the v6 literal could never connect.
+    """
+    lookups = []
+    seen = []
+
+    def resolve(host, timeout):
+        lookups.append((host, timeout))
+        return [V6, V4]
+
+    def capture(dev, **kw):
+        seen.append(kw["address"])
+        return 1.0
+
+    meter = make_throughput_meter(host="h", timeout=4.0, measure_fn=capture, resolve_fn=resolve)
+    meter("en0")
+    meter("en12")
+    assert lookups == [("h", 4.0)]
+    assert seen == [[V6, V4], [V6, V4]]
+
+
+def test_a_failed_lookup_lets_the_measurement_retry_inside_its_own_budget():
+    """An empty lookup must not be handed on as "no addresses exist"; passing
+    None lets the measurement resolve again within its own deadline.
+    """
+    seen = []
+    meter = make_throughput_meter(
+        measure_fn=lambda dev, **kw: seen.append(kw["address"]) or 1.0,
+        resolve_fn=lambda host, timeout: [],
+    )
+    meter("en0")
+    assert seen == [None]
+
+
+# --- resolution -------------------------------------------------------------
+
+
+def test_resolution_keeps_one_literal_per_family_in_resolver_order():
+    def fake_getaddrinfo(host, port, proto=0):
+        return [
+            (socket.AF_INET6, socket.SOCK_STREAM, proto, "", (V6, 0, 0, 0)),
+            (socket.AF_INET6, socket.SOCK_STREAM, proto, "", ("2606:4700::1", 0, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, proto, "", (V4, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, proto, "", ("104.16.133.229", 0)),
+        ]
+
+    assert resolve_addresses("h", 1.0, getaddrinfo_fn=fake_getaddrinfo) == [V6, V4]
+
+
+def test_a_failed_resolution_is_empty_not_an_error():
+    def failing(host, port, proto=0):
+        raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided")
+
+    assert resolve_addresses("h", 1.0, getaddrinfo_fn=failing) == []
+
+
+# --- default_measure through its socket seams --------------------------------
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class FakeSocket:
+    def __init__(self, family, clock, connect_cost=0.0, refuse=False):
+        self.family = family
+        self.clock = clock
+        self.connect_cost = connect_cost
+        self.refuse = refuse
+        self.timeouts = []
+        self.connected_to = None
+        self.closed = False
+
+    def setsockopt(self, level, option, value):
+        pass
+
+    def settimeout(self, value):
+        self.timeouts.append(value)
+
+    def connect(self, address):
+        self.clock.now += self.connect_cost
+        if self.refuse:
+            raise OSError(errno.EHOSTUNREACH, "No route to host")
+        self.connected_to = address
+
+    def close(self):
+        self.closed = True
+
+
+class FakeStream:
+    """A TLS stream: a status line, then `chunk` forever (or `script` in order),
+    each read costing `per_recv` seconds of the fake clock.
+    """
+
+    def __init__(self, clock, per_recv=0.0, chunk=b"x" * 1000, script=None):
+        self.clock = clock
+        self.per_recv = per_recv
+        self.chunk = chunk
+        self.script = list(script) if script is not None else None
+        self.first = True
+        self.timeouts = []
+        self.recvs = 0
+        self.sent = b""
+
+    def sendall(self, data):
+        self.sent += data
+
+    def settimeout(self, value):
+        self.timeouts.append((self.clock.now, value))
+
+    def recv(self, size):
+        self.recvs += 1
+        self.clock.now += self.per_recv
+        if self.first:
+            self.first = False
+            return b"HTTP/1.1 200 OK\r\n\r\n"
+        if self.script is None:
+            return self.chunk
+        if not self.script:
+            return b""
+        item = self.script.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    def close(self):
+        pass
+
+
+def seams(clock, stream, refuse_families=(), connect_cost=0.0):
+    sockets = []
+    wrapped = []
+
+    def socket_factory(family, kind):
+        sock = FakeSocket(
+            family, clock, connect_cost=connect_cost, refuse=family in refuse_families
+        )
+        sockets.append(sock)
+        return sock
+
+    def tls_wrap(sock, server_hostname):
+        wrapped.append((sock, server_hostname))
+        return stream
+
+    kwargs = {
+        "device_index_fn": lambda device: 12,
+        "socket_factory": socket_factory,
+        "tls_wrap": tls_wrap,
+        "clock": clock,
+    }
+    return kwargs, sockets, wrapped
+
+
+def test_a_backup_without_an_ipv6_route_still_measures_over_ipv4():
+    """The shared lookup put IPv6 first. A v4-only backup failed that connect,
+    read as unmeasurable, and ranked behind a slower link on no evidence.
+    """
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.1, script=[b"x" * 125_000])
+    kwargs, sockets, wrapped = seams(clock, stream, refuse_families=(socket.AF_INET6,))
+
+    result = default_measure("en12", host="speed.example", address=[V6, V4], **kwargs)
+
+    assert result is not None
+    assert [s.family for s in sockets] == [socket.AF_INET6, socket.AF_INET]
+    assert sockets[0].closed, "the refused socket must not leak"
+    assert sockets[1].connected_to == (V4, 443)
+    # Connect to the literal, but present the hostname for SNI and validation.
+    assert wrapped == [(sockets[1], "speed.example")]
+
+
+def test_a_blackholing_ipv6_literal_leaves_budget_for_ipv4():
+    """A v6 route that blackholes rather than refusing stalls connect for its
+    whole armed timeout. Armed with the full budget, it spent all 5s, IPv4 was
+    never tried, and a working backup read as unmeasurable -- ranked behind a
+    slower link that happened to be measured.
+    """
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.1, script=[b"x" * 125_000])
+    kwargs, sockets, _ = seams(clock, stream)
+
+    class BlackholeSocket(FakeSocket):
+        def connect(self, address):
+            self.clock.now += self.timeouts[-1]
+            raise TimeoutError("timed out")
+
+    def socket_factory(family, kind):
+        cls = BlackholeSocket if family == socket.AF_INET6 else FakeSocket
+        sock = cls(family, clock)
+        sockets.append(sock)
+        return sock
+
+    kwargs["socket_factory"] = socket_factory
+    result = default_measure("en12", address=[V6, V4], timeout=5.0, **kwargs)
+
+    assert result is not None
+    assert [s.family for s in sockets] == [socket.AF_INET6, socket.AF_INET]
+    assert sockets[0].timeouts[0] <= 2.5
+    assert sockets[1].connected_to == (V4, 443)
+
+
+def test_no_literal_that_connects_is_unmeasured_not_zero():
+    clock = FakeClock()
+    kwargs, sockets, _ = seams(
+        clock, FakeStream(clock), refuse_families=(socket.AF_INET6, socket.AF_INET)
+    )
+    assert default_measure("en12", address=[V6, V4], **kwargs) is None
+    assert len(sockets) == 2
+    assert all(s.closed for s in sockets)
+
+
+def test_a_single_literal_is_still_accepted():
+    """Callers that pass one pre-resolved string keep working."""
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.1, script=[b"x" * 1000])
+    kwargs, sockets, _ = seams(clock, stream)
+    assert default_measure("en12", address=V4, **kwargs) is not None
+    assert sockets[0].connected_to == (V4, 443)
+
+
+def test_connect_and_tls_are_charged_to_the_one_budget():
+    """The transfer deadline used to start after connect and TLS, and a socket
+    timeout applies per operation, so each phase could spend the whole budget
+    in turn. Here connect burns 2s of a 3s budget, which leaves the transfer 1s.
+    """
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.25)
+    kwargs, sockets, _ = seams(clock, stream, connect_cost=2.0)
+
+    result = default_measure("en12", address=[V4], timeout=3.0, max_bytes=10**12, **kwargs)
+
+    assert result is not None
+    assert clock.now <= 3.0 + 0.25, "no read may start after the budget is spent"
+    assert stream.recvs <= 4
+    # Every read is armed with what is left of the budget, never the full timeout.
+    assert stream.timeouts
+    for armed_at, value in stream.timeouts:
+        assert value <= max(0.05, 3.0 - armed_at) + 1e-9
+    assert sockets[0].timeouts == [3.0, 1.0]
+
+
+def test_a_read_cut_off_by_the_budget_still_reports_what_arrived():
+    """With each read armed to the remaining budget, a stall at the very end
+    raises a timeout. Bytes already received are still a measurement of this
+    link; discarding them would report a slow link as unmeasurable.
+    """
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.5, script=[b"x" * 125_000, TimeoutError("timed out")])
+    kwargs, _, _ = seams(clock, stream)
+    assert default_measure("en12", address=[V4], timeout=3.0, **kwargs) is not None
+
+
+def test_a_timeout_before_the_status_line_is_unmeasured():
+    clock = FakeClock()
+
+    class SilentStream(FakeStream):
+        def recv(self, size):
+            raise TimeoutError("timed out")
+
+    kwargs, _, _ = seams(clock, SilentStream(clock))
+    assert default_measure("en12", address=[V4], **kwargs) is None
+
+
+def test_a_missing_interface_is_unmeasured_without_opening_a_socket():
+    clock = FakeClock()
+    kwargs, sockets, _ = seams(clock, FakeStream(clock))
+    kwargs["device_index_fn"] = lambda device: None
+    assert default_measure("en99", address=[V4], **kwargs) is None
+    assert sockets == []
 
 
 # --- ranking ----------------------------------------------------------------
@@ -191,7 +510,7 @@ def test_measure_all_shares_one_deadline_across_interfaces():
         return 1.0
 
     started = time.monotonic()
-    results = measure_all(["a", "b", "c", "d"], slow, timeout=2.0)
+    results = measure_all(["a", "b", "c", "d"], slow, timeout=2.0, grace=0)
     elapsed = time.monotonic() - started
     assert set(results) == {"a", "b", "c", "d"}
     assert elapsed < 1.0, "measurements must run concurrently, not one after another"
@@ -202,9 +521,11 @@ def test_measure_all_reports_a_slow_interface_as_unmeasured_not_a_wait():
         time.sleep(30)
         return 1.0
 
-    results = measure_all(["stuck"], never, timeout=0.2)
+    started = time.monotonic()
+    results = measure_all(["stuck"], never, timeout=0.2, grace=0)
     assert results == {"stuck": None}
+    assert time.monotonic() - started < 1.0, "grace=0 must not add the default 1s"
 
 
 def test_measure_all_with_no_devices_is_empty():
-    assert measure_all([], lambda d: 1.0, timeout=1.0) == {}
+    assert measure_all([], lambda d: 1.0, timeout=1.0, grace=0) == {}

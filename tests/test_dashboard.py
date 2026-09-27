@@ -9,6 +9,7 @@ would flash a window across the screen on every test run.
 
 from netdnsmonitor.dashboard import (
     ALL_ACTIONS,
+    EDIT_MENU_ITEMS,
     LEFT_WIDTH,
     LOG_ACTIONS,
     LOG_WIDTH,
@@ -19,6 +20,7 @@ from netdnsmonitor.dashboard import (
     WINDOW_WIDTH,
     DashboardWindow,
     dashboard_sections,
+    install_main_menu,
     render_dashboard_text,
 )
 
@@ -53,6 +55,21 @@ def test_shows_the_current_reading(tmp_path):
     assert rows["Packet loss"] == "0%"
     assert "1.2M" in rows["Download"]
     assert "300K" in rows["Upload"]
+
+
+def test_sub_kilobit_throughput_is_shown_in_bits_rather_than_as_zero():
+    """format_rate rounds under 1K to "0" for the menu bar's sake. Here "0bps"
+    for a 500bps trickle claims nothing is moving when something is.
+    """
+    rows = flat(
+        dashboard_sections(
+            ping_stats={**HEALTHY, "down_bps": 500, "up_bps": 0},
+            flap_state="healthy",
+            config=CONFIG,
+        )
+    )
+    assert rows["Download"] == "500bps"
+    assert rows["Upload"] == "0bps"
 
 
 def test_a_down_network_says_no_reply_rather_than_a_stale_number():
@@ -96,6 +113,25 @@ def test_status_reports_healthy():
     assert rows["Status"] == "healthy"
 
 
+def test_status_does_not_claim_healthy_before_the_first_ping():
+    """`ping_stats` starts as NO_PING_YET, whose `down` is False -- so before the
+    first reply, and for as long as the ping worker keeps failing to run at all,
+    the fall-through reads as a clean bill of health.
+    """
+    rows = flat(dashboard_sections(ping_stats=NO_DATA, flap_state="healthy", config=CONFIG))
+    assert rows["Round trip"] == "not measured yet"
+    assert rows["Status"] != "healthy"
+    assert "probed" in rows["Status"]
+
+
+def test_an_absent_re_alert_setting_renders_as_unknown_not_as_off():
+    """A missing key is not the same as a zero: the sibling rows say '?' for the
+    former, and "one alert per outage" is a claim about configured behaviour.
+    """
+    rows = flat(dashboard_sections(ping_stats=HEALTHY, flap_state="healthy", config={}))
+    assert rows["Re-alert while down"] == "?"
+
+
 def test_resolution_batch_summarised_when_one_has_run():
     rows = flat(
         dashboard_sections(
@@ -136,8 +172,9 @@ def test_settings_in_force_are_shown_so_behaviour_is_explicable():
 
 
 def test_an_empty_domains_list_is_called_out_not_left_blank():
-    """An empty `domains` list is the documented foot-gun that latches a
-    permanent false incident, so the window must not render it as whitespace.
+    """With no domains to show, the row says so rather than rendering
+    whitespace. (The app passes the probed list, which includes the control
+    domain; see the next test.)
     """
     rows = flat(
         dashboard_sections(
@@ -181,6 +218,95 @@ def test_rendered_text_labels_every_section():
     assert "NETWORK RIGHT NOW" in text
     assert "MONITOR" in text
     assert "SETTINGS IN FORCE" in text
+
+
+# --- peers and the verdict -------------------------------------------------
+
+
+VERDICT = {
+    "verdict": "local_machine",
+    "summary": "This machine",
+    "confidence": "high",
+    "reason": "A peer reached the internet while this machine could not.",
+    "evidence": {
+        "peers_known": 2,
+        "peers_answered": 1,
+        "peer_external_reachable": True,
+        "peer_dns_ok": None,
+    },
+}
+
+
+def titles(sections):
+    return [title for title, _ in sections]
+
+
+def test_the_verdict_section_comes_first_when_something_is_broken():
+    sections = dashboard_sections(
+        ping_stats=DOWN, flap_state="incident", config=CONFIG, fault_verdict=VERDICT
+    )
+    assert titles(sections)[0] == "Where the problem is"
+    rows = flat(sections)
+    assert rows["Cause"] == "This machine"
+    assert rows["Peers consulted"] == "1 answered of 2 known"
+    assert rows["Peer can reach internet"] == "yes"
+    assert "Peer can resolve DNS" not in rows
+
+
+def test_peers_section_sits_after_monitor_and_before_settings():
+    sections = dashboard_sections(
+        ping_stats=HEALTHY, flap_state="healthy", config=CONFIG, peers={"current": []}
+    )
+    order = titles(sections)
+    assert order.index("Monitor") < order.index("Other monitors on this network")
+    assert order.index("Other monitors on this network") < order.index("Settings in force")
+
+
+def test_permissions_section_follows_settings_in_force():
+    sections = dashboard_sections(
+        ping_stats=HEALTHY,
+        flap_state="healthy",
+        config=CONFIG,
+        permissions=[("Elevated repairs", "not granted")],
+    )
+    order = titles(sections)
+    assert order.index("Permissions") == order.index("Settings in force") + 1
+
+
+def test_a_peer_that_has_gone_quiet_is_still_listed():
+    """ "Was here yesterday and isn't answering now" is the interesting fact, and
+    it is invisible if only the live bucket is shown.
+    """
+    peers = {
+        "current": [],
+        "recent": [],
+        "other": [
+            {
+                "id": "peer-x",
+                "host": "old-mac",
+                "address": "192.168.1.9",
+                "status": "healthy",
+                "missed_healthchecks": 3,
+            }
+        ],
+    }
+    rows = flat(
+        dashboard_sections(ping_stats=HEALTHY, flap_state="healthy", config=CONFIG, peers=peers)
+    )
+    assert rows["[other]"] == "1 host(s)"
+    assert "3 missed heartbeat(s)" in rows["  old-mac"]
+
+
+def test_a_long_peer_hostname_does_not_push_every_value_off_the_window():
+    """Label width is global, and the peer's hostname is network-supplied: one
+    253-character name would shove every value in the window 250 columns right.
+    """
+    peers = {"current": [{"id": "p", "host": "h" * 253, "address": "10.0.0.2", "status": "ok"}]}
+    text = render_dashboard_text(
+        dashboard_sections(ping_stats=HEALTHY, flap_state="healthy", config=CONFIG, peers=peers)
+    )
+    ping_line = next(line for line in text.splitlines() if "Ping target" in line)
+    assert len(ping_line) < 80
 
 
 # --- the window ------------------------------------------------------------
@@ -249,6 +375,80 @@ def test_clicking_a_log_control_dispatches_its_action_id():
     window = DashboardWindow(on_action=seen.append)
     window._handle(window.log_control_buttons["log_refresh"])
     assert seen == ["log_refresh"]
+
+
+SECRET = "https://hooks.slack.com/services/T000/B000/not-a-real-token"
+
+
+def _raise_with_a_secret(action_id):
+    # urllib's exception text can embed the full request URL, and the Slack
+    # webhook URL is a credential -- so the message is the part that must not leak.
+    raise ConnectionError(f"POST {SECRET} failed")
+
+
+def test_an_action_that_raises_is_reported_in_the_pane_not_raised_into_appkit(capsys):
+    """Driven through the real ObjC target: an exception escaping `invoke_`
+    unwinds through PyObjC into AppKit, and the click looks like it did nothing.
+    """
+    window = DashboardWindow(on_action=_raise_with_a_secret)
+    window._target.invoke_(window.buttons[0])
+    body = str(window.output_view.string())
+    assert "ping_now raised ConnectionError" in body
+    assert SECRET not in body
+    err = capsys.readouterr().err
+    assert "ConnectionError" in err
+    assert SECRET not in err
+
+
+def test_a_menu_action_that_raises_does_not_escape_into_appkit(capsys):
+    import AppKit
+
+    target = install_main_menu(_raise_with_a_secret)
+    item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("x", "invoke:", "")
+    item.setIdentifier_("open_dashboard")
+    target.invoke_(item)
+    err = capsys.readouterr().err
+    assert "open_dashboard raised ConnectionError" in err
+    assert SECRET not in err
+
+
+def test_the_edit_menu_table_carries_the_standard_editing_commands():
+    """AppKit finds Cmd-V by walking the main menu for an item whose key
+    equivalent matches. With no Edit menu there is no such item, so paste did
+    nothing in any text field -- including the store build's masked credentials
+    dialog, the only place an API key can be entered there.
+    """
+    entries = {entry[1]: entry[2] for entry in EDIT_MENU_ITEMS if entry is not None}
+    assert entries == {
+        "undo:": "z",
+        "redo:": "Z",
+        "cut:": "x",
+        "copy:": "c",
+        "paste:": "v",
+        "selectAll:": "a",
+    }
+
+
+def test_the_edit_menu_is_installed_with_nil_targets():
+    """A nil target is what sends the action up the responder chain to the
+    focused field. A target set to the dispatch object would swallow paste:.
+    Driving the real keystroke needs a window server, so Cmd-V in Credentials >
+    Set Anthropic API key stays a manual check.
+    """
+    import AppKit
+
+    install_main_menu(lambda action_id: None)
+    main_menu = AppKit.NSApplication.sharedApplication().mainMenu()
+    edit_menu = main_menu.itemAtIndex_(1).submenu()
+    assert edit_menu.title() == "Edit"
+
+    items = [edit_menu.itemAtIndex_(i) for i in range(edit_menu.numberOfItems())]
+    by_action = {str(item.action()): item for item in items if not item.isSeparatorItem()}
+    assert set(by_action) == {"undo:", "redo:", "cut:", "copy:", "paste:", "selectAll:"}
+    assert by_action["paste:"].keyEquivalent() == "v"
+    assert by_action["selectAll:"].keyEquivalent() == "a"
+    assert all(item.target() is None for item in by_action.values())
+    assert any(item.isSeparatorItem() for item in items)
 
 
 def test_the_search_field_reports_what_was_typed():
@@ -419,3 +619,37 @@ def test_output_pane_accumulates_rather_than_replacing():
     assert "first" in body
     assert "second" in body
     assert body.index("first") < body.index("second")
+
+
+def test_the_domains_row_shows_what_the_prober_resolves_when_given():
+    rows = flat(
+        dashboard_sections(
+            ping_stats=HEALTHY,
+            flap_state="healthy",
+            config={**CONFIG, "domains": []},
+            dns_domains=["api.anthropic.com"],
+        )
+    )
+    assert rows["Domains checked for DNS"] == "api.anthropic.com"
+
+
+def test_the_results_pane_keeps_only_the_newest_text():
+    from netdnsmonitor.dashboard import capped_output
+
+    assert capped_output("abc", "def", limit=4) == "cdef"
+    assert capped_output("", "short", limit=100) == "short"
+
+
+def test_the_output_pane_keeps_only_the_tail_once_it_is_full():
+    """The pane is fed automatically by the log watcher for as long as the app
+    runs, so without a cap it grows -- and each append re-reads the whole thing
+    across the ObjC bridge.
+    """
+    from netdnsmonitor.dashboard import OUTPUT_MAX_CHARS
+
+    window = DashboardWindow(on_action=lambda action: None)
+    window.append_output("x" * OUTPUT_MAX_CHARS)
+    window.append_output("the end\n")
+    body = str(window.output_view.string())
+    assert len(body) <= OUTPUT_MAX_CHARS
+    assert body.endswith("the end\n")

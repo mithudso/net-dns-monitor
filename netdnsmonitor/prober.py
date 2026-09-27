@@ -25,30 +25,23 @@ def default_connect(host: str, port: int, timeout: float) -> bool:
 
 
 def default_resolve(domain: str, timeout: float) -> bool:
-    """Resolve with a deadline that actually holds.
+    """One blocking lookup. The deadline is enforced by `resolve_all`'s join,
+    not here.
 
-    `socket.setdefaulttimeout()` looks like it bounds this but does not: it
-    sets the default for new socket *objects*, while `getaddrinfo` is a
+    `socket.setdefaulttimeout()` looks like it would bound this but does not:
+    it sets the default for new socket *objects*, while `getaddrinfo` is a
     module-level C call that never consults it. With an unreachable resolver
-    the lookup then blocks for the OS resolver's own multi-second retry
-    budget, once per domain, on the rumps UI thread -- freezing the menu bar
-    during exactly the outage being reported. So the lookup runs on a worker
-    thread and a lookup that outlives the deadline is reported as a failure;
-    the thread is left to finish and die on its own (it holds no lock).
+    the lookup blocks for the OS resolver's own multi-second retry budget, so
+    it must never run on the rumps UI thread. `resolve_all` already puts every
+    domain on its own worker and joins them against one shared deadline; a
+    second thread-and-join in here doubled the thread count per tick (42 at a
+    full learned list) and bounded nothing the outer join did not.
     """
-    result: list[bool] = []
-
-    def lookup() -> None:
-        try:
-            socket.getaddrinfo(domain, None)
-            result.append(True)
-        except OSError:
-            result.append(False)
-
-    worker = threading.Thread(target=lookup, daemon=True)
-    worker.start()
-    worker.join(timeout)
-    return bool(result) and result[0]
+    try:
+        socket.getaddrinfo(domain, None)
+        return True
+    except OSError:
+        return False
 
 
 def resolve_all(
@@ -80,6 +73,56 @@ def resolve_all(
     return {domain: results.get(domain, False) for domain in domains}
 
 
+class _ConnectRace:
+    """Connect to every target at once and settle on the first that answers.
+
+    Sequential connects made the block additive, the same trap resolve_all
+    exists to avoid: two blackholing external targets at a 2s timeout, then
+    DNS, froze the rumps main thread for 6s on every failing tick. Each connect
+    runs on its own daemon thread bounded by `timeout`, so a worker still
+    running after `result()` gives up exits on its own shortly after.
+    """
+
+    def __init__(self, targets: list[tuple[str, int]], timeout: float, connect_fn: ConnectFn):
+        self._cond = threading.Condition()
+        self._pending = len(targets)
+        self._answered = False
+        self._error: Optional[BaseException] = None
+        for host, port in targets:
+            threading.Thread(
+                target=self._attempt, args=(connect_fn, host, port, timeout), daemon=True
+            ).start()
+
+    def _attempt(self, connect_fn: ConnectFn, host: str, port: int, timeout: float) -> None:
+        answered, error = False, None
+        try:
+            answered = bool(connect_fn(host, port, timeout))
+        except Exception as exc:  # noqa: BLE001 - carried to the caller's thread by result()
+            error = exc
+        with self._cond:
+            self._pending -= 1
+            self._answered = self._answered or answered
+            if error is not None and self._error is None:
+                self._error = error
+            self._cond.notify_all()
+
+    def result(self, deadline: float) -> bool:
+        with self._cond:
+            while not self._answered and self._pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._cond.wait(remaining)
+            if self._answered:
+                return True
+            # Swallowed on the worker thread, a broken connect_fn would surface
+            # as "unreachable", which classify() turns into a confident NETWORK
+            # diagnosis. Re-raised here, it reaches the tick guard instead.
+            if self._error is not None:
+                raise self._error
+            return False
+
+
 def make_prober(
     external_targets: list[tuple[str, int]],
     internal_targets: list[tuple[str, int]],
@@ -92,23 +135,26 @@ def make_prober(
     callable form exists so an auto-learned domain list (domain_learner) can
     grow between ticks without rebuilding the prober or the state machine.
     """
+    # A 0 timeout fails every connect instantly, so every tick would report a
+    # NETWORK incident nobody measured; a negative one raises ValueError from
+    # socket code that only catches OSError. `not >` also refuses NaN.
+    if not timeout > 0:
+        raise ValueError("timeout must be > 0")
 
     def prober() -> dict:
         domain_list = list(domains() if callable(domains) else domains)
-        external_reachable: Optional[bool] = (
-            any(connect_fn(host, port, timeout) for host, port in external_targets)
-            if external_targets
-            else None
-        )
-        internal_reachable: Optional[bool] = (
-            any(connect_fn(host, port, timeout) for host, port in internal_targets)
-            if internal_targets
-            else None
-        )
+        # The connects run while resolve_all blocks below, and both are held
+        # to the same deadline, so the probe costs about one timeout in total
+        # rather than one per phase.
+        deadline = time.monotonic() + timeout
+        external = _ConnectRace(external_targets, timeout, connect_fn) if external_targets else None
+        internal = _ConnectRace(internal_targets, timeout, connect_fn) if internal_targets else None
         # Per-domain results, not just the aggregate: whoever prunes a dead
         # learned domain needs to know *which* name failed while others
         # resolved (see domain_learner.prune_dead_domains).
         domain_results = resolve_all(domain_list, timeout, resolve_fn)
+        external_reachable: Optional[bool] = external.result(deadline) if external else None
+        internal_reachable: Optional[bool] = internal.result(deadline) if internal else None
         dns_ok: Optional[bool] = all(domain_results.values()) if domain_results else None
         return {
             "external_reachable": external_reachable,

@@ -1,0 +1,16 @@
+# Normalise text to LF in the repository; shell scripts and plists break with CRLF.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.py text eol=lf
+*.plist text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+
+# Binary assets: never diff or normalise.
+*.icns binary
+*.png binary
+*.jpg binary
+*.pkg binary
+*.provisionprofile binary
+*.p8 binary

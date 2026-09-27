@@ -58,3 +58,72 @@ def test_render_markdown_includes_key_sections():
     assert "## Ladder Steps" in md
     assert "## Log Excerpts" in md
     assert "flush_dns_cache" in md
+
+
+def test_summary_does_not_claim_a_ladder_ran_when_none_did():
+    """UNCLASSIFIED has no ladder (ladder_for returns []), so "after the offline
+    troubleshooting ladder ran" described steps that never happened.
+    """
+    report = build_report(
+        **_base_kwargs(
+            classification=Classification.UNCLASSIFIED,
+            ladder_results=[],
+            repair_outcome=None,
+        )
+    )
+    assert "ladder ran" not in report["summary"]
+    assert "no offline troubleshooting ladder steps ran" in report["summary"]
+
+
+def test_summary_still_says_the_ladder_ran_when_steps_ran():
+    report = build_report(**_base_kwargs())
+    assert "after the offline troubleshooting ladder ran" in report["summary"]
+
+
+def test_render_markdown_gives_each_ladder_step_a_heading_reason_and_fenced_outcome():
+    """`- {step}` printed the step dict's repr, which collapses a multi-line
+    `scutil --dns` or `netstat -rn` outcome into one line of `\\n` escapes -- in
+    the document whose purpose is to let IT read that output.
+    """
+    report = build_report(
+        **_base_kwargs(
+            ladder_results=[
+                {
+                    "name": "check_default_route",
+                    "kind": "check",
+                    "reason": "A missing default route looks like an outage.",
+                    "outcome": "Destination  Gateway\ndefault      192.0.2.1",
+                }
+            ]
+        )
+    )
+    md = render_markdown(report)
+    assert "### check_default_route (check)" in md
+    assert "_A missing default route looks like an outage._" in md
+    assert "Destination  Gateway\ndefault      192.0.2.1" in md
+    assert "{'name'" not in md
+    assert "\\n" not in md
+
+
+def test_render_markdown_fences_probe_results_and_escalation():
+    report = build_report(
+        **_base_kwargs(
+            escalation={"model": "claude-haiku-4-5-20251001", "analysis": "line one\nline two"}
+        )
+    )
+    md = render_markdown(report)
+    probe_section = md[md.index("## Probe Results") : md.index("## Ladder Steps")]
+    assert "```" in probe_section
+    assert "external_reachable" in probe_section
+    escalation_section = md[md.index("## Escalation") :]
+    assert "line one\nline two" in escalation_section
+    assert "{'model'" not in escalation_section
+
+
+def test_render_markdown_survives_a_step_without_kind_or_reason():
+    """Older ladder_results entries, and the hand-built ones in tests, carry only
+    name and outcome.
+    """
+    md = render_markdown(build_report(**_base_kwargs()))
+    assert "### flush_dns_cache" in md
+    assert "ok" in md

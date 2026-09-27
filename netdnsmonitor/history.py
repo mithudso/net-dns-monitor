@@ -18,10 +18,13 @@ straight line drawn across it as though nothing happened.
 """
 
 import json
+import math
 import os
 from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, Optional
+
+from netdnsmonitor.report_storage import _atomic_write
 
 # 720 samples at the default 5s cadence is the last hour.
 DEFAULT_MAX_SAMPLES = 720
@@ -40,10 +43,12 @@ class SampleHistory:
         max_samples: int = DEFAULT_MAX_SAMPLES,
         clock: Callable[[], datetime] = _utc_now,
         compact_at: Optional[int] = None,
+        writer: Callable[[str, str], None] = _atomic_write,
     ):
         self.path = path
         self.max_samples = max(1, int(max_samples or 1))
         self.clock = clock
+        self._write = writer
         # Compact at twice the window by default: the file never holds more than
         # two windows' worth, and a compaction happens once per window rather
         # than once per sample.
@@ -114,12 +119,12 @@ class SampleHistory:
             pass
 
     def _compact(self) -> None:
-        from netdnsmonitor.report_storage import _atomic_write
-
         try:
-            _atomic_write(self.path, "".join(json.dumps(s) + "\n" for s in self.samples))
+            self._write(self.path, "".join(json.dumps(s) + "\n" for s in self.samples))
             self._lines_on_disk = len(self.samples)
         except OSError:
+            # The append already succeeded and the write is atomic, so a failed
+            # compaction costs nothing but disk; the next append retries it.
             pass
 
     def load(self) -> int:
@@ -132,7 +137,10 @@ class SampleHistory:
             return 0
         loaded = 0
         try:
-            with open(self.path, encoding="utf-8") as f:
+            # errors="replace": UnicodeDecodeError is a ValueError, not an
+            # OSError, and this runs inside NetDnsMonitorApp.__init__ -- one
+            # undecodable byte in a torn file must not stop the app starting.
+            with open(self.path, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             return 0
@@ -151,6 +159,13 @@ class SampleHistory:
             if isinstance(sample, dict) and "at" in sample:
                 self.samples.append(_coerce(sample))
                 loaded += 1
+        if loaded:
+            # The graphs draw by index, not by timestamp, so the previous run's
+            # last sample and this run's first would be adjacent points and the
+            # time the app was not running would render as a continuous line.
+            # One all-None sample makes that downtime a gap. It is not appended to
+            # the file here; a later compaction keeps it, which is still true.
+            self.samples.append(_coerce({"at": self.clock().isoformat()}))
         return loaded
 
 
@@ -161,11 +176,17 @@ def _coerce(sample: dict) -> dict:
     expected would raise inside a draw call -- i.e. inside an AppKit callback,
     where the traceback is invisible.
     """
-    out = {"at": str(sample.get("at", "")), "down": bool(sample.get("down"))}
+    # `down` stays None when it was never recorded -- the restart gap marker, or a
+    # hand-edited line -- because nothing was probed and "not down" is a claim.
+    down = sample.get("down")
+    out = {"at": str(sample.get("at", "")), "down": None if down is None else bool(down)}
     for field in FIELDS:
         value = sample.get(field)
         try:
-            out[field] = None if value is None else float(value)
+            number = None if value is None else float(value)
         except (TypeError, ValueError):
-            out[field] = None
+            number = None
+        # json.loads accepts Infinity and NaN. One infinite point flattens every
+        # other value in the graph to the baseline, so it is a gap, not a point.
+        out[field] = number if number is not None and math.isfinite(number) else None
     return out

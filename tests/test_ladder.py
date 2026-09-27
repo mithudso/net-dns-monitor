@@ -50,6 +50,16 @@ def test_every_step_is_either_a_check_or_a_repair():
             assert step.kind in ("check", "repair"), step.name
 
 
+def test_every_step_records_why_it_runs():
+    """state_machine carries `reason` into ladder_results and the report prints it.
+    A step with an empty reason -- the failover step shipped that way -- renders as
+    a command with no explanation, in the one document meant to explain.
+    """
+    for classification in (Classification.NETWORK, Classification.DNS):
+        for step in ladder_for(classification, frozenset({"network", "dns"})):
+            assert step.reason, step.name
+
+
 def test_ladder_for_returns_a_fresh_list_the_caller_cannot_corrupt():
     """state_machine iterates the returned list once per incident. Returning
     the module-level list itself would let one caller's mutation change every
@@ -61,3 +71,13 @@ def test_ladder_for_returns_a_fresh_list_the_caller_cannot_corrupt():
     steps = ladder_for(Classification.NETWORK)
     assert len(steps) == original_length
     assert steps[0].name == "check_interface_state"
+
+
+def test_every_real_step_says_why_it_runs_including_failover():
+    """The LadderStep comment promises every real step fills `reason`, and the
+    report and forensic log print it. The failover step was the one exception,
+    so the most consequential step on the ladder was the one with no reason.
+    """
+    steps = ladder_for(Classification.NETWORK) + ladder_for(Classification.DNS, frozenset({"dns"}))
+    assert "switch_to_backup_network" in [s.name for s in steps]
+    assert all(s.reason for s in steps), [s.name for s in steps if not s.reason]

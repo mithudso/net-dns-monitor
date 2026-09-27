@@ -1,6 +1,11 @@
+import socket
+import threading
 import time
 
-from netdnsmonitor.resolution_prober import resolve_domains_parallel
+from netdnsmonitor import resolution_prober
+from netdnsmonitor.resolution_log import append_resolution_findings
+from netdnsmonitor.resolution_prober import default_resolve, resolve_domains_parallel
+from netdnsmonitor.stall_log import select_stalled_domains
 
 
 def test_returns_one_finding_per_domain_in_input_order():
@@ -71,50 +76,75 @@ def test_batch_deadline_returns_without_waiting_for_hung_lookups():
     real ceiling on a cycle. It must return early, not block for the full hang.
     """
 
-    # 5.0 and 2.5 are a pair: the sleep must stay well above the assertion, or
+    # 5.0 and 2.5 are a pair: the hang must stay well above the assertion, or
     # a deadline that no longer bounds anything would still finish inside it
-    # and this would pass on a broken prober. 2.5s is still >8x the 0.3s
-    # deadline. Both are as small as that relationship allows, because whatever
-    # is still sleeping here gets joined at interpreter exit and charged to
-    # every pytest run in the repo -- this file alone was 0.85s of tests and
-    # 30.8s of wall clock before these were shortened.
+    # and this would pass on a broken prober. The hang waits on `release`
+    # rather than sleeping, because a pool worker still running is joined at
+    # interpreter exit and charged to every pytest run in the repo -- this file
+    # was 0.85s of tests and 30.8s of wall clock when the hangs were sleeps.
+    release = threading.Event()
+
     def hangs(domain, timeout):
-        time.sleep(5.0)
+        release.wait(5.0)
         return (True, None)
 
-    started = time.monotonic()
-    findings = resolve_domains_parallel(["hung.example"], resolve_fn=hangs, deadline_seconds=0.3)
-    elapsed = time.monotonic() - started
+    try:
+        started = time.monotonic()
+        findings = resolve_domains_parallel(
+            ["hung.example"], resolve_fn=hangs, deadline_seconds=0.3
+        )
+        elapsed = time.monotonic() - started
 
-    assert elapsed < 2.5, f"deadline did not bound the batch (took {elapsed:.1f}s)"
-    assert findings[0]["outcome"] == "abandoned"
-    assert findings[0]["resolved"] is False
+        assert elapsed < 2.5, f"deadline did not bound the batch (took {elapsed:.1f}s)"
+        assert findings[0]["outcome"] == "abandoned"
+        assert findings[0]["resolved"] is False
+    finally:
+        release.set()
 
 
 def test_deadline_still_returns_one_finding_per_domain_in_order():
+    # Released in `finally` so the abandoned worker is not joined at
+    # interpreter exit for the rest of its hang.
+    release = threading.Event()
+
     def slow_for_one(domain, timeout):
         # Only has to still be unfinished when the 0.3s deadline is checked.
-        # Anything longer is pure interpreter-exit join time; no elapsed
-        # assertion here, so there is nothing to keep in sync.
         if domain == "hung.example":
-            time.sleep(3.0)
+            release.wait(3.0)
         return (True, None)
 
-    findings = resolve_domains_parallel(
-        ["fast.example", "hung.example", "other.example"],
-        resolve_fn=slow_for_one,
-        max_workers=3,
-        deadline_seconds=0.3,
-    )
+    try:
+        findings = resolve_domains_parallel(
+            ["fast.example", "hung.example", "other.example"],
+            resolve_fn=slow_for_one,
+            max_workers=3,
+            deadline_seconds=0.3,
+        )
 
-    assert [f["domain"] for f in findings] == [
-        "fast.example",
-        "hung.example",
-        "other.example",
-    ]
-    by_domain = {f["domain"]: f for f in findings}
-    assert by_domain["fast.example"]["outcome"] == "completed"
-    assert by_domain["hung.example"]["outcome"] == "abandoned"
+        assert [f["domain"] for f in findings] == [
+            "fast.example",
+            "hung.example",
+            "other.example",
+        ]
+        by_domain = {f["domain"]: f for f in findings}
+        assert by_domain["fast.example"]["outcome"] == "completed"
+        assert by_domain["hung.example"]["outcome"] == "abandoned"
+    finally:
+        release.set()
+
+
+def test_default_resolve_leaves_the_process_wide_socket_timeout_alone(monkeypatch):
+    """`socket.setdefaulttimeout()` does not bound getaddrinfo, and calling it
+    from a pool worker changed the default timeout of every socket created
+    afterwards anywhere in the process.
+    """
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [])
+    before = socket.getdefaulttimeout()
+    try:
+        assert default_resolve("a.example", 0.25) == (True, None)
+        assert socket.getdefaulttimeout() == before
+    finally:
+        socket.setdefaulttimeout(before)
 
 
 def test_non_positive_deadline_abandons_without_running_any_lookup():
@@ -151,6 +181,41 @@ def test_abandoned_findings_carry_the_same_keys_as_completed_ones():
         ["a.example"], resolve_fn=lambda d, t: (True, None), deadline_seconds=0
     )
     assert set(completed[0]) == set(abandoned[0])
+
+
+def test_a_pool_failure_is_abandoned_not_a_completed_lookup(tmp_path, monkeypatch):
+    """A worker that raises outside `resolve_fn` never performed the lookup, so
+    recording it as "completed" with the batch's elapsed time would let
+    stall_log admit the domain to a set that is closed and never shrinks.
+    No seam exists for this: the pool calls `_resolve_one` directly.
+    """
+
+    def broken(domain, timeout, resolve_fn):
+        raise RuntimeError("worker died before the lookup")
+
+    monkeypatch.setattr(resolution_prober, "_resolve_one", broken)
+    findings = resolve_domains_parallel(
+        ["a.example"], resolve_fn=lambda d, t: (True, None), deadline_seconds=240
+    )
+    assert findings[0]["outcome"] == "abandoned"
+    assert findings[0]["resolved"] is False
+    assert findings[0]["elapsed_seconds"] == 0.0
+    assert "RuntimeError" in findings[0]["error"]
+
+    log_path = str(tmp_path / "resolution-log.jsonl")
+    append_resolution_findings(findings, log_path)
+    assert select_stalled_domains(log_path, stall_seconds=0.0) == []
+
+
+def test_non_positive_max_workers_still_resolves_every_domain():
+    """`resolution_max_workers` is user-settable YAML; a 0 would otherwise
+    raise inside every cycle and be swallowed by the worker guard forever.
+    """
+    findings = resolve_domains_parallel(
+        ["a.example", "b.example"], resolve_fn=lambda d, t: (True, None), max_workers=0
+    )
+    assert [f["outcome"] for f in findings] == ["completed", "completed"]
+    assert all(f["resolved"] is True for f in findings)
 
 
 def test_fast_batch_under_its_deadline_is_unaffected():

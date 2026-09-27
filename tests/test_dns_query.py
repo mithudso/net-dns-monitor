@@ -30,11 +30,23 @@ def test_returns_false_when_rcode_is_nonzero():
     assert query_public_dns("example.com", send_recv_fn=send_recv_fn) is False
 
 
-def test_returns_false_on_transport_error():
+def test_returns_none_on_transport_error():
+    """No reply means the name was never tested. Returning False here made a
+    timeout or a blocked UDP port 53 read as "did NOT resolve via public
+    resolver" -- an unknown reported as a failed reading.
+    """
+
     def raising(packet, server, port, timeout):
         raise OSError("network unreachable")
 
-    assert query_public_dns("example.com", send_recv_fn=raising) is False
+    assert query_public_dns("example.com", send_recv_fn=raising) is None
+
+
+def test_returns_none_when_the_resolver_never_answers():
+    def timing_out(packet, server, port, timeout):
+        raise TimeoutError("timed out")
+
+    assert query_public_dns("example.com", send_recv_fn=timing_out) is None
 
 
 def test_query_packet_encodes_domain_labels():
@@ -101,7 +113,7 @@ def test_runt_datagram_shorter_than_a_dns_header_is_rejected():
 def test_undecodable_domain_returns_false_instead_of_raising():
     """`domain` is a constructor default in repair_executor, not a constant, so
     an unencodable name is one config change away. `_encode_query` raises
-    UnicodeEncodeError on non-ASCII and struct.error on an over-long label;
+    UnicodeEncodeError on non-ASCII and ValueError on an over-long label;
     neither is an OSError, so both used to escape the guard entirely.
     """
     sends = []
@@ -113,3 +125,20 @@ def test_undecodable_domain_returns_false_instead_of_raising():
     assert query_public_dns("münchen.de", send_recv_fn=capture) is False
     assert query_public_dns("a" * 256 + ".com", send_recv_fn=capture) is False
     assert sends == []  # never reached the wire
+
+
+def test_a_label_over_63_bytes_is_refused_before_it_reaches_the_wire():
+    """A length byte of 192 or more is a compression pointer on the wire, so a
+    200-byte label would be sent as a pointer into the packet and answered as
+    some other name. The 256 case above only pinned struct's own limit.
+    """
+    sends = []
+
+    def capture(packet, server, port, timeout):
+        sends.append(packet)
+        return _response(packet, 0)
+
+    assert query_public_dns("a" * 200 + ".com", send_recv_fn=capture) is False
+    assert query_public_dns("a" * 64 + ".com", send_recv_fn=capture) is False
+    assert sends == []
+    assert query_public_dns("a" * 63 + ".com", send_recv_fn=capture) is True

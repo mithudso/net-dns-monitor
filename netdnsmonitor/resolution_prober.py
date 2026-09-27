@@ -39,8 +39,11 @@ Abandoned records deliberately do NOT feed back into stall detection -- see
 the module docstring in `stall_log.py` for why that would be a runaway loop.
 
 `resolve_fn` is injectable (returns `(resolved, error)`) so this is testable
-without touching a real resolver; `default_resolve` below is the real
-`socket.getaddrinfo` call used in production.
+without touching a real resolver; `default_resolve_with_error` below is the
+real `socket.getaddrinfo` call used in production. It is deliberately not
+named `default_resolve`: prober.py has one of those with the same signature
+and a bool return, and a tuple handed to that caller is always truthy, so a
+failed lookup would read as healthy.
 """
 
 import socket
@@ -51,13 +54,21 @@ from typing import Callable, Optional
 ResolveFn = Callable[[str, float], tuple]
 
 
-def default_resolve(domain: str, timeout: float) -> tuple:
+def default_resolve_with_error(domain: str, timeout: float) -> tuple:
+    # `timeout` is accepted because ResolveFn requires it and it documents the
+    # intended ceiling; nothing here can enforce it. getaddrinfo never consults
+    # socket.setdefaulttimeout(), and setting that process-wide from a pool
+    # thread only changed every other socket in the app.
     try:
-        socket.setdefaulttimeout(timeout)
         socket.getaddrinfo(domain, None)
         return True, None
     except OSError as exc:
         return False, str(exc)
+
+
+# Kept for callers written against the other name; see the docstring above for why
+# the descriptive name is the one used here.
+default_resolve = default_resolve_with_error
 
 
 def _resolve_one(domain: str, timeout: float, resolve_fn: ResolveFn) -> dict:
@@ -107,10 +118,13 @@ def resolve_domains_parallel(
             }
             for domain in domains
         ]
-    resolve_fn = resolve_fn or default_resolve
+    resolve_fn = resolve_fn or default_resolve_with_error
 
     started = time.monotonic()
-    pool = ThreadPoolExecutor(max_workers=max_workers)
+    # `resolution_max_workers` is user-settable YAML; ThreadPoolExecutor raises
+    # on 0 or below, which the worker guard in app.py would swallow on every
+    # cycle, leaving the monitor silently dead.
+    pool = ThreadPoolExecutor(max_workers=max(1, int(max_workers)))
     try:
         futures = [pool.submit(_resolve_one, d, timeout, resolve_fn) for d in domains]
 
@@ -121,7 +135,7 @@ def resolve_domains_parallel(
             wait(futures, timeout=max(0.0, remaining))
 
         findings = []
-        for domain, future in zip(domains, futures):
+        for domain, future in zip(domains, futures, strict=True):
             findings.append(_finding_for(domain, future, started))
         return findings
     finally:
@@ -135,12 +149,16 @@ def _finding_for(domain: str, future, batch_started: float) -> dict:
         try:
             return future.result()
         except Exception as exc:  # noqa: BLE001 - a pool failure is a finding, not a crash
+            # The worker raised outside resolve_fn, so no lookup happened.
+            # "abandoned" with zero elapsed keeps it out of stall detection:
+            # a "completed" record carrying the batch's elapsed time would
+            # admit the domain to a stall set that is closed and never shrinks.
             return {
                 "domain": domain,
                 "resolved": False,
-                "error": str(exc),
-                "elapsed_seconds": time.monotonic() - batch_started,
-                "outcome": "completed",
+                "error": f"resolution pool failure: {type(exc).__name__}",
+                "elapsed_seconds": 0.0,
+                "outcome": "abandoned",
             }
     future.cancel()
     return {

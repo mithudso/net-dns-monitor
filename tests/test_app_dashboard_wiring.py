@@ -9,6 +9,7 @@ so the defaults cannot reach real user data, but pointing it explicitly is what
 lets these assert against the documents on disk.
 """
 
+import pathlib
 import threading
 import time
 
@@ -30,11 +31,23 @@ class FakeFlapGate:
 
 
 class FakeStateMachine:
-    def __init__(self, flap_state="healthy", consecutive_failures=0, report=None):
+    def __init__(
+        self,
+        flap_state="healthy",
+        consecutive_failures=0,
+        report=None,
+        failover_classifications=frozenset(),
+    ):
         self.flap_gate = FakeFlapGate(flap_state, consecutive_failures)
         self._report = report
+        # The real StateMachine carries this; the full-diagnosis path reads it so
+        # its ladder matches the one an incident tick would run.
+        self.failover_classifications = frozenset()
         self.prober = lambda: {"external_reachable": True, "dns_ok": False}
-        self.repair_executor = lambda step: f"ran {step.name}"
+        self.repair_executor = lambda step, classification=None: f"ran {step.name}"
+        # The two attributes the manual steps read off the real StateMachine.
+        self.lock = threading.RLock()
+        self.failover_classifications = failover_classifications
 
     def tick(self):
         report, self._report = self._report, None
@@ -175,6 +188,24 @@ def test_the_window_reports_a_failing_ping(tmp_path):
     assert "no reply" in text
 
 
+def test_a_raise_in_the_repaint_does_not_kill_the_ui_timer(tmp_path):
+    """rumps prints and swallows a raise from a timer callback, so without a
+    guard a repaint that fails every second would fail silently every second:
+    nothing in `:status` would say why the window stopped updating.
+    """
+    app = make_app(tmp_path)
+    app.open_dashboard()
+
+    def corrupted():
+        raise RuntimeError("registry corrupted")
+
+    app.peer_registry.buckets = corrupted
+
+    app.ui_tick()  # returns rather than raising
+
+    assert "RuntimeError" in app.last_tick_error
+
+
 # --- troubleshooting buttons -------------------------------------------------
 
 
@@ -244,6 +275,199 @@ def test_full_diagnosis_runs_the_ladder_for_the_current_classification(tmp_path)
     assert "classified as: dns" in output
     assert "flush_dns_cache" in output
     assert "check_interface_state" not in output  # that is the network ladder
+
+
+def test_a_manual_step_waits_for_the_incident_pipeline_lock(tmp_path):
+    """tick() holds StateMachine.lock around the incident ladder. A manual repair
+    that ran regardless could interleave with it -- two flushes, or a manual
+    failover racing the automatic one.
+    """
+    app = make_app(tmp_path)
+    ran = threading.Event()
+    app.state_machine.repair_executor = lambda step: (ran.set(), "done")[1]
+
+    app.state_machine.lock.acquire()
+    try:
+        app.handle_dashboard_action("flush_dns_cache")
+        assert not ran.wait(timeout=0.3), "the step ran while the pipeline held the lock"
+    finally:
+        app.state_machine.lock.release()
+    assert ran.wait(timeout=5)
+    app._action_thread.join(timeout=5)
+
+
+def test_full_diagnosis_uses_the_configured_failover_classifications(tmp_path):
+    """ladder_for's default adds the failover step to every network ladder. The
+    manual diagnosis has to use the same classifications the incident path does.
+    """
+    network_probe = {"external_reachable": False, "dns_ok": False}
+
+    def diagnose(classifications):
+        app = make_app(
+            tmp_path / str(len(classifications)),
+            FakeStateMachine(failover_classifications=classifications),
+        )
+        app.state_machine.prober = lambda: network_probe
+        output = []
+        app._append_output = output.append
+        app.handle_dashboard_action("full_diagnosis")
+        app._action_thread.join(timeout=5)
+        app.ui_tick()
+        return "".join(output)
+
+    assert "switch_to_backup_network" not in diagnose(frozenset())
+    assert "switch_to_backup_network" in diagnose(frozenset({"network"}))
+
+
+def test_full_diagnosis_tells_the_executor_what_it_is_responding_to(tmp_path):
+    """The failover step refuses a classification it was not configured for. With
+    no classification passed, the executor assumed "network", so a DNS fault on a
+    DNS-only failover config reported that "network" was not a trigger.
+    """
+    app = make_app(tmp_path, FakeStateMachine(failover_classifications=frozenset({"dns"})))
+    app.state_machine.prober = lambda: {"external_reachable": True, "dns_ok": False}
+    app.state_machine.repair_executor = lambda step, classification=None: (
+        f"ran {step.name} for {classification}"
+    )
+    output = []
+    app._append_output = output.append
+
+    app.handle_dashboard_action("full_diagnosis")
+    app._action_thread.join(timeout=5)
+    app.ui_tick()
+
+    text = "".join(output)
+    assert "ran switch_to_backup_network for dns" in text
+    assert "ran flush_dns_cache for dns" in text
+    assert "for None" not in text
+
+
+def _diagnose(tmp_path, probe):
+    app = make_app(tmp_path)
+    app.state_machine.prober = lambda: probe
+    output = []
+    app._append_output = output.append
+    app.handle_dashboard_action("full_diagnosis")
+    app._action_thread.join(timeout=5)
+    app.ui_tick()
+    return "".join(output)
+
+
+def test_an_unclassified_diagnosis_names_what_was_not_probed(tmp_path):
+    """None means not probed. Saying "nothing is broken" for it tells someone
+    with an empty external_targets that the network was checked and is fine.
+    """
+    text = _diagnose(tmp_path, {"external_reachable": None, "dns_ok": True})
+    assert "classified as: unclassified" in text
+    assert "external_reachable was not probed (external_targets is empty)" in text
+    assert "nothing is broken" not in text
+    assert "dns_ok was not probed" not in text
+
+    text = _diagnose(tmp_path / "dns", {"external_reachable": True, "dns_ok": None})
+    assert "dns_ok was not probed (no domain to resolve)" in text
+    assert "external_reachable was not probed" not in text
+
+
+def test_a_healthy_diagnosis_says_nothing_is_broken(tmp_path):
+    text = _diagnose(tmp_path, {"external_reachable": True, "dns_ok": True})
+    assert "classified as: healthy" in text
+    assert "nothing is broken" in text
+    assert "not probed" not in text
+
+
+def test_the_dashboards_open_last_report_goes_through_the_url_opener(tmp_path, monkeypatch):
+    """`webbrowser` pipes an AppleScript into osascript, which the store build
+    may not send, and it ran on the run loop with its result ignored.
+    """
+    monkeypatch.setattr(
+        "webbrowser.open", lambda *a, **k: pytest.fail("webbrowser.open must not be used")
+    )
+    app = make_app(tmp_path)
+    opened = []
+    app.url_opener = lambda url: opened.append(url) or True
+    app.last_report_path = str(tmp_path / "Application Support" / "incident report.md")
+
+    app.handle_dashboard_action("open_last_report")
+
+    assert opened == [pathlib.Path(app.last_report_path).as_uri()]
+    assert app._action_thread is None
+
+
+def _secondary_ids():
+    from netdnsmonitor.dashboard import APP_MENU_ITEMS, SECONDARY_ACTIONS
+
+    ids = [action_id for _, action_id, _ in SECONDARY_ACTIONS]
+    ids += [action_id for _, action_id, _ in APP_MENU_ITEMS]
+    return sorted(set(ids))
+
+
+# Which method each non-ladder button reaches. A button missing here falls through
+# to step_by_name and reports "Unknown step".
+_HANDLERS = {
+    "open_console": "open_console",
+    "open_router_window": "_open_router_window",
+    "open_settings": "open_settings",
+    "toggle_mini": "toggle_mini_window",
+    "open_last_report": "open_last_report",
+    "open_forensic_dir": "_open_path",
+    "test_alert": "test_network_alert",
+    "grant_privileges": "_grant_privileges",
+    "revoke_privileges": "_revoke_privileges",
+    "open_dashboard": "open_dashboard",
+}
+
+
+@pytest.mark.parametrize("action_id", _secondary_ids())
+def test_no_secondary_button_falls_through_to_the_ladder(tmp_path, action_id):
+    app = make_app(tmp_path)
+    output = []
+    app._append_output = output.append
+    called = []
+    for name in set(_HANDLERS.values()):
+        setattr(app, name, lambda *a, _name=name, **k: called.append(_name))
+
+    app.handle_dashboard_action(action_id)
+
+    assert action_id in _HANDLERS, f"{action_id} has no handler in this table"
+    assert called == [_HANDLERS[action_id]]
+    assert "Unknown step" not in "".join(output)
+    assert app._action_thread is None
+
+
+def test_a_router_console_that_fails_to_open_is_reported_in_the_pane(tmp_path):
+    app = make_app(tmp_path)
+    output = []
+    app._append_output = output.append
+
+    def broken_show():
+        raise RuntimeError("no window server")
+
+    class BrokenController:
+        def __init__(self, **kwargs):
+            pass
+
+        show = staticmethod(broken_show)
+
+    app.router_window = BrokenController()
+    app.handle_dashboard_action("open_router_window")
+
+    assert output == ["Router console failed: RuntimeError\n"]
+    assert "no window server" not in "".join(output)
+    assert app.router_window is None
+
+
+def test_the_mini_window_names_the_incident_it_is_showing(tmp_path):
+    app = make_app(tmp_path, FakeStateMachine(flap_state="incident", consecutive_failures=3))
+    shown = []
+    app._mini = type("FakeMini", (), {"set_text": lambda self, text: shown.append(text)})()
+
+    app.last_classification = "dns"
+    app._refresh_mini()
+    app.ping_stats = dict(app.ping_stats, down=True)
+    app._refresh_mini()
+
+    assert "DNS" in shown[0]
+    assert "DOWN" in shown[1]
 
 
 def test_an_unknown_action_reports_itself_instead_of_raising(tmp_path):
@@ -629,3 +853,13 @@ def test_a_status_change_repaints_the_dock_tile_immediately(tmp_path, monkeypatc
 
     assert len(calls) > before
     assert calls[-1][0] == "incident"
+
+
+def test_the_control_domain_is_listed_as_checked(tmp_path):
+    """The prober resolves the control domain every tick, so the window must not
+    say no domains are checked."""
+    app = make_app(tmp_path)
+    app.config["domains"] = []
+    app.config["control_domain"] = "api.anthropic.com"
+    app.open_dashboard()
+    assert "api.anthropic.com" in app._dashboard.stats_view.string()

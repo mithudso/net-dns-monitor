@@ -4,6 +4,8 @@ incident onset) and probing an auto-learned domain list that self-prunes.
 """
 
 import json
+import urllib.error
+import urllib.request
 
 from netdnsmonitor.app import (
     NetDnsMonitorApp,
@@ -30,6 +32,8 @@ def tick_and_deliver(app):
 class FakeFlapGate:
     def __init__(self, state):
         self.state = state
+        # Read by the title repaint at the end of every tick.
+        self.consecutive_failures = 0
 
 
 class FakeStateMachine:
@@ -152,6 +156,36 @@ def test_a_raising_notifier_does_not_kill_the_worker_silently(tmp_path):
     ]
 
 
+def test_tick_notifies_and_classifies_even_when_the_report_cannot_be_saved(tmp_path, monkeypatch):
+    """The gate reports only on the healthy->incident edge, so a save that raised
+    used to cost the one alert, the forensic DOWN and the classification in the
+    title -- and no later tick could produce them.
+    """
+    import netdnsmonitor.app as app_module
+
+    def unwritable(report, directory):
+        raise OSError("Read-only file system: /Volumes/reports/secret-name")
+
+    monkeypatch.setattr(app_module, "save_report", unwritable)
+    sent = []
+    app = _app(tmp_path)
+    app.last_report_path = "/earlier/incident.md"
+    app.notifier = lambda text: sent.append(text) or [{"delivered": True}]
+    app.state_machine = FakeStateMachine(REPORT)
+    noted = []
+    app.forensic.note = lambda kind, detector, **fields: noted.append(kind)
+
+    tick_and_deliver(app)
+
+    assert app.last_classification == "dns"
+    assert len(sent) == 1
+    assert "Full report" not in sent[0]
+    assert app.last_report_path is None  # not the earlier incident's file
+    assert app.last_tick_error == "report not saved: OSError"
+    assert "secret-name" not in app.last_tick_error
+    assert "down" in noted
+
+
 def test_build_notifier_has_no_channels_without_credentials():
     config = {
         "slack_enabled": True,
@@ -162,20 +196,27 @@ def test_build_notifier_has_no_channels_without_credentials():
     assert build_notifier(config, env={})("text") == []
 
 
-def test_build_notifier_enables_slack_when_the_webhook_env_var_is_set():
+def test_build_notifier_enables_slack_when_the_webhook_env_var_is_set(monkeypatch):
     config = {
         "slack_enabled": True,
         "email_enabled": False,
         "email_recipients": [],
         "notify_timeout_seconds": 5,
     }
-    # A closed local port, not a hostname: refuses instantly and needs no DNS,
-    # so this stays a wiring test rather than a network test.
-    notifier = build_notifier(config, env={"SLACK_WEBHOOK_URL": "http://127.0.0.1:1/hook"})
+    # urlopen is replaced rather than pointed at a closed local port: the suite
+    # opens no sockets, and a system HTTP proxy can turn "refuses instantly"
+    # into a multi-second wait.
+    opened = []
+
+    def refusing_urlopen(request, timeout=None):
+        opened.append(request.full_url)
+        raise urllib.error.URLError("refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refusing_urlopen)
+    notifier = build_notifier(config, env={"SLACK_WEBHOOK_URL": "https://hooks.slack.test/hook"})
     results = notifier("text")  # delivery must fail as data, never raise
-    assert len(results) == 1
-    assert results[0]["channel"] == "slack"
-    assert "error" in results[0]
+    assert opened == ["https://hooks.slack.test/hook"]
+    assert results == [{"channel": "slack", "error": "Slack webhook unreachable"}]
 
 
 def test_build_notifier_skips_slack_when_disabled_in_config():
@@ -222,8 +263,12 @@ def test_build_domains_source_learns_failed_domains_from_the_log(tmp_path):
         "max_learned_domains": 20,
         "domain_learn_interval_seconds": 300,
     }
+    # Synchronous spawn: the learner scans the log on a daemon thread, and this
+    # asserts on what that scan stored.
     source, store = build_domains_source(
-        config, log_watcher=lambda: ["query for broken.example.net timed out"]
+        config,
+        log_watcher=lambda: ["query for broken.example.net timed out"],
+        spawn=lambda fn: fn(),
     )
     assert source() == ["mine.example.com", "example.com", "broken.example.net"]
     assert store.domains == ["broken.example.net"]
@@ -281,7 +326,9 @@ def test_the_wired_prober_evicts_a_dead_learned_domain_on_a_healthy_tick(tmp_pat
         return prober
 
     monkeypatch.setattr("netdnsmonitor.app.make_prober", fake_make_prober)
-    probe = build_state_machine(config).prober()
+    # `spawn` swallows the learner's first scan: it would otherwise run a real
+    # `log show` on a daemon thread from inside the suite.
+    probe = build_state_machine(config, spawn=lambda fn: None).prober()
 
     assert probe["domain_results"]["example.com"] is True
     assert probe["domain_results"]["dead.example.net"] is False
