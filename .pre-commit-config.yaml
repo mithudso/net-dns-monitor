@@ -1,0 +1,8 @@
+# Same ruff version as requirements-dev.txt and CI, so a commit that passes
+# here passes the lint job. Install once per clone: pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.1
+    hooks:
+      - id: ruff
+      - id: ruff-format
