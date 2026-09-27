@@ -13,6 +13,8 @@ Redirecting HOME makes `os.path.expanduser` resolve into a per-test temporary
 directory, so the whole suite is inert against real user data.
 """
 
+import sys
+
 import pytest
 
 # Test modules whose unit under test IS one of the functions stubbed below. They
@@ -47,23 +49,37 @@ def no_real_dock_icon(monkeypatch):
     monkeypatch.setattr("netdnsmonitor.app.set_dock_icon", lambda *a, **k: None)
 
 
-@pytest.fixture(autouse=True, scope="session")
-def no_dock_presence():
-    """Stop the test process from appearing in the Dock.
+def _keep_out_of_dock():
+    """Make this process background-only before AppKit can register it.
 
-    The first `NSApplication.sharedApplication()` call in a bare Python process
-    registers it as a regular foreground app, so a transient Python tile bounces in
-    the Dock for the length of the run. Several code paths and tests reach that call
-    (window activation, `setMainMenu_`). Prohibited keeps the process out of the
-    Dock and menu bar while leaving windows and menus constructible.
+    The first `NSApplication.sharedApplication()` in a bare Python process registers
+    it as a Foreground app, and the Dock shows a transient Python tile until the
+    process exits. Setting `setActivationPolicy_(Prohibited)` afterwards does not
+    help: the type is already Foreground for the moment between the two calls, which
+    is exactly the flicker. Transforming the process first makes it BackgroundOnly
+    from birth, and `sharedApplication()` then leaves it that way. Windows and menus
+    stay constructible. Runs at conftest import, ahead of collection and any fixture.
     """
-    try:
-        import AppKit
-    except ImportError:
+    if sys.platform != "darwin":
         return
-    AppKit.NSApplication.sharedApplication().setActivationPolicy_(
-        AppKit.NSApplicationActivationPolicyProhibited
+    import ctypes
+    import ctypes.util
+
+    class ProcessSerialNumber(ctypes.Structure):
+        _fields_ = [("high", ctypes.c_uint32), ("low", ctypes.c_uint32)]
+
+    path = ctypes.util.find_library("ApplicationServices")
+    if not path:
+        return
+    k_current_process = 2
+    k_transform_to_background_application = 2
+    ctypes.CDLL(path).TransformProcessType(
+        ctypes.byref(ProcessSerialNumber(0, k_current_process)),
+        k_transform_to_background_application,
     )
+
+
+_keep_out_of_dock()
 
 
 class _MemoryKeychain:
