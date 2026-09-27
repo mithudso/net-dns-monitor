@@ -35,7 +35,12 @@ FRAME_AUTOSAVE_NAME = "NetDnsMonitorMiniWindow"
 DOT = {"healthy": "\U0001f7e2", "flaky": "\U0001f7e1", "incident": "\U0001f534"}
 
 
-def mini_text(state: str, rtt_ms: Optional[float] = None, loss_pct: Optional[float] = None) -> str:
+def mini_text(
+    state: str,
+    rtt_ms: Optional[float] = None,
+    loss_pct: Optional[float] = None,
+    ping_down: bool = False,
+) -> str:
     """The one line the panel shows. Pure, so the wording is testable.
 
     Deliberately not the menu bar's title: at this size there is room for the
@@ -43,7 +48,11 @@ def mini_text(state: str, rtt_ms: Optional[float] = None, loss_pct: Optional[flo
     interpret while walking past.
     """
     dot = DOT.get(state, DOT["healthy"])
-    if state == "incident":
+    # "DOWN" is keyed to the ping, not to the incident state: a DNS-only incident
+    # still has a live round trip, and telling someone the network is down when
+    # only resolution is broken sends them after the wrong fault. The red dot
+    # already carries the incident.
+    if ping_down:
         return f"{dot}  DOWN"
     if rtt_ms is None:
         return f"{dot}  --"

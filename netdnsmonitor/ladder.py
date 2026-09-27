@@ -88,7 +88,13 @@ DNS_LADDER = [
 # tried first. It is tagged needs_privilege because the write genuinely needs
 # an administrator right -- unlike the two stubs, though, it is really
 # attempted, and its outcome string says whether the write landed.
-FAILOVER_STEP = LadderStep("switch_to_backup_network", "repair", needs_privilege=True)
+FAILOVER_STEP = LadderStep(
+    "switch_to_backup_network",
+    "repair",
+    needs_privilege=True,
+    reason="Every cheaper, reversible repair has already failed; moving the "
+    "physical path is the last thing left to try.",
+)
 
 
 def step_by_name(name: str):

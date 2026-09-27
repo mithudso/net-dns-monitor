@@ -17,6 +17,7 @@ of what gets typed: a timeout, a process-group kill so the timeout means
 something, no stdin so nothing can hang on a prompt, and an output cap.
 """
 
+import codecs
 import contextlib
 import os
 import signal
@@ -34,6 +35,15 @@ DEFAULT_TIMEOUT_SECONDS = 20.0
 # Bytes, not lines: one `log show` or `cat` of a binary produces a few enormous
 # lines, and it is the byte count that wedges the text view.
 MAX_OUTPUT_BYTES = 64 * 1024
+
+# A command's shell can exit while a child it started in the background still
+# holds the output pipe. Waiting for that child would hold the console line --
+# and the worker thread the window is waiting on -- until the child ends on its
+# own, so after this short grace the whole process group is killed. The
+# consequence is deliberate: a `&` job does not outlive its console line, which
+# is the same contract the timeout already states.
+ORPHAN_GRACE_SECONDS = 0.5
+READER_JOIN_SECONDS = 5.0
 
 # The window clears its own text storage; `handle` only says that it should.
 CLEAR = "__CLEAR__"
@@ -98,9 +108,14 @@ def _kill_process_group(process) -> None:
     is why the process is started with `start_new_session=True` in the first
     place: it gives the child a process group of its own to kill, so a stray
     signal cannot reach the menu bar app that spawned it.
+
+    The group id is the shell's pid, not looked up with `getpgid`: once `wait`
+    has reaped the shell, `getpgid` on it raises ProcessLookupError even though
+    the group still exists and still holds the orphan. The pid cannot be reused
+    while the group it names is alive, so it stays the right target.
     """
     try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
         with contextlib.suppress(OSError):
             process.kill()
@@ -119,18 +134,28 @@ def _drain(stream, sink: dict, cap: int) -> None:
     every over-long command into a 20-second wait instead of finishing when it
     would have.
 
-    `cap` counts characters here, not bytes -- the stream is in text mode. It is
-    a coarse ceiling to keep memory flat, not the reported limit; `truncate`
-    applies the exact byte cap afterwards.
+    The pipe is binary and read with `read1`, which returns whatever is there
+    now. A text-mode `read(n)` blocks until it has n characters *or EOF*, and
+    EOF on this pipe comes only when every process holding its write end has
+    gone -- so `sh -c 'sleep 60' & echo started` parks the reader on the
+    grandchild's copy of the pipe and the `started` that was printed is
+    reported as no output. The incremental decoder keeps a multibyte character
+    split across two reads from becoming two replacement characters.
+
+    `cap` counts decoded characters, not bytes. It is a coarse ceiling to keep
+    memory flat, not the reported limit; `truncate` applies the exact byte cap
+    afterwards.
     """
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
     try:
         while True:
-            chunk = stream.read(8192)
-            if not chunk:
-                break
-            if sink["size"] < cap:
+            raw = stream.read1(8192)
+            chunk = decoder.decode(raw, not raw)
+            if chunk and sink["size"] < cap:
                 sink["parts"].append(chunk[: cap - sink["size"]])
             sink["size"] += len(chunk)
+            if not raw:
+                break
     except (ValueError, OSError):
         # The pipe was closed under us by the kill path; whatever was collected
         # before that is still worth showing.
@@ -150,8 +175,6 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
             start_new_session=True,
         )
     except (OSError, ValueError) as exc:
@@ -193,9 +216,15 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
 
     # `wait` reaps the child; joining the readers is what stops a half-read
     # pipe from being reported as empty output on a command that did produce
-    # some before it was killed.
+    # some before it was killed. A reader still alive after the grace is held
+    # open by a background child of the shell, and only killing the group
+    # releases it.
     for reader in readers:
-        reader.join(timeout=5)
+        reader.join(timeout=ORPHAN_GRACE_SECONDS)
+    if any(reader.is_alive() for reader in readers):
+        _kill_process_group(process)
+        for reader in readers:
+            reader.join(timeout=READER_JOIN_SECONDS)
 
     return CommandResult(
         stdout="".join(sinks["stdout"]["parts"]),
@@ -260,7 +289,13 @@ def _change_directory(argument: str, state: ConsoleState) -> str:
             "line, then the rest."
         )
 
-    target = os.path.expanduser(argument or "~")
+    # There is no shell in front of this built-in to unquote `cd "$TMPDIR"` or
+    # expand the variable; handed through as typed, the check reports `no such
+    # directory: /tmp/"$TMPDIR"`, which reads as a missing directory rather
+    # than a path the console did not understand.
+    if len(argument) >= 2 and argument[0] == argument[-1] and argument[0] in "\"'":
+        argument = argument[1:-1]
+    target = os.path.expandvars(os.path.expanduser(argument or "~"))
     if not os.path.isabs(target):
         target = os.path.join(state.cwd, target)
     target = os.path.normpath(target)
@@ -302,8 +337,8 @@ def handle(
         if not state.history:
             return "(nothing yet)", state
         width = len(str(len(state.history)))
-        return "\n".join(
-            f"{i:>{width}}  {entry}" for i, entry in enumerate(state.history, 1)
+        return truncate(
+            "\n".join(f"{i:>{width}}  {entry}" for i, entry in enumerate(state.history, 1))
         ), state
     if lowered == ":status":
         if status is None:

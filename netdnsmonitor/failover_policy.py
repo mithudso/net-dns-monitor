@@ -111,12 +111,12 @@ def _brakes(
     recent = _recent_switches(switch_times, now)
     # Fail closed on a nonsense ceiling. Treating a negative as "unlimited"
     # would turn a config typo into no ceiling at all, on a link whose whole
-    # problem is that it flaps.
-    if len(recent) >= max(0, max_switches_per_hour):
-        return (
-            f"switch budget exhausted: {len(recent)} switch(es) in the last hour, "
-            f"limit {max_switches_per_hour}"
-        )
+    # problem is that it flaps. The reason names the limit actually enforced.
+    limit = max(0, max_switches_per_hour)
+    if len(recent) >= limit:
+        if limit == 0:
+            return "automatic switching is disabled: the hourly switch limit is 0"
+        return f"switch budget exhausted: {len(recent)} switch(es) in the last hour, limit {limit}"
     return None
 
 
@@ -208,9 +208,19 @@ def _decide_failover(
     )
     if brake:
         return FailoverDecision(NONE, brake)
+    # None does not block a failover the way it blocks a failback: a
+    # network-classified outage plus a verified backup is reason enough to
+    # move even when the preferred adapter could not be asked. But the reason
+    # lands in the incident report, and "unreachable" is a reading; it must
+    # not be claimed when none was taken.
+    detail = (
+        "preferred interface unreachable"
+        if preferred_ok is False
+        else "preferred interface could not be probed"
+    )
     return FailoverDecision(
         FAILOVER,
-        "preferred interface unreachable and backup verified reachable through its own interface",
+        f"{detail} and backup verified reachable through its own interface",
     )
 
 
@@ -231,11 +241,16 @@ def _decide_failback(
         return FailoverDecision(
             NONE, "preferred interface still unreachable -- staying on the backup"
         )
-    if consecutive_preferred_ok < failback_threshold:
+    # Clamped for the same reason the hourly ceiling is: the threshold is
+    # user-editable and arrives here as typed, and at 0 the first good probe
+    # would fail back with no evidence of stability -- the flap the streak
+    # exists to prevent.
+    threshold = max(1, failback_threshold)
+    if consecutive_preferred_ok < threshold:
         return FailoverDecision(
             NONE,
             f"preferred interface healthy for {consecutive_preferred_ok}/"
-            f"{failback_threshold} consecutive checks -- not yet stable enough",
+            f"{threshold} consecutive checks -- not yet stable enough",
         )
     brake = _brakes(
         now=now,

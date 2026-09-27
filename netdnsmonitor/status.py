@@ -25,9 +25,9 @@ host, recent packet loss, and current throughput. It replaced a constant
 signal-bars glyph that carried no information at all. The coloured circle after
 it is still the part that changes with status, the way a badge overlays an icon
 rather than replacing it. `status_state` is the single place the
-healthy/flaky/incident decision is made; the menu bar title here, the Dock
-tile in dock_icon.py, and the alert in alert.py all key off it, so the
-indicators can't drift out of sync with each other.
+healthy/flaky/incident decision is made; the menu bar title here and the Dock
+tile in dock_icon.py both key off it, so those two can't drift apart. alert.py
+is driven separately by the ping heartbeat and does not read this function.
 
 A failing ping forces the incident state even while the anti-flap gate is still
 healthy. The gate debounces a 30-second poll of TCP reachability and is
@@ -137,8 +137,12 @@ def build_status_report(
     # Shown only off-healthy: on a good network these are all zero or stale, and
     # a status pane that pads itself with "0 consecutive failures" trains the
     # reader to skim past the lines that do matter.
-    if state != "healthy":
-        lines.append(f"classification: {last_classification or 'unknown'}")
+    if state == "incident":
+        # Same rule as build_title: last_classification is set only on the
+        # healthy->incident edge and never cleared, so a ping-only incident
+        # printing it would name a subsystem from an unrelated incident.
+        reason = (last_classification or "unknown") if flap_state == "incident" else "ping"
+        lines.append(f"classification: {reason}")
     if consecutive_failures:
         lines.append(f"consecutive failures: {consecutive_failures}")
     if ping_down:
@@ -222,7 +226,6 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
         return [f"Failover: {snapshot['error']}"]
 
     mode = "automatic" if snapshot.get("auto_enabled") else "manual only"
-    active_side = snapshot.get("active_side")
     active_service = snapshot.get("active_service")
 
     # Show the backup that is actually carrying traffic, not simply the first
@@ -235,9 +238,17 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
         None,
     ) or snapshot.get("backup")
 
+    # Keyed off the service name, like the backup row, not off `active_side`:
+    # that falls back to "preferred" for any head of the order that is not the
+    # backup, which lit the preferred row while the Active line named a third
+    # service.
     lines = [
         f"Active: {active_service} — failover is {mode}",
-        _describe_side(snapshot["preferred"], "Preferred", active_side == "preferred"),
+        _describe_side(
+            snapshot["preferred"],
+            "Preferred",
+            snapshot["preferred"].get("name") == active_service,
+        ),
     ]
     if backup:
         label = "Backup" if len(backups) <= 1 else f"Backup (of {len(backups)})"
