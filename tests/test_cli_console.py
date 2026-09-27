@@ -7,14 +7,19 @@ from types import SimpleNamespace
 
 from netdnsmonitor.cli import (
     build_parser,
+    cmd_ladder,
+    cmd_run,
+    cmd_status,
     interface_rows,
+    main,
     render_catalog,
     render_failover_status,
     render_interfaces,
     render_usage_guide,
 )
 from netdnsmonitor.cli_console import ConsoleState, handle
-from netdnsmonitor.commands import BY_KEY, CATALOG, missing_placeholder, resolve
+from netdnsmonitor.commands import BY_KEY, CATALOG, missing_placeholder, placeholders_in, resolve
+from netdnsmonitor.config import DEFAULT_CONFIG
 from netdnsmonitor.service_order import NetworkService
 
 LISTING = """An asterisk (*) denotes that a network service is disabled.
@@ -80,6 +85,33 @@ def test_missing_placeholder_names_what_is_needed():
     assert missing_placeholder("nwi") is None
 
 
+def test_catalogue_binaries_with_a_known_path_are_not_resolved_through_path():
+    """The same rule the repair executor follows: a `scutil` found first on a
+    user-writable PATH entry is not the system's `scutil`.
+    """
+    from netdnsmonitor.privileges import IPCONFIG
+    from netdnsmonitor.repair_executor import DSCACHEUTIL, NETSTAT, SCUTIL
+
+    assert BY_KEY["nwi"].argv[0] == SCUTIL
+    assert BY_KEY["dns"].argv[0] == SCUTIL
+    assert BY_KEY["routes"].argv[0] == NETSTAT
+    assert BY_KEY["flush-dns"].argv[0] == DSCACHEUTIL
+    assert BY_KEY["renew-dhcp"].argv[0] == IPCONFIG
+
+
+def test_resolve_refuses_a_value_that_looks_like_a_flag():
+    """`ifconfig -a` is not "show interface -a": the tool reads it as an option."""
+    assert resolve("iface", device="-a") is None
+    assert resolve("enable", service="--help") is None
+
+
+def test_no_catalogue_command_has_more_than_one_placeholder():
+    """The console's pending-value path fills exactly one placeholder before
+    running; a second one would reach `resolve` unfilled.
+    """
+    assert all(len(placeholders_in(c.key)) <= 1 for c in CATALOG)
+
+
 # --- renderers --------------------------------------------------------------
 
 
@@ -103,6 +135,25 @@ def test_interface_table_marks_disabled_services():
     text = render_interfaces(rows)
     assert "OFF" in text and "M3100" in text
     assert "3.8" in text
+
+
+def test_interface_table_shows_an_unknown_service_state_as_unknown():
+    """`enabled` is None for a configured service missing from the order. That
+    is "not found", not "disabled" -- printing OFF sends someone to enable a
+    service that does not exist.
+    """
+    rows = [
+        {
+            "name": "Gone",
+            "device": None,
+            "enabled": None,
+            "reachable": None,
+            "throughput_mbps": None,
+        }
+    ]
+    text = render_interfaces(rows)
+    assert "OFF" not in text
+    assert "?" in text
 
 
 def test_interface_table_says_not_probed_rather_than_unreachable():
@@ -221,6 +272,125 @@ def test_no_benchmark_unless_asked():
     assert all(r["throughput_mbps"] is None for r in rows)
 
 
+def test_interface_rows_reuse_a_given_service_list():
+    """The console lists services once per refresh; the rows must not shell
+    out to networksetup again behind that cache.
+    """
+    calls = []
+
+    def counting(argv):
+        calls.append(argv)
+        return runner(argv)
+
+    rows = interface_rows(counting, prober=lambda d: None, services=SERVICES)
+    assert [r["name"] for r in rows] == ["AX88179B", "M3100", "Wi-Fi"]
+    assert calls == []
+
+
+# --- subcommand exit codes --------------------------------------------------
+
+
+def collecting():
+    lines = []
+
+    def out(text):
+        lines.append(text)
+
+    out.lines = lines
+    return out
+
+
+def test_status_json_exits_nonzero_when_unhealthy():
+    """`--json` is the scripted path; a 0 there on a dead network means every
+    cron job built on it reports healthy.
+    """
+    out = collecting()
+    failing = lambda: {"external_reachable": False, "dns_ok": False, "domain_results": {}}  # noqa: E731
+    code = cmd_status(
+        SimpleNamespace(json=True),
+        dict(DEFAULT_CONFIG),
+        out,
+        prober_factory=lambda **kwargs: failing,
+    )
+    assert code == 1
+    assert '"classification": "network"' in "\n".join(out.lines)
+
+
+def test_run_exits_nonzero_when_the_command_fails():
+    def failing_run(argv, **kwargs):
+        return SimpleNamespace(
+            returncode=1, stdout="", stderr="ifconfig: interface en99 does not exist"
+        )
+
+    out = collecting()
+    args = SimpleNamespace(key="iface", value=[("device", "en99")], yes=False)
+    code = cmd_run(args, dict(DEFAULT_CONFIG), out, run_fn=failing_run)
+    text = "\n".join(out.lines)
+    assert code == 1
+    assert "failed:" in text
+    assert "en99 does not exist" in text
+
+
+def test_ladder_does_not_claim_failover_is_unconfigured():
+    """A ladder run from the CLI never switches networks, so it must say that
+    -- not "not configured" on a machine where failover is configured.
+    """
+    config = dict(
+        DEFAULT_CONFIG,
+        failover_enabled=True,
+        failover_preferred_service="USB 2.5G",
+        failover_backup_services=["Wi-Fi"],
+    )
+    seen = []
+
+    def executor(step, classification):
+        seen.append(step.name)
+        return "ok: fake"
+
+    out = collecting()
+    code = cmd_ladder(SimpleNamespace(layer="network", repair=True), config, out, executor=executor)
+    text = "\n".join(out.lines)
+    assert code == 0
+    assert "not configured" not in text
+    assert "switch_to_backup_network: SKIPPED" in text
+    assert "switch_to_backup_network" not in seen
+
+
+def test_main_reports_a_bad_config_without_a_traceback(tmp_path):
+    bad = tmp_path / "config.yaml"
+    bad.write_text("- this\n- is a list\n", encoding="utf-8")
+    out = collecting()
+    code = main(["commands", "--config", str(bad)], out=out)
+    assert code == 2
+    assert any(line.startswith("failed:") for line in out.lines)
+
+
+def test_a_global_flag_before_the_subcommand_is_honoured(tmp_path):
+    """`--config x.yaml commands` and `commands --config x.yaml` must load the
+    same file; a subparser default that overwrites the first form silently
+    runs against the wrong config.
+    """
+    bad = tmp_path / "config.yaml"
+    bad.write_text("- this\n- is a list\n", encoding="utf-8")
+    out = collecting()
+    code = main(["--config", str(bad), "commands"], out=out)
+    assert code == 2
+    assert any(str(bad) in line for line in out.lines)
+
+
+def test_console_reports_a_nonzero_exit_with_output_as_failed():
+    """`networksetup` refusing a change prints its reason and exits 1; output
+    alone renders as success.
+    """
+
+    def refusing(argv):
+        return SimpleNamespace(returncode=1, stdout="** Error: could not set", stderr="")
+
+    text, _ = handle("nwi", ConsoleState(), SERVICES, refusing)
+    assert "could not set" in text
+    assert "failed: exited 1" in text
+
+
 # --- console loop -----------------------------------------------------------
 
 
@@ -236,18 +406,31 @@ def test_help_returns_the_guide():
 
 def test_a_read_only_command_runs_immediately():
     text, state = handle("nwi", ConsoleState(), SERVICES, runner)
-    assert "$ scutil --nwi" in text
+    assert "$ /usr/sbin/scutil --nwi" in text
     assert state.pending_key is None
 
 
 def test_a_command_can_be_picked_by_number():
     text, _ = handle("1", ConsoleState(), SERVICES, runner)
-    assert "scutil --nwi" in text
+    assert "/usr/sbin/scutil --nwi" in text
 
 
 def test_an_out_of_range_number_is_rejected():
     text, _ = handle("999", ConsoleState(), SERVICES, runner)
     assert "unknown" in text
+
+
+def test_a_superscript_digit_is_rejected_not_a_crash():
+    """`'²'.isdigit()` is True and `int('²')` raises -- out of the REPL loop."""
+    text, _ = handle("²", ConsoleState(), SERVICES, runner)
+    assert "unknown" in text
+
+
+def test_a_flag_shaped_value_is_refused_before_confirmation():
+    _, state = handle("enable", ConsoleState(), SERVICES, runner)
+    text, state = handle("--help", state, SERVICES, runner)
+    assert text.startswith("failed:")
+    assert state.pending_key is None
 
 
 def test_an_unknown_token_is_rejected_not_executed():
@@ -269,7 +452,7 @@ def test_a_mutating_command_asks_before_running():
 
     text, state = handle("flush-dns", ConsoleState(), SERVICES, recording)
     assert "CHANGES SYSTEM STATE" in text
-    assert "dscacheutil -flushcache" in text, "the user must see what they are approving"
+    assert "/usr/bin/dscacheutil -flushcache" in text, "the user must see what they are approving"
     assert state.pending_confirm is True
     assert called == [], "nothing may run before confirmation"
 
@@ -277,7 +460,7 @@ def test_a_mutating_command_asks_before_running():
 def test_confirming_a_mutating_command_runs_it():
     _, state = handle("flush-dns", ConsoleState(), SERVICES, runner)
     text, state = handle("yes", state, SERVICES, runner)
-    assert "$ dscacheutil -flushcache" in text
+    assert "$ /usr/bin/dscacheutil -flushcache" in text
     assert state.pending_key is None
 
 
@@ -377,7 +560,7 @@ def test_promote_refuses_a_disabled_service_rather_than_claiming_success():
     outcome = promote_service(runner, SERVICES, "M3100")  # M3100 is disabled
     assert outcome.startswith("failed:")
     assert "DISABLED" in outcome
-    assert "netdns run enable" in outcome
+    assert "python3 -m netdnsmonitor.cli run enable" in outcome
 
 
 def test_promote_of_an_enabled_service_goes_through():

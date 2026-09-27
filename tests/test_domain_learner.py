@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import time
 
 from netdnsmonitor.domain_learner import (
     LearnedDomainStore,
@@ -50,6 +51,39 @@ def test_is_probeable_domain_rejects_bare_labels_and_overlong_names():
     assert is_probeable_domain("localhost") is False
     assert is_probeable_domain("example.com") is True
     assert is_probeable_domain("a." * 200 + "com") is False
+
+
+def test_extract_is_linear_on_an_oversized_line():
+    """A 10 KB dotted run took 1.03s with `\\b` anchoring each label restart, and
+    a 50 KB one over fifteen seconds -- on the main thread. The bound here is
+    250x under the measured figure, so a return of the quadratic pattern fails
+    outright rather than flaking.
+    """
+    line = "query for " + "a." * 5000 + " timed out"
+    started = time.perf_counter()
+    extract_failed_domains([line])
+    assert time.perf_counter() - started < 0.25
+
+
+def test_extract_ignores_a_unicode_lookalike_hostname():
+    """IGNORECASE without ASCII folds "ſ" (long s), "İ" and "ı" into ASCII
+    letters, so a lookalike passed the shape check and then blew up in the
+    probe worker's idna encoding.
+    """
+    assert extract_failed_domains(["query for ſſſ.example.com timed out"]) == []
+
+
+def test_is_probeable_domain_rejects_non_ascii_names():
+    assert is_probeable_domain("ſſſ.example.com") is False
+    assert is_probeable_domain("İstanbul.example.com") is False
+
+
+def test_extract_ignores_a_completed_query_line():
+    """ "query for" describes the lookup, not its outcome; the failure markers
+    must be failure phrases or every successful query is learned as a failure.
+    """
+    lines = ["mDNSResponder: query for cache.example.com returned 2 records"]
+    assert extract_failed_domains(lines) == []
 
 
 def test_store_starts_empty_when_the_file_is_missing(tmp_path):
@@ -183,6 +217,19 @@ def test_extract_ignores_the_log_subsystem_label():
     assert extract_failed_domains([line]) == ["real.example.com"]
 
 
+def test_extract_ignores_the_redaction_placeholder():
+    """The stock macOS log masks hostnames as "<mask.hash: '...'>" (or
+    "<private>"). "mask.hash" has the shape of a domain, so it was learned,
+    probed, pruned, and learned again on every scan -- a permanent phantom.
+    """
+    line = (
+        "2026-08-05 20:33:10.054 Df mDNSResponder[441:66b4fc] "
+        "[com.apple.mdns:resolver] [Q65460] query for <mask.hash: 'k3JfQ2c='> timed out"
+    )
+    assert extract_failed_domains([line]) == []
+    assert extract_failed_domains(["query for <private> timed out"]) == []
+
+
 def test_is_probeable_domain_rejects_reverse_dns_bundle_identifiers():
     assert is_probeable_domain("com.apple.mdns") is False
     assert is_probeable_domain("org.mozilla.firefox") is False
@@ -201,6 +248,7 @@ def test_learner_merges_configured_domains_with_learned_ones(tmp_path):
         store=store,
         configured_domains=["configured.example.com"],
         clock=lambda: 0.0,
+        spawn=lambda fn: fn(),
     )
     assert domains() == ["configured.example.com", "learned.example.com"]
 
@@ -219,6 +267,7 @@ def test_learner_rate_limits_the_log_scan(tmp_path):
         configured_domains=[],
         interval_seconds=300.0,
         clock=lambda: now["t"],
+        spawn=lambda fn: fn(),
     )
     domains()
     now["t"] = 100.0
@@ -229,6 +278,70 @@ def test_learner_rate_limits_the_log_scan(tmp_path):
     assert len(scans) == 2
 
 
+def test_learner_returns_before_the_log_scan_runs(tmp_path):
+    """`domains()` is called from the rumps timer; `log show` costs whole
+    seconds. The scan is handed to `spawn` and the tick returns at once, so a
+    domain the scan finds is visible on the *next* tick, not the one that
+    started it.
+    """
+    pending = []
+    store = LearnedDomainStore(str(tmp_path / "learned.json"))
+    domains = make_domain_learner(
+        log_watcher=lambda: ["query for later.example.com timed out"],
+        store=store,
+        configured_domains=["configured.example.com"],
+        clock=lambda: 0.0,
+        spawn=pending.append,
+    )
+    assert domains() == ["configured.example.com"]
+    assert len(pending) == 1
+    pending[0]()
+    assert domains() == ["configured.example.com", "later.example.com"]
+
+
+def test_learner_does_not_start_a_second_scan_while_one_is_in_flight(tmp_path):
+    pending = []
+    now = {"t": 0.0}
+    domains = make_domain_learner(
+        log_watcher=lambda: [],
+        store=LearnedDomainStore(str(tmp_path / "learned.json")),
+        configured_domains=[],
+        interval_seconds=1.0,
+        clock=lambda: now["t"],
+        spawn=pending.append,
+    )
+    domains()
+    now["t"] = 5.0
+    domains()
+    assert len(pending) == 1
+    pending[0]()
+    now["t"] = 10.0
+    domains()
+    assert len(pending) == 2
+
+
+def test_a_scan_that_raises_does_not_escape_and_releases_the_in_flight_flag(tmp_path):
+    pending = []
+    now = {"t": 0.0}
+
+    def broken_watcher():
+        raise OSError("log show exploded")
+
+    domains = make_domain_learner(
+        log_watcher=broken_watcher,
+        store=LearnedDomainStore(str(tmp_path / "learned.json")),
+        configured_domains=["configured.example.com"],
+        interval_seconds=1.0,
+        clock=lambda: now["t"],
+        spawn=pending.append,
+    )
+    domains()
+    pending[0]()  # must not raise
+    now["t"] = 5.0
+    assert domains() == ["configured.example.com"]
+    assert len(pending) == 2
+
+
 def test_learner_does_not_duplicate_a_domain_that_is_both_configured_and_learned(tmp_path):
     store = LearnedDomainStore(str(tmp_path / "learned.json"))
     domains = make_domain_learner(
@@ -236,5 +349,6 @@ def test_learner_does_not_duplicate_a_domain_that_is_both_configured_and_learned
         store=store,
         configured_domains=["shared.example.com"],
         clock=lambda: 0.0,
+        spawn=lambda fn: fn(),
     )
     assert domains() == ["shared.example.com"]

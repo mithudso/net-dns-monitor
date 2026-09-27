@@ -33,6 +33,7 @@ from netdnsmonitor.privileges import (
     granted_interfaces_from,
     install_command,
     is_granted,
+    is_granted_from,
     parse_granted_commands,
     primary_interface,
     revoke,
@@ -207,6 +208,21 @@ def test_the_script_validates_with_visudo_before_installing_anything():
     assert script.index("visudo -cf") < script.index(f'/bin/mv "$tmp" {SUDOERS_PATH}')
 
 
+def test_a_truncated_decode_is_refused_before_visudo_sees_it():
+    """`set -e` does not notice a failing non-final member of `echo ... | base64 -D >
+    "$tmp"`, and `visudo -cf` accepts an empty file. A truncated decode would
+    therefore be validated, moved into place, and announced as "Granted" for a file
+    that permits nothing. The byte count is checked against the body before visudo
+    runs.
+    """
+    body = sudoers_body("mitch.hudson", ["en0"])
+    script = _install_script(body)
+    assert "wc -c" in script
+    assert str(len(body.encode("utf-8"))) in script
+    assert script.index("wc -c") < script.index("visudo -cf")
+    assert script.index("wc -c") > script.index("base64 -D")
+
+
 def test_the_script_never_edits_the_main_sudoers_file():
     script = _install_script(sudoers_body("mitch.hudson", ["en0"]))
     assert "> /etc/sudoers" not in script
@@ -317,6 +333,49 @@ def test_a_blanket_nopasswd_rule_counts_as_granted():
     # ...and it must still refuse the policy-only case.
     policy_only = "User mitch may run the following commands on host:\n    (ALL) ALL\n"
     assert is_granted(recorder(ok(policy_only))) is False
+
+
+def test_a_nopasswd_rule_for_another_runas_user_does_not_count_as_granted():
+    """`(_jenkins) NOPASSWD: ALL` lets this account run anything -- as _jenkins.
+    Nothing in it may run as root, so `sudo -n killall -HUP mDNSResponder` would be
+    refused, and a "granted" answer here sends flush_dns_cache down the branch that
+    blames the granted sudo rule for a grant that was never made.
+    """
+    listing = (
+        "User mitch may run the following commands on host:\n"
+        "    (_jenkins) NOPASSWD: ALL\n"
+        "    (ALL) ALL\n"
+    )
+    assert parse_granted_commands(listing) == []
+    assert is_granted(recorder(ok(listing))) is False
+
+
+def test_a_runas_list_that_includes_root_or_all_still_counts():
+    for runas in ("(root)", "(ALL)", "(ALL : ALL)", "(_jenkins, root)"):
+        listing = f"    {runas} NOPASSWD: /usr/bin/killall -HUP mDNSResponder\n"
+        assert is_granted(recorder(ok(listing))) is True, runas
+
+
+def test_is_granted_from_answers_the_same_question_as_is_granted():
+    """One `sudo -l` listing answers both "is it granted" and "which interfaces";
+    the app parses it once and must ask *this* function, not compare the joined
+    argv against the spec list itself -- exact matching is what `covers` exists to
+    replace, and bypassing it reports a blanket rule as "not granted".
+    """
+    assert is_granted_from(parse_granted_commands(SUDO_LIST_WITH_GRANT)) is True
+    assert is_granted_from(parse_granted_commands(SUDO_LIST_WITHOUT_GRANT)) is False
+    assert is_granted_from(["ALL"]) is True
+
+
+def test_a_bare_command_spec_permits_any_arguments():
+    """sudoers(5): a Cmnd with no arguments matches the command with any arguments.
+    `(root) NOPASSWD: /usr/bin/killall` therefore does permit `killall -HUP
+    mDNSResponder`, and answering "not granted" refuses a repair that would work.
+    """
+    assert is_granted_from(["/usr/bin/killall"]) is True
+    # But not a different binary, and not a spec with *different* arguments.
+    assert is_granted_from(["/usr/bin/kill"]) is False
+    assert is_granted_from(["/usr/bin/killall -9 mDNSResponder"]) is False
 
 
 def test_a_blanket_rule_is_reported_as_covering_every_interface():
@@ -469,6 +528,15 @@ def test_revoking_deletes_the_file_and_says_what_stops_working():
     assert "partial" in result["message"]
 
 
+def test_revoking_does_not_claim_to_have_removed_rules_it_never_installed():
+    """On a machine with an unrelated blanket NOPASSWD rule, "nothing runs as root
+    without a prompt any more" is false the moment it is printed.
+    """
+    result = revoke(run_fn=recorder(ok()))
+    assert "Nothing this app installed" in result["message"]
+    assert "nothing runs as root without a prompt" not in result["message"].lower()
+
+
 # --- what the window shows -------------------------------------------------
 
 
@@ -532,3 +600,15 @@ def test_a_default_route_the_grant_does_not_cover_is_called_out():
 def test_no_default_route_is_reported_as_unknown_rather_than_yes():
     rows = dict(status_rows(granted=True, interfaces=["en0"], primary=None))
     assert rows["Renew DHCP lease"].startswith("unknown")
+
+
+def test_a_default_route_on_a_vpn_tunnel_is_not_reported_as_no_route():
+    """`primary_interface` only returns Ethernet or Wi-Fi names, so a full-tunnel
+    VPN (default route on utun4) yields None. The window must not turn that None
+    into "nothing currently carries the default route" -- something does, it is
+    just not an interface the grant can cover.
+    """
+    assert primary_interface(recorder(ok("  interface: utun4\n"))) is None
+    rows = dict(status_rows(granted=True, interfaces=["en0"], primary=None))
+    assert "nothing currently carries the default route" not in rows["Renew DHCP lease"]
+    assert "Ethernet or Wi-Fi" in rows["Renew DHCP lease"]
