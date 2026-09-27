@@ -404,10 +404,19 @@ GRAPH_KINDS = (
 )
 
 
+def window_width(log_column: bool = True) -> int:
+    return WINDOW_WIDTH if log_column else LEFT_WIDTH
+
+
 class DashboardWindow:
     """Retains an NSWindow and the views inside it that get updated."""
 
-    def __init__(self, on_action: Callable[[str], None], actions: Optional[list] = None):
+    def __init__(
+        self,
+        on_action: Callable[[str], None],
+        actions: Optional[list] = None,
+        log_column: bool = True,
+    ):
         import AppKit
 
         self.on_action = on_action
@@ -416,8 +425,14 @@ class DashboardWindow:
         # shell" button whose only answer is that it is unavailable.
         self.actions = list(ALL_ACTIONS if actions is None else actions)
         self._target = _make_button_target(self._handle)
+        # The store build cannot read the unified log, so its log column could only
+        # ever say so: a search field and four buttons answering "unavailable" on
+        # half the window, which a reviewer reads as a feature that does not work.
+        # Without it the window is the left column alone, which is what the whole
+        # window was before the log pane existed.
+        self.log_column = log_column
 
-        rect = AppKit.NSMakeRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+        rect = AppKit.NSMakeRect(0, 0, window_width(log_column), WINDOW_HEIGHT)
         style = (
             AppKit.NSWindowStyleMaskTitled
             | AppKit.NSWindowStyleMaskClosable
@@ -460,7 +475,11 @@ class DashboardWindow:
         self.output_view.setString_("Results of anything you run from here appear in this pane.\n")
 
         self.log_control_buttons = {}
-        self._add_log_column(AppKit, content)
+        self.log_search_field = None
+        self.log_status_label = None
+        self.log_view = None
+        if log_column:
+            self._add_log_column(AppKit, content)
 
     def _add_graphs(self, AppKit, content):
         """One image view per series, stacked under the stats pane.
@@ -664,10 +683,13 @@ class DashboardWindow:
         keystroke, and the failure mode is a pane that filters on something other
         than what the box says.
         """
+        if self.log_search_field is None:
+            return ""
         return str(self.log_search_field.stringValue() or "")
 
     def set_search_query(self, text: str):
-        self.log_search_field.setStringValue_(text)
+        if self.log_search_field is not None:
+            self.log_search_field.setStringValue_(text)
 
     def set_log(self, text: str):
         """Replace the pane's contents.
@@ -678,10 +700,12 @@ class DashboardWindow:
         it. `App._refresh_log_pane` holds the comparison, the same way
         `_refresh_dashboard` does for the stats pane.
         """
-        self.log_view.setString_(text)
+        if self.log_view is not None:
+            self.log_view.setString_(text)
 
     def set_log_status(self, text: str):
-        self.log_status_label.setStringValue_(text)
+        if self.log_status_label is not None:
+            self.log_status_label.setStringValue_(text)
 
     def set_log_level_title(self, title: str):
         """The level button's label states the *current* filter, not the action.

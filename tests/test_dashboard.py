@@ -664,3 +664,41 @@ def test_the_output_pane_keeps_only_the_tail_once_it_is_full():
     body = str(window.output_view.string())
     assert len(body) <= OUTPUT_MAX_CHARS
     assert body.endswith("the end\n")
+
+
+# --- the store build: no log column ---------------------------------------
+
+
+def test_without_the_log_column_the_window_is_the_left_column_alone():
+    """The store build cannot read the unified log, so it builds no log column:
+    no search field, no log controls, no pane, and a window the width of the left
+    column. The troubleshooting grid is unaffected.
+    """
+    window = DashboardWindow(
+        on_action=lambda action: None, actions=TROUBLESHOOTING_ACTIONS, log_column=False
+    )
+    assert window.window.frame().size.width == LEFT_WIDTH
+    assert window.log_view is None
+    assert window.log_search_field is None
+    assert window.log_status_label is None
+    assert window.log_control_buttons == {}
+    assert len(window.buttons) == len(TROUBLESHOOTING_ACTIONS)
+
+
+def test_without_the_log_column_nothing_is_laid_out_past_the_left_column():
+    window = DashboardWindow(on_action=lambda action: None, log_column=False)
+    for view in window.window.contentView().subviews():
+        frame = view.frame()
+        assert frame.origin.x + frame.size.width <= LEFT_WIDTH - MARGIN
+
+
+def test_log_pane_calls_are_harmless_without_the_log_column():
+    """App keeps calling the log-pane methods from paths shared with the direct
+    build; with no column they must do nothing rather than raise into a tick.
+    """
+    window = DashboardWindow(on_action=lambda action: None, log_column=False)
+    window.set_log("12:00:00 ! configd: something\n")
+    window.set_log_status("status")
+    window.set_search_query("dns")
+    window.set_log_level_title("All levels")
+    assert window.search_query() == ""

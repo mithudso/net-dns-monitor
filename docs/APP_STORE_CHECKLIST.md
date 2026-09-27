@@ -16,7 +16,7 @@ ship the full build outside the store instead (§10). Both can coexist.
 | Item | Evidence (2026-09-17) |
 |---|---|
 | Store edition code | `netdnsmonitor/distribution.py` (sandbox gating), `credentials.py` (Keychain), `ai_consent.py` (Guideline 5.1.2(i) permission) |
-| Tests and lint | `python3 -m pytest -q`: 2124 passed in 25 s, offline (2026-09-27). `ruff check .` and `ruff format --check .` clean |
+| Tests and lint | `python3 -m pytest -q`: 2129 passed in 27 s, offline (2026-09-27). `ruff check .` and `ruff format --check .` clean |
 | Ad-hoc sandboxed build | `build_appstore.py adhoc --with-probe` produced `build/appstore/adhoc/dist/Net-DNS-Monitor.app`: 58 MB, arm64, `LSMinimumSystemVersion` 26.0, `codesign --verify --strict --deep` valid, entitlements exactly app-sandbox + network.client + network.server, no `itms-services` anywhere, icon holds the 512 and 512@2x elements |
 | Sandbox probe, run inside that bundle | Same result as 2026-09-14. Works: container write, TCP connect, `getaddrinfo`, UDP DNS, HTTPS, interface-bound connect on `en0`, UDP bind, Keychain round trip, `ping`, `networksetup -listnetworkserviceorder`, `scutil`, `netstat`, `ifconfig`, `route`. Refused: `log show` (`Cannot run while sandboxed`), reading the real `~/.config` |
 | Local-network permission text | `NSLocalNetworkUsageDescription` is in every build's plist; the store build refuses a bundle without it (macOS 15+ prompt, Apple TN3179) |
@@ -265,14 +265,10 @@ Uploads so far (2026-09-27):
 
 ## 4. Open items that do not block submission
 
-- **Decide before submitting:** the store dashboard's right half is the
-  system-log pane, which in the sandbox can only show
-  `UNAVAILABLE_IN_APP_STORE_BUILD: reading the system log is not available…`,
-  with a search field and four buttons that answer the same. A reviewer may
-  read it as a non-working feature (Guideline 2.1), and it fills half of both
-  dashboard screenshots. Fix: skip the log column in `DashboardWindow` (and
-  size the window to `LEFT_WIDTH`) when `capabilities.unified_log` is off,
-  then build 3 and retake the screenshots.
+- Done 2026-09-27 (owner chose to fix before submitting): the store build's
+  dashboard leaves out the system-log column, which in the sandbox could only
+  answer `UNAVAILABLE_IN_APP_STORE_BUILD`; the window is the left column alone
+  (`DashboardWindow(log_column=False)`). Needs build 3 and retaken screenshots.
 
 - The NAT LaunchDaemon on this Mac still runs a user-writable script as root
   until `sudo router/scripts/install_persistent_nat.sh` is re-run (CLAUDE.md,

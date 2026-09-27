@@ -974,3 +974,26 @@ def test_direct_dashboard_grid_keeps_every_action(tmp_path):
 
     app = build_app(tmp_path, capabilities=DIRECT)
     assert app.dashboard_actions() == list(ALL_ACTIONS)
+
+
+def test_store_dashboard_has_no_log_column_and_skips_the_log_refresh(tmp_path):
+    """The log column could only say "unavailable" in the store build, so the
+    window leaves it out, and the 1s refresh skips the filter pass that fed it.
+    """
+    app = build_app(tmp_path)
+    dashboard = app._ensure_dashboard()
+    assert dashboard.log_column is False
+    assert dashboard.log_view is None
+
+    def view(**_kwargs):
+        raise AssertionError("the store build must not filter a log it cannot show")
+
+    app.log_buffer.view = view
+    app._refresh_log_pane(force=True)
+
+
+def test_direct_dashboard_keeps_the_log_column(tmp_path):
+    app = build_app(tmp_path, capabilities=DIRECT)
+    dashboard = app._ensure_dashboard()
+    assert dashboard.log_column is True
+    assert dashboard.log_view is not None
