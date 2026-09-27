@@ -8,9 +8,10 @@ is a pointer to that artifact, not a copy of it.
 Both notifiers take an injected transport so tests never open a socket, and
 neither ever raises: a delivery failure returns {"error": ...} so the report
 still gets written and the menu bar keeps ticking. Timeouts are short and
-mandatory -- this code runs on the rumps main thread at the exact moment the
-network is known to be broken, and a blocking send would freeze the UI
-during the very incident it is reporting.
+mandatory. app.py normally sends from a worker thread, not the rumps main
+thread, but it falls back to sending inline when a thread cannot be started;
+an unbounded send at the exact moment the network is known to be broken would
+then freeze the UI during the very incident it is reporting.
 
 Secrets (the Slack webhook URL, the SMTP password) come from the environment,
 never from config.yaml, and are never echoed into an error string: urllib's
@@ -22,6 +23,7 @@ import contextlib
 import http.client
 import json
 import smtplib
+import ssl
 import urllib.error
 import urllib.request
 from email.message import EmailMessage
@@ -38,7 +40,11 @@ def format_notification(report: dict, report_path: Optional[str] = None) -> str:
         f"Net/DNS incident: {report.get('classification', 'unknown')}",
         f"Started: {report.get('started_at')}",
         f"Duration: {report.get('duration_seconds', 0):.0f}s",
-        f"Resolved by local repair: {report.get('resolved')}",
+        # `resolved` is only the recheck result. It is also True for an
+        # UNCLASSIFIED incident, which runs no ladder, and for a blip that
+        # cleared while every repair returned NEEDS_PRIVILEGE -- so it must not
+        # be worded as a repair having worked.
+        f"Healthy on recheck: {report.get('resolved')}",
         f"Summary: {report.get('summary')}",
     ]
     repair_outcome = report.get("repair_outcome")
@@ -47,7 +53,9 @@ def format_notification(report: dict, report_path: Optional[str] = None) -> str:
     escalation = report.get("escalation") or {}
     analysis = escalation.get("analysis") if isinstance(escalation, dict) else None
     if analysis:
-        lines.append(f"Claude analysis: {analysis}")
+        # Model output over log lines any local process can write: labelled so
+        # nobody acts on it as a verified diagnosis.
+        lines.append(f"Claude analysis (unverified, derived from local logs): {analysis}")
     if report_path:
         lines.append(f"Full report: {report_path}")
     return "\n".join(lines)
@@ -79,7 +87,11 @@ def make_slack_notifier(
         return lambda _text: {"channel": "slack", "error": "webhook URL is not https"}
 
     def notify(text: str) -> dict:
-        payload = json.dumps({"text": text}).encode("utf-8")
+        # Slack parses <!channel>, <@user> and <url|label> inside `text`, and
+        # the Claude analysis in this text derives from untrusted log lines.
+        # These three are the only characters Slack requires escaped.
+        escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        payload = json.dumps({"text": escaped}).encode("utf-8")
         try:
             status, body = post_fn(webhook_url, payload, timeout)
         except urllib.error.HTTPError as exc:
@@ -120,6 +132,11 @@ def make_email_notifier(
     def notify(text: str) -> dict:
         if not recipients:
             return {"channel": "email", "skipped": "no recipients configured"}
+        if username and password and not use_starttls:
+            # Checked before connecting: AUTH over a cleartext session hands
+            # SMTP_PASSWORD to anyone on the path, and this alert goes out over
+            # whatever network the Mac is on, untrusted Wi-Fi included.
+            return {"channel": "email", "error": "refusing SMTP login without TLS"}
         message = EmailMessage()
         message["Subject"] = "Net/DNS incident detected"
         message["From"] = sender
@@ -141,13 +158,14 @@ def make_email_notifier(
             return {"channel": "email", "error": f"SMTP connect to {host}:{port} failed"}
         try:
             if use_starttls:
-                client.starttls()
+                # Without an explicit context smtplib uses an unverified one
+                # (no hostname check, CERT_NONE), so a MITM could complete the
+                # handshake and read the login that follows.
+                client.starttls(context=ssl.create_default_context())
             if username and password:
                 client.login(username, password)
-            # send_message raises only when the server refused EVERY recipient;
-            # a partial refusal comes back as a dict of the refused addresses,
-            # and swallowing it would report a delivery to people who never got
-            # the message.
+            # send_message raises only when every recipient is refused; a
+            # partial refusal comes back as a dict and is otherwise invisible.
             refused = client.send_message(message) or {}
         except smtplib.SMTPAuthenticationError:
             # Never echo the exception: it can carry the credential back.
@@ -165,16 +183,14 @@ def make_email_notifier(
                 # failure here has nowhere useful to go.
                 with contextlib.suppress(Exception):
                     client.close()
-        delivered_to = [r for r in recipients if r not in refused]
-        if not delivered_to:
-            return {"channel": "email", "error": "SMTP refused every recipient"}
-        # Addresses only: the server's refusal text is not copied out.
-        return {
+        result = {
             "channel": "email",
             "delivered": True,
-            "recipients": delivered_to,
-            "refused": sorted(refused),
+            "recipients": [r for r in recipients if r not in refused],
         }
+        if refused:
+            result["refused"] = sorted(refused)
+        return result
 
     return notify
 

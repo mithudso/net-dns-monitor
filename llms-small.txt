@@ -1,0 +1,11 @@
+<!-- generated: llms-suite 1.0, 2026-09-25; verified-as-of 2026-09-25; local paths rewritten to repo-relative -->
+
+# net-dns-monitor (small)
+
+> Condensed summary of net-dns-monitor, a macOS menu bar app that diagnoses network and DNS outages and writes an IT-ready incident report.
+
+net-dns-monitor is a single-process macOS menu bar app (Python and rumps; no server, no database). Each tick `state_machine.py` probes reachability and DNS (`prober.py`), classifies the result as HEALTHY, NETWORK, DNS or UNCLASSIFIED (`classifier.py`), debounces with `flap_gate.py`, runs an ordered ladder of check and repair steps (`ladder.py`, `repair_executor.py`), re-probes, and writes a timestamped `.json` and `.md` incident report. Claude is called only if the ladder and repair leave the incident unresolved, after `escalation.py` redacts `sensitive_strings`.
+
+It fixes only a small set of local problems. `dscacheutil -flushcache` works unprivileged, but `killall -HUP mDNSResponder` does not, so the flush is reported as partial. DHCP renewal and interface toggling are stubbed as `NEEDS_PRIVILEGE`. Optional Slack and email alerts send a redacted summary on incident onset only. An interactive console runs shell commands as the user, with a 20 second timeout and a 64 KB output cap.
+
+Setup: create a venv, `pip install -r requirements.txt`, copy `config.example.yaml` to `~/.config/net-dns-monitor/config.yaml`, then run `python -m netdnsmonitor.app`. Set `ANTHROPIC_API_KEY` to enable escalation. Verify with `python -m pytest -v`; `app.py` is the one module without full test coverage.

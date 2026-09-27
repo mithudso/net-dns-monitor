@@ -1,0 +1,25 @@
+<!-- generated: llms-suite 1.0, 2026-09-25; verified-as-of 2026-09-25; local paths rewritten to repo-relative -->
+
+# net-dns-monitor: Sourced Facts
+
+One declarative fact per line, each tagged with the repo-relative file it came from.
+
+## Facts
+
+- net-dns-monitor is a macOS menu bar app that monitors network and DNS connectivity, auto-diagnoses via an offline troubleshooting ladder, escalates to Claude, and saves an IT-ready incident report [src: README.md]
+- It is a single-process rumps app with no server component and no database [src: docs/ARCHITECTURE.md]
+- state_machine.tick() probes, classifies as HEALTHY, NETWORK, DNS or UNCLASSIFIED, debounces via flap_gate, then runs the ladder [src: docs/ARCHITECTURE.md]
+- An incident is declared only after failure_threshold consecutive bad ticks and cleared after success_threshold consecutive healthy ticks [src: docs/ARCHITECTURE.md]
+- The Claude API is reached only if escalation.py says to escalate, after redaction of sensitive_strings [src: docs/ARCHITECTURE.md]
+- dscacheutil -flushcache runs unprivileged but killall -HUP mDNSResponder does not, so the flush is reported as partial [src: README.md]
+- Repairs that need elevated privilege (DHCP lease renewal, network service toggling) are stubbed as NEEDS_PRIVILEGE [src: docs/known-issues.md]
+- Setting ANTHROPIC_API_KEY enables escalation; without it escalation is skipped and the report is still written [src: docs/DEVELOPMENT.md]
+- Slack and email notifications carry a redacted summary and fire on incident onset only, so they cannot fire during a full outage [src: README.md]
+- The Slack webhook URL and SMTP password stay in environment variables, never in config.yaml [src: README.md]
+- The domain learner scans the unified log for failed DNS resolutions, but stock macOS masks hostnames, so it finds nothing by default [src: README.md]
+- The console runs arbitrary shell commands as the user with a 20-second timeout, /dev/null stdin and a 64 KB output cap [src: README.md]
+- Every incident writes a timestamped .json and .md report under reports_dir [src: README.md]
+- The codebase is test-first, and every decision module has a matching tests/test_*.py file with injected fakes [src: CLAUDE.md]
+- app.py is thin wiring and is the one module without full automated test coverage [src: docs/TESTING.md]
+- There is no CI workflow, no .env.example and no packaged .app bundle [src: docs/known-issues.md]
+- The project is a personal single-maintainer utility, so CI/CD, multi-tenant and server-side infrastructure do not apply [src: CLAUDE.md]

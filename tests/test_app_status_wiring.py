@@ -105,6 +105,11 @@ def test_a_raising_resolution_job_does_not_kill_the_worker_silently(tmp_path):
     app.resolution_tick()
     app._resolution_thread.join(timeout=5)
     assert not app._resolution_thread.is_alive()
+    # The title cannot show it, so `:status` has to. Class name only: an
+    # exception message can carry a path or a URL.
+    status = app.status_snapshot()
+    assert "resolution batch failed: RuntimeError" in status
+    assert "unwritable" not in status
 
     # The next cycle still runs rather than the app wedging.
     app.resolution_job = lambda: []

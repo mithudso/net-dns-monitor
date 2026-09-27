@@ -12,7 +12,13 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="$REPO_DIR/.venv"
 CONFIG_DIR="$HOME/.config/net-dns-monitor"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
+CONSTRAINTS="$REPO_DIR/constraints.txt"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+LABEL="com.mitchhudson.net-dns-monitor"
+
+# Same floor as scripts/install.sh, which says why it is 3.13 rather than the
+# 3.10 the pins technically allow.
+MIN_PYTHON_MINOR=13
 
 ok()   { echo "OK   $1"; }
 info() { echo "..   $1"; }
@@ -24,9 +30,10 @@ echo "== net-dns-monitor: checking install =="
 ok "running on macOS"
 
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "$PYTHON_BIN not found on PATH"
-PY_OK=$("$PYTHON_BIN" -c 'import sys; print(int(sys.version_info >= (3, 9)))')
+PY_OK=$("$PYTHON_BIN" -c "import sys; print(int(sys.version_info >= (3, $MIN_PYTHON_MINOR)))")
 PY_VER=$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
-[[ "$PY_OK" == "1" ]] || fail "python 3.9+ required, found $PY_VER"
+[[ "$PY_OK" == "1" ]] \
+    || fail "python 3.$MIN_PYTHON_MINOR+ required, found $PY_VER -- set PYTHON_BIN to a 3.$MIN_PYTHON_MINOR interpreter (e.g. PYTHON_BIN=python3.$MIN_PYTHON_MINOR)"
 ok "python $PY_VER"
 
 for bin in log scutil dscacheutil killall netstat; do
@@ -44,7 +51,15 @@ fi
 source "$VENV_DIR/bin/activate"
 [[ "$(command -v python)" == "$VENV_DIR/bin/python" ]] \
     || fail "venv at $VENV_DIR looks broken (activation didn't put its python on PATH) -- remove it and re-run: rm -rf $VENV_DIR"
-pip install -q -r "$REPO_DIR/requirements.txt"
+# The check above covered PYTHON_BIN, not the interpreter an existing venv was
+# built with, and a leftover older venv otherwise fails inside pip.
+[[ "$(python -c "import sys; print(int(sys.version_info >= (3, $MIN_PYTHON_MINOR)))")" == "1" ]] \
+    || fail "venv at $VENV_DIR was created with Python older than 3.$MIN_PYTHON_MINOR -- remove it and re-run: rm -rf $VENV_DIR"
+# `python -m pip`, not bare `pip`: a venv made by uv has no pip of its own, and a
+# bare `pip` then resolves to whichever one is next on PATH and installs into a
+# different interpreter. ensurepip gives such a venv its own.
+python -m pip --version >/dev/null 2>&1 || python -m ensurepip --upgrade >/dev/null
+python -m pip install -q -r "$REPO_DIR/requirements.txt" -c "$CONSTRAINTS"
 ok "venv ready, dependencies installed"
 
 echo "== verifying components =="
@@ -151,13 +166,15 @@ NEEDS_BUILD=0
 if [[ ! -x "$APP_EXECUTABLE" ]]; then
     NEEDS_BUILD=1
 elif [[ -n "$(find "$REPO_DIR/netdnsmonitor" "$REPO_DIR/setup.py" "$REPO_DIR/requirements.txt" \
-        -name '__pycache__' -prune -o -newer "$APP_EXECUTABLE" -print 2>/dev/null)" ]]; then
+        "$CONSTRAINTS" -name '__pycache__' -prune -o -newer "$APP_EXECUTABLE" -print 2>/dev/null)" ]]; then
     NEEDS_BUILD=1
 fi
 
 if [[ "$NEEDS_BUILD" == "1" ]]; then
     info "building $APP_BUNDLE (py2app) -- this is slower than a plain launch, only happens when the bundle is missing or source has changed"
-    python -c "import py2app" >/dev/null 2>&1 || pip install -q "py2app>=0.28"
+    # Pinned through constraints.txt, and installed even when some py2app is
+    # already present, so an older one is moved to the pin rather than kept.
+    python -m pip install -q py2app -c "$CONSTRAINTS"
     # py2app's intermediate build/ staging dir isn't safe to reuse across
     # runs (confirmed empirically: a second py2app invocation failed with
     # "[Errno 66] Directory not empty" against a stale one) -- clear it,
@@ -168,6 +185,21 @@ if [[ "$NEEDS_BUILD" == "1" ]]; then
     ok "built $APP_BUNDLE"
 else
     ok "$APP_BUNDLE is up to date, skipping rebuild"
+fi
+
+# Refuse to start a second copy. `open -n` always creates a new instance, so
+# launching while the supervised LaunchAgent is loaded, or while an earlier
+# launch is still running, puts two icons in the menu bar. A copy launchd did
+# not start is also one net-dns-monitor-service cannot see, so its `start` and
+# `check` would add a third. Checked after the build on purpose: rebuilding here
+# and then running `net-dns-monitor-service update` is how new code gets under
+# supervision, and that path still needs the build.
+if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+    fail "not launching: the supervised LaunchAgent $LABEL is loaded, so this would be a second copy. The bundle is built at $APP_BUNDLE. To run it under supervision: NDM_SOURCE_BUNDLE='$APP_BUNDLE' net-dns-monitor-service update. To develop with this script instead, remove supervision first: net-dns-monitor-service uninstall"
+fi
+RUNNING_PIDS="$(pgrep -x Net-DNS-Monitor | tr '\n' ' ' | sed 's/ $//' || true)"
+if [[ -n "$RUNNING_PIDS" ]]; then
+    fail "not launching: Net-DNS-Monitor is already running (pid(s): $RUNNING_PIDS), so this would be a second copy. Quit it from the menu bar first, then re-run."
 fi
 
 LOG_FILE="$REPO_DIR/net-dns-monitor.log"

@@ -7,8 +7,11 @@ actually on disk.
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from netdnsmonitor.forensic_log import (
     DOWN,
@@ -250,9 +253,9 @@ def test_observations_are_capped_in_the_document_but_not_the_journal(tmp_path):
     episode = json.loads(Path(paths["json_path"]).read_text(encoding="utf-8"))
     observations = [e for e in episode["events"] if e["kind"] == OBSERVATION]
     assert len(observations) == MAX_OBSERVATIONS_PER_EPISODE
-    assert episode["observations_not_included"] == 2
+    assert episode["observations_omitted"] == 2
     body = Path(paths["markdown_path"]).read_text(encoding="utf-8")
-    assert "2 further observations" in body
+    assert "2 more observations" in body
     # Every event, capped or not, is in the journal and attributed to the episode.
     events = journal_lines(tmp_path)
     assert len(events) == MAX_OBSERVATIONS_PER_EPISODE + 4
@@ -403,3 +406,150 @@ def test_rendering_an_episode_that_never_closed_does_not_crash():
     body = render_episode_markdown({"started_at": "t0", "events": []})
     assert "still down" in body
     assert "unknown" in body
+
+
+def test_a_declared_incident_with_no_steps_does_not_claim_the_gate_never_declared(tmp_path):
+    """An unclassified incident runs no ladder step but still writes DOWN from the
+    gate. Saying the outage "cleared before the anti-flap gate declared an
+    incident" there is a false statement in an IT-facing document.
+    """
+    rec = make_recorder(tmp_path)
+    rec.note(DOWN, "ping", reason="No reply")
+    rec.note(DOWN, "flap_gate", reason="2 consecutive failed probes; classified as unclassified")
+    rec.note(RECHECK, "flap_gate", result="still failing")
+    paths = rec.note(UP, "ping")
+    body = Path(paths["markdown_path"]).read_text(encoding="utf-8")
+    assert "No remedial step ran" in body
+    assert "before the anti-flap gate" not in body
+    assert "The anti-flap gate declared an incident" in body
+
+
+# --- bounds ----------------------------------------------------------------
+
+
+def test_observations_are_capped_in_memory_but_every_event_is_journaled(tmp_path):
+    """A 13-day episode accumulated thousands of system-log observations, all
+    held in memory and re-serialised on close. The cap applies to observations
+    only: the down/up/step/recheck/escalation events are the story itself.
+    """
+    rec = make_recorder(tmp_path)
+    rec.note(DOWN, "ping", reason="No reply")
+    for index in range(10_000):
+        rec.note(OBSERVATION, "system_log", detail=f"line {index}")
+    rec.note(DOWN, "flap_gate", reason="incident declared")
+    rec.note(STEP, "flap_gate", detail="flush_dns_cache", result="ok")
+    rec.note(RECHECK, "flap_gate", result="still failing")
+    rec.note(ESCALATION, "flap_gate", result="sent to Claude")
+
+    events = rec.episode["events"]
+    observations = [e for e in events if e["kind"] == OBSERVATION]
+    assert len(observations) == 5000
+    assert [e["kind"] for e in events if e["kind"] != OBSERVATION] == [
+        DOWN,
+        DOWN,
+        STEP,
+        RECHECK,
+        ESCALATION,
+    ]
+
+    paths = rec.note(UP, "ping")
+    episode = json.loads(Path(paths["json_path"]).read_text(encoding="utf-8"))
+    assert episode["observations_omitted"] == 5000
+    assert episode["events"][-1]["kind"] == UP
+    body = Path(paths["markdown_path"]).read_text(encoding="utf-8")
+    assert "5000 more observations were recorded only in the journal" in body
+    assert str(tmp_path / "forensic.jsonl") in body
+    assert len(journal_lines(tmp_path)) == 1 + 10_000 + 4 + 1
+
+
+def test_the_cap_does_not_claim_the_journal_holds_what_it_could_not_write(tmp_path):
+    rec = ForensicRecorder(
+        journal_path=str(tmp_path / "blocker" / "forensic.jsonl"),
+        episodes_dir=str(tmp_path / "episodes"),
+        clock=FakeClock(),
+        max_episode_observations=2,
+    )
+    (tmp_path / "blocker").write_text("I am a file", encoding="utf-8")
+    rec.note(DOWN, "ping")
+    for _ in range(5):
+        rec.note(OBSERVATION, "system_log")
+    paths = rec.note(UP, "ping")
+    body = Path(paths["markdown_path"]).read_text(encoding="utf-8")
+    assert "recorded only in the journal" not in body
+    assert "3 more observations" in body
+    assert "lost" in body
+
+
+def test_a_rotation_during_the_episode_is_disclosed_next_to_the_omitted_count(tmp_path):
+    """With one kept generation, "recorded only in the journal" is only true if
+    the reader also knows to look in `<path>.1`, and that a second rotation
+    discards the oldest lines.
+    """
+    rec = ForensicRecorder(
+        journal_path=str(tmp_path / "forensic.jsonl"),
+        episodes_dir=str(tmp_path / "episodes"),
+        clock=FakeClock(),
+        max_episode_observations=1,
+        max_journal_bytes=300,
+    )
+    rec.note(DOWN, "ping")
+    for index in range(6):
+        rec.note(OBSERVATION, "system_log", detail=f"line {index}")
+    assert (tmp_path / "forensic.jsonl.1").exists()
+    paths = rec.note(UP, "ping")
+    body = Path(paths["markdown_path"]).read_text(encoding="utf-8")
+    assert "5 more observations were recorded only in the journal" in body
+    assert str(tmp_path / "forensic.jsonl.1") in body
+
+
+def test_the_journal_rotates_one_generation_past_its_size_cap(tmp_path):
+    journal = tmp_path / "forensic.jsonl"
+    journal.write_text("x" * 500 + "\n", encoding="utf-8")
+    rec = ForensicRecorder(
+        journal_path=str(journal),
+        episodes_dir=str(tmp_path / "episodes"),
+        clock=FakeClock(),
+        max_journal_bytes=200,
+    )
+    rec.note(OBSERVATION, "ping", detail="rtt 61ms")
+
+    rotated = tmp_path / "forensic.jsonl.1"
+    assert rotated.read_text(encoding="utf-8") == "x" * 500 + "\n"
+    assert len(journal_lines(tmp_path)) == 1
+
+
+def test_a_journal_under_its_cap_is_not_rotated(tmp_path):
+    rec = make_recorder(tmp_path)
+    rec.note(OBSERVATION, "ping")
+    rec.note(OBSERVATION, "ping")
+    assert not (tmp_path / "forensic.jsonl.1").exists()
+    assert len(journal_lines(tmp_path)) == 2
+
+
+def test_an_unwritable_journal_is_reported_once_and_cleared_on_success(tmp_path, capsys):
+    """Silent failure meant a permanently unwritable journal gave no signal at
+    all. One line on the failure edge, not one per event: a single system-log
+    read can note a burst of observations.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    rec = ForensicRecorder(
+        journal_path=str(locked / "forensic.jsonl"),
+        episodes_dir=str(tmp_path / "episodes"),
+        clock=FakeClock(),
+    )
+    locked.chmod(0o500)
+    try:
+        rec.note(DOWN, "ping")
+        rec.note(OBSERVATION, "system_log")
+        assert rec.journal_error == "PermissionError"
+        err_lines = [ln for ln in capsys.readouterr().err.splitlines() if ln.strip()]
+        assert len(err_lines) == 1
+        assert "PermissionError" in err_lines[0]
+    finally:
+        locked.chmod(0o700)
+
+    rec.note(OBSERVATION, "system_log")
+    assert rec.journal_error is None

@@ -1,9 +1,14 @@
 """The catalogue of network diagnostic commands the console offers.
 
 Data, not behaviour: a list of commands with what each one answers and whether
-it changes anything. Both the CLI console and the menu bar window read this, so
-the two never drift apart, and the "is this safe to run" judgement lives in one
-place instead of being re-decided per surface.
+it changes anything. Read by `netdns run` and its REPL (cli_console.py), so the
+"is this safe to run" judgement lives in one place instead of being re-decided
+per surface. The menu bar console is arbitrary shell and does not use this
+catalogue.
+
+`notes` and `needs_admin` are shown wherever a command is listed, confirmed or
+run. A caveat such as flush-dns's "only half a flush" is part of the result; a
+surface that hides it reports a repair as more complete than it was.
 
 `mutates` is the load-bearing field. A console that offers `ifconfig en0 down`
 next to `scutil --nwi` with no distinction is a foot-gun; anything that changes

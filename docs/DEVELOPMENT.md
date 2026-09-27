@@ -19,13 +19,30 @@
 ## Setup
 
 ```bash
-python3 -m venv .venv
+python3 -m venv .venv                                  # python3 must be 3.13 or newer
 source .venv/bin/activate
-pip install -r requirements-dev.txt   # pulls requirements.txt in, adds pytest + ruff
+pip install -r requirements-dev.txt -c constraints.txt  # pulls requirements.txt in, adds pytest + ruff
 
 mkdir -p ~/.config/net-dns-monitor
 cp config.yaml ~/.config/net-dns-monitor/config.yaml
 ```
+
+`constraints.txt` pins every transitive dependency to the versions CI tests. A
+constraint installs nothing by itself, so the same file serves the runtime install,
+the dev install and the py2app build. After bumping a pin in `requirements.txt`,
+regenerate `constraints.txt` as its header describes.
+
+Install the pre-commit hooks once per clone. `pre-commit` is not in
+`requirements-dev.txt`; install it outside the app's virtualenv:
+
+```bash
+pipx install pre-commit     # or: uv tool install pre-commit
+pre-commit install
+```
+
+`.pre-commit-config.yaml` runs `ruff check --fix` and then `ruff format` on each
+commit. The test suite is not a hook. The hook's `rev` must match the `ruff` pin in
+`requirements-dev.txt`; if they differ, the hook and CI check different rule sets.
 
 `config.yaml` in the repo root is the **shipped default**, not a sample — two
 tests enforce that every key `load_config` reads appears in it with its real
@@ -116,9 +133,11 @@ real OS than against fakes.
 Five things in `CLAUDE.md`'s non-negotiables have bitten this codebase already.
 In short: never claim a repair that did not happen; `None` is not `False`;
 decision modules import no `socket` or `subprocess`; no credential reaches a
-return value, a report or an error string; and nothing may raise into a rumps
-timer, because an escaping exception kills monitoring for the session silently.
-Read that section before changing a repair path, a probe result, or a tick.
+return value, a report or an error string; and nothing may raise out of a tick.
+rumps 0.4.0 catches the exception, so the timer survives, but the rest of that tick
+is skipped, and on the healthy→incident edge that loses the only report and alert
+the incident gets. Read that section before changing a repair path, a probe result,
+or a tick.
 
 ## Env vars
 
@@ -127,14 +146,23 @@ Read that section before changing a repair path, a probe result, or a tick.
 | `ANTHROPIC_API_KEY` | No | Enables LLM escalation. Omitted, escalation is skipped and the report is still written. |
 | `SLACK_WEBHOOK_URL` | No | Enables the Slack channel. The URL is the credential. |
 | `SMTP_PASSWORD` | No | Only if the relay authenticates. |
+| `NETDNS_DISTRIBUTION` | No | `appstore` forces the Mac App Store feature set outside the sandbox, so the gated paths can be exercised without building and signing a bundle. |
+
+`netdnsmonitor/credentials.py` reads each credential from the environment first,
+then from the Keychain (service `com.net-dns-monitor.credentials`, account = the
+variable name). A sandboxed Mac App Store build has no shell environment, so it relies
+on the Keychain. `docs/APP_STORE_SUBMISSION.md` covers building, signing and
+submitting that build.
 
 ## Troubleshooting
 
 - **No menu bar icon.** `rumps` needs a GUI session — run from a real Terminal,
   not over SSH.
 - **`log show` empty or permission-denied.** Grant Full Disk Access to the
-  terminal or to the app in System Settings → Privacy & Security. An empty read
-  is indistinguishable from "no errors found"; see `docs/known-issues.md`.
+  terminal or to the app in System Settings → Privacy & Security. If `log show`
+  times out (10s) or fails, `log_watcher` returns one line starting with
+  `[net-dns-monitor] no log evidence:`; an empty list means the read ran and
+  matched nothing. See `docs/known-issues.md`.
 - **DNS flush reports `partial`.** Expected without the privilege grant. See
   `docs/known-issues.md`.
 - **Failover says both links are unreachable while the network works.** Also

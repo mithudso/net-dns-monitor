@@ -191,13 +191,17 @@ def _decide_failover(
             "dead path for another",
         )
     if preferred_ok is True:
-        # The default route is failing while the preferred interface answers on
-        # its own. That is not a path-specific outage, so moving the traffic
-        # elsewhere is not indicated -- something else is wrong.
+        # A switch needs evidence that the preferred path is down, and an
+        # answer from its probe targets is not that evidence. It does not
+        # prove the outage is elsewhere either: when `failover_probe_targets`
+        # are each link's gateway, the gateway answers straight through an ISP
+        # outage. So the reason states what was observed and what it proves,
+        # and blames no other path.
         return FailoverDecision(
             NONE,
-            "preferred interface is reachable when probed directly -- the outage "
-            "is not specific to this path",
+            "preferred interface's probe targets still answer when probed directly "
+            "-- not switching; with gateway targets this proves only the local "
+            "network, not the internet link",
         )
     brake = _brakes(
         now=now,

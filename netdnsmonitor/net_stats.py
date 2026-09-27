@@ -51,13 +51,11 @@ def parse_interface_counters(
     netstat_output: Optional[str],
     prefixes: tuple[str, ...] = INTERFACE_PREFIXES,
 ) -> Optional[tuple[int, int]]:
-    """Total (bytes in, bytes out) across the physical interfaces, or None
-    when no such interface was found in the output.
+    """Total (bytes in, bytes out) across the physical interfaces.
 
-    None, not (0, 0): zero is a reading that says "no bytes ever", and the
-    meter diffs it against the previous total -- a tens-of-gigabytes negative
-    delta, which reads as a counter reset, or the whole accumulated total
-    rendered as one cycle's rate when the row comes back.
+    None when no matching link row parsed. Summing nothing to (0, 0) would
+    reach ThroughputMeter as a real reading, so a netstat format change or a
+    sandbox that hides interfaces would render "measured, idle" on every tick.
     """
     total_in = total_out = 0
     matched = False
@@ -88,9 +86,9 @@ def parse_interface_counters(
 
 
 def read_interface_counters(run_fn: RunFn = subprocess.run) -> Optional[tuple[int, int]]:
-    """Run netstat and parse it. None on any failure, and None when the output
-    held no physical interface -- the caller renders a blank throughput
-    reading rather than dying, since this is display data.
+    """Run netstat and parse it. None on any failure, including output with no
+    matching interface row -- the caller renders a blank throughput reading
+    rather than dying, since this is display data.
     """
     try:
         result = run_fn(

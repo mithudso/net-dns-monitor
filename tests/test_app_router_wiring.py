@@ -1,363 +1,560 @@
-"""The Router submenu and the login item, as wired into the rumps shell.
+"""The Router menu and the Start at Login item, as wired into the rumps shell.
 
-Nothing here runs `osascript`, `sudo`, `pfctl`, `networksetup` or `open`: the
-router is a fake, the login plist lands under the per-test HOME that
-conftest.py redirects, and every subprocess the menu items start goes through
-the app's `run_fn` seam.
+No test here runs osascript, sudo, pfctl, launchctl or networksetup: the Router
+is a fake built through `router_factory`, every read goes through
+`app.router_run_fn`, and notifications land on `app._notify`. HOME is a
+per-test directory (conftest.py), so the login-item tests write their
+LaunchAgents there.
 """
 
 import os
 import plistlib
-import stat
-import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
+import rumps
+import yaml
 
-from netdnsmonitor import privileges
-from netdnsmonitor.app import OPEN_BIN, NetDnsMonitorApp
+import netdnsmonitor
+from netdnsmonitor import app as app_module
+from netdnsmonitor.app import (
+    LOGIN_AGENT_LABEL,
+    OPEN_BIN,
+    SERVICE_AGENT_LABEL,
+    NetDnsMonitorApp,
+    login_agent_path,
+    login_agent_plist,
+)
+from netdnsmonitor.credentials import ERR_SEC_ITEM_NOT_FOUND, CredentialStore
+from netdnsmonitor.router_window import RouterWindowController
 
 
 class FakeRouter:
-    """Records what the app asked of it and answers with a canned status."""
+    def __init__(self, **settings):
+        self.settings = settings
+        self.wan_if = settings.get("wan_if")
+        self.lan_if = settings.get("lan_if")
+        self.calls = []
+        self.release = threading.Event()
+        self.release.set()
 
-    built: list = []
-    started: list = []
-    stopped: list = []
-    start_status = "ok"
+    def start(self):
+        self.calls.append("start")
+        self.release.wait(timeout=5)
+        return "ok: router started (read back: NAT en0 -> en3)"
 
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
+    def stop(self):
+        self.calls.append("stop")
+        self.release.wait(timeout=5)
+        return "cancelled: nothing was changed"
 
-    @classmethod
-    def from_config(cls, config, **seams):
-        router = cls(**{k: config.get(k) for k in ("wan_interface", "lan_interface")})
-        cls.built.append(router)
+
+@pytest.fixture(autouse=True)
+def _no_modal_alerts(monkeypatch):
+    """rumps.alert is modal: it holds the run loop, and every timer, until
+    someone clicks. No router path may reach it.
+    """
+    monkeypatch.setattr(
+        rumps, "alert", lambda *a, **k: pytest.fail("rumps.alert must never be called")
+    )
+
+
+def build_app(tmp_path, router_enabled=True, **config):
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump({"router_enabled": router_enabled, **config}))
+    built = []
+
+    def factory(**settings):
+        router = FakeRouter(**settings)
+        built.append(router)
         return router
 
-    def start(self) -> str:
-        self.started.append(self)
-        return self.start_status
-
-    def stop(self) -> str:
-        self.stopped.append(self)
-        return "ok"
-
-
-class Sender:
-    """A rumps.MenuItem stand-in: the one attribute toggle_login reads and writes."""
-
-    state = False
+    app = NetDnsMonitorApp(config_path=str(path), router_factory=factory)
+    app.notes = []
+    app._notify = lambda subtitle, message: app.notes.append((subtitle, message))
+    app.output = []
+    app._append_output = app.output.append
+    app.open_dashboard = lambda *a, **k: app.notes.append(("dashboard", "opened"))
+    app.built_routers = built
+    return app
 
 
-@pytest.fixture(autouse=True)
-def _fake_router(monkeypatch):
-    FakeRouter.built = []
-    FakeRouter.started = []
-    FakeRouter.stopped = []
-    FakeRouter.start_status = "ok"
-    monkeypatch.setattr("netdnsmonitor.app.Router", FakeRouter)
+def drain(app, *threads):
+    for thread in threads:
+        if thread is not None:
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "router worker hung"
+    app._drain_router_results()
 
 
-@pytest.fixture(autouse=True)
-def _quiet_rumps(monkeypatch):
-    """Notifications and alerts are recorded, not shown."""
-    notes = []
-    monkeypatch.setattr("rumps.notification", lambda *a, **k: notes.append(" ".join(map(str, a))))
-    monkeypatch.setattr(
-        "rumps.alert", lambda *a, **k: notes.append(" ".join(map(str, a)) + " " + str(k))
-    )
-    return notes
+# --- launch -----------------------------------------------------------------
 
 
-def build_app(tmp_path, **config):
-    path = tmp_path / "config.yaml"
-    if config:
-        path.write_text("".join(f"{k}: {v}\n" for k, v in config.items()))
-    return NetDnsMonitorApp(config_path=str(path))
-
-
-def finish(app):
-    if app._action_thread is not None:
-        app._action_thread.join(timeout=5)
-        assert not app._action_thread.is_alive(), "router worker hung"
-    app.ui_tick()
-
-
-def completed(argv, stdout="", returncode=0):
-    return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
-
-
-# --- the router itself -------------------------------------------------------
-
-
-def test_router_is_not_started_during_construction(tmp_path):
-    """`Router.start()` ends in an `osascript ... with administrator privileges`
-    dialog. In `__init__` that would raise a password prompt before the run loop
-    exists, and the tests that construct this class would each hit it.
+def test_constructing_the_app_with_the_router_enabled_starts_nothing(tmp_path):
+    """Starting runs a root script behind the admin dialog. From __init__ that
+    dialog appeared at every launch and login, and the app waited on it before
+    any monitoring timer had run.
     """
-    app = build_app(tmp_path, router_enabled="true")
-    assert FakeRouter.started == []
+    app = build_app(tmp_path, router_enabled=True, wan_interface="en5", lan_interface="en6")
+
+    assert app.router is app.built_routers[0]
+    assert app.router.calls == []
+    assert app.router.settings["wan_if"] == "en5"
+    assert app.router.settings["lan_if"] == "en6"
+    assert app.router.settings["lan_ip"] == app.config["lan_ip"]
+
+
+def test_constructing_the_app_with_the_router_disabled_builds_none(tmp_path):
+    app = build_app(tmp_path, router_enabled=False)
     assert app.router is None
+    assert app.built_routers == []
 
 
-def test_starting_the_router_from_the_menu_reports_the_status_it_returned(tmp_path, _quiet_rumps):
-    """`start()` answers `ok`, `NEEDS_PRIVILEGE` or `failed: ...`; a click that
-    discards that answer leaves someone unable to tell a refused start from a
-    successful one.
-    """
-    FakeRouter.start_status = "NEEDS_PRIVILEGE"
+# --- start and stop ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("handler", "label", "outcome"),
+    [
+        ("start_router", "Start router", "ok: router started"),
+        ("stop_router", "Stop router", "cancelled: nothing was changed"),
+    ],
+)
+def test_start_and_stop_return_before_the_admin_dialog_is_answered(
+    tmp_path, handler, label, outcome
+):
     app = build_app(tmp_path)
-    output = []
-    app._append_output = output.append
+    app.router.release.clear()  # the dialog is open and nobody has answered
 
-    app.start_router(None)
-    finish(app)
-
-    assert len(FakeRouter.started) == 1
-    assert any("NEEDS_PRIVILEGE" in note for note in _quiet_rumps)
-    assert "Router start: NEEDS_PRIVILEGE" in "".join(output)
-
-
-def test_starting_the_router_does_not_run_on_the_run_loop(tmp_path):
-    """The admin dialog waits for a human, up to two minutes. Inline, that would
-    freeze the window and every timer until someone typed a password.
-    """
-    release = threading.Event()
-
-    class BlockingRouter(FakeRouter):
-        def start(self) -> str:
-            release.wait(timeout=5)
-            return "ok"
-
-    app = build_app(tmp_path)
-    app.router = BlockingRouter()
     started = time.monotonic()
-    app.start_router(None)
+    getattr(app, handler)(None)
     assert time.monotonic() - started < 1.0
-    release.set()
-    finish(app)
+
+    app.router.release.set()
+    drain(app, app._router_thread)
+
+    assert app.router.calls == [handler.split("_")[0]]
+    assert any(label in text and outcome in text for text in app.output)
+    assert any(message.startswith(f"{label}: {outcome}") for _s, message in app.notes)
 
 
-def test_stopping_a_router_that_was_never_started_says_so(tmp_path, _quiet_rumps):
+def test_a_second_start_while_the_first_waits_is_refused_not_stacked(tmp_path):
     app = build_app(tmp_path)
-    app.stop_router(None)
-    finish(app)
-    assert FakeRouter.stopped == []
-    assert any("not been started" in note for note in _quiet_rumps)
-
-
-def test_stopping_the_router_reports_the_status_it_returned(tmp_path, _quiet_rumps):
-    app = build_app(tmp_path)
+    app.router.release.clear()
     app.start_router(None)
-    finish(app)
+    first = app._router_thread
+
+    app.start_router(None)
+
+    assert app._router_thread is first
+    assert any("still running" in message for _s, message in app.notes)
+    app.router.release.set()
+    drain(app, first)
+    assert app.router.calls == ["start"]
+
+
+@pytest.mark.parametrize("handler", ["start_router", "stop_router"])
+def test_start_and_stop_with_the_router_disabled_say_so(tmp_path, handler):
+    """They used to return silently, which reads as "it worked"."""
+    app = build_app(tmp_path, router_enabled=False)
+
+    getattr(app, handler)(None)
+
+    assert app._router_thread is None
+    assert ("Router", "Router disabled (set router_enabled)") in app.notes
+
+
+def test_a_raising_router_is_reported_by_class_name(tmp_path):
+    app = build_app(tmp_path)
+
+    def boom():
+        raise RuntimeError("/tmp/secret-script failed")
+
+    app.router.start = boom
+    app.start_router(None)
+    drain(app, app._router_thread)
+
+    assert any("failed: RuntimeError" in text for text in app.output)
+    assert not any("secret-script" in text for text in app.output)
+
+
+# --- the menu and the router window share one worker slot ------------------
+
+WINDOW_VALUES = {
+    "wan_interface": "en5",
+    "lan_interface": "en6",
+    "lan_ip": "192.168.10.1",
+    "lan_netmask": "255.255.255.0",
+    "dhcp_start": "192.168.10.100",
+    "dhcp_end": "192.168.10.200",
+}
+
+
+def window_for(app):
+    """A real RouterWindowController on the real app, with no window and no
+    worker of its own: every router action it takes must go through the app.
+    """
+    started_own = []
+    ran = []
+    controller = RouterWindowController(
+        config_getter=lambda: app.config,
+        config_path=app.config_path,
+        app=app,
+        run_fn=lambda *args, **kwargs: ran.append(args),
+        post=lambda fn, *args: fn(*args),
+        spawn=started_own.append,
+        environ={},
+    )
+    controller.lines = []
+    controller.append_log = controller.lines.append
+    controller.started_own = started_own
+    controller.ran = ran
+    return controller
+
+
+def test_a_window_start_waiting_on_its_dialog_makes_the_menu_stop_refuse(tmp_path):
+    """The window and the menu used to guard with two separate flags, so a Stop
+    from the menu ran its root script while the window's Start was still inside
+    its own.
+    """
+    app = build_app(tmp_path)
+    window = window_for(app)
+    app.router.release.clear()  # the window's admin dialog is open
+
+    window.on_start(WINDOW_VALUES)
+    running = app._router_thread
+    assert running is not None and running.is_alive()
+
     app.stop_router(None)
-    finish(app)
-    assert len(FakeRouter.stopped) == 1
-    assert any("Router stop: ok" in note for note in _quiet_rumps)
+
+    assert app._router_thread is running
+    assert ("Router", "Stop router: the previous router action is still running.") in app.notes
+    app.router.release.set()
+    drain(app, running)
+    assert app.router.calls == ["start"]
+    assert window.started_own == [] and window.ran == []
+    assert window.lines[-1] == "Start router: ok: router started (read back: NAT en0 -> en3)"
+    assert any(message.startswith("Start router: ok:") for _s, message in app.notes)
 
 
-# --- the shell-out menu items -------------------------------------------------
+@pytest.mark.parametrize(
+    ("window_action", "label"),
+    [("on_stop", "Stop router"), ("on_start", "Start router")],
+)
+def test_a_menu_start_waiting_on_its_dialog_makes_the_window_refuse(tmp_path, window_action, label):
+    app = build_app(tmp_path)
+    window = window_for(app)
+    app.router.release.clear()  # the menu's admin dialog is open
+    app.start_router(None)
+    running = app._router_thread
+
+    args = (WINDOW_VALUES,) if window_action == "on_start" else ()
+    getattr(window, window_action)(*args)
+
+    assert app._router_thread is running
+    assert window.lines[-1] == f"{label}: not started (the notification says why)"
+    assert ("Router", f"{label}: the previous router action is still running.") in app.notes
+    app.router.release.set()
+    drain(app, running)
+    assert app.router.calls == ["start"]
+    assert window.started_own == [] and window.ran == []
 
 
-def test_troubleshoot_router_uses_non_interactive_sudo_with_a_deadline(tmp_path, monkeypatch):
-    """A bare `sudo` on the run loop waits for a password nobody can type into
-    a menu bar app, and `check_output` without a timeout waits forever.
-    """
+# --- read-only router menu items --------------------------------------------
+
+HARDWARE_PORTS = (
+    "Hardware Port: Wi-Fi\nDevice: en0\n\nHardware Port: Thunderbolt Ethernet\nDevice: en3\n"
+)
+
+
+def recording_run(outputs=None, raises=None):
     calls = []
 
-    def fake_run(argv, **kwargs):
-        calls.append((list(argv), kwargs))
-        text = {"pfctl": "nat on en3\n", "sysctl": "net.inet.ip.forwarding: 1\n"}.get(
-            os.path.basename(argv[2] if argv[1] == "-n" else argv[0]), "root 1 bootpd\n"
-        )
-        return completed(argv, stdout=text)
+    def run(argv, **kwargs):
+        calls.append({"argv": list(argv), **kwargs})
+        if raises is not None and argv[0] in raises:
+            raise raises[argv[0]]
+        stdout = (outputs or {}).get(argv[0], "")
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
+    run.calls = calls
+    return run
+
+
+def test_list_interfaces_runs_off_the_run_loop_and_shows_them_in_the_pane(tmp_path):
     app = build_app(tmp_path)
-    # Belt and braces for the pre-fix shape, which shelled out directly: a real
-    # `sudo pfctl` must never run from the suite, whatever the app does.
-    monkeypatch.setattr(
-        "netdnsmonitor.app.subprocess.check_output",
-        lambda *a, **k: pytest.fail("router diagnostics must go through run_fn"),
+    gate = threading.Event()
+    inner = recording_run({"networksetup": HARDWARE_PORTS})
+
+    def slow_run(argv, **kwargs):
+        gate.wait(timeout=5)
+        return inner(argv, **kwargs)
+
+    app.router_run_fn = slow_run
+
+    started = time.monotonic()
+    app.list_interfaces(None)
+    assert time.monotonic() - started < 1.0
+
+    gate.set()
+    drain(app, app._router_info_thread)
+
+    text = "".join(app.output)
+    assert "Wi-Fi (en0)" in text
+    assert "Thunderbolt Ethernet (en3)" in text
+    assert ("dashboard", "opened") in app.notes
+    assert all(call.get("timeout") for call in inner.calls)
+
+
+def test_a_failed_interface_listing_says_so_rather_than_alerting(tmp_path):
+    app = build_app(tmp_path)
+    app.router_run_fn = recording_run(raises={"networksetup": FileNotFoundError("networksetup")})
+
+    app.list_interfaces(None)
+    drain(app, app._router_info_thread)
+
+    assert any("Could not list network interfaces." in text for text in app.output)
+
+
+def test_troubleshoot_never_lets_sudo_prompt_and_shows_class_names_only(tmp_path):
+    """A sudo that can prompt waits on a terminal the app does not have. The
+    failure text is a class name: an exception message can carry command output.
+    """
+    app = build_app(tmp_path)
+    run = recording_run(
+        outputs={
+            "netstat": "default 192.168.1.1 UGScg en0\n",
+            "sysctl": "net.inet.ip.forwarding: 0\n",
+        },
+        raises={"/usr/bin/sudo": PermissionError("sudo: a password is required for mitch")},
     )
-    app.run_fn = fake_run
-    output = []
-    app._append_output = output.append
+    app.router_run_fn = run
+
+    started = time.monotonic()
+    app.troubleshoot_router(None)
+    assert time.monotonic() - started < 1.0
+    drain(app, app._router_info_thread)
+
+    sudo_calls = [call["argv"] for call in run.calls if call["argv"][0].endswith("sudo")]
+    assert sudo_calls, "the NAT rules were not read"
+    assert all(argv[1] == "-n" for argv in sudo_calls)
+    assert all(call.get("timeout") for call in run.calls)
+
+    text = "".join(app.output)
+    assert "net.inet.ip.forwarding: 0" in text
+    assert "not checked (PermissionError)" in text
+    assert "password is required" not in text
+    assert "mitch" not in text
+
+
+def test_troubleshoot_reads_the_live_router_interfaces(tmp_path):
+    app = build_app(tmp_path)
+    app.router.wan_if = app.router.lan_if = "en7"  # as the router window would set them
+    app.router_run_fn = recording_run()
 
     app.troubleshoot_router(None)
-    finish(app)
+    drain(app, app._router_info_thread)
 
-    assert calls, "no command was run"
-    assert calls[0][0][:2] == [privileges.SUDO, "-n"]
-    assert all(0 < kwargs.get("timeout", 0) <= 5 for _argv, kwargs in calls)
-    text = "".join(output)
-    assert "DHCP server running: True" in text
-    assert "nat on en3" in text
+    assert "OBVIOUS CONFLICT" in "".join(app.output)
 
 
-def test_troubleshoot_router_reports_a_refused_sudo_by_class_name(tmp_path, monkeypatch):
-    def refused(argv, **kwargs):
-        raise subprocess.CalledProcessError(1, argv, output="sudo: a password is required")
-
+def test_configure_opens_the_config_file_the_app_loaded_creating_it(tmp_path):
+    """The path was hardcoded, and `open -t` on a missing file shows nothing."""
     app = build_app(tmp_path)
-    monkeypatch.setattr(
-        "netdnsmonitor.app.subprocess.check_output",
-        lambda *a, **k: pytest.fail("router diagnostics must go through run_fn"),
-    )
-    app.run_fn = refused
-    output = []
-    app._append_output = output.append
-
-    app.troubleshoot_router(None)
-    finish(app)
-
-    text = "".join(output)
-    assert "Need sudo for full diagnostics. (CalledProcessError)" in text
-    assert "a password is required" not in text
-
-
-def test_list_interfaces_reports_a_failed_command_instead_of_raising(tmp_path, _quiet_rumps):
-    def missing(argv, **kwargs):
-        raise OSError("networksetup vanished")
-
-    app = build_app(tmp_path)
-    app.run_fn = missing
-    app.list_interfaces(None)
-    assert any("Could not list interfaces (OSError)" in note for note in _quiet_rumps)
-    assert not any("vanished" in note for note in _quiet_rumps)
-
-
-def test_list_interfaces_bounds_the_command(tmp_path, _quiet_rumps):
-    calls = []
-
-    def fake_run(argv, **kwargs):
-        calls.append((list(argv), kwargs))
-        return completed(argv, stdout="Hardware Port: Wi-Fi\nDevice: en0\n")
-
-    app = build_app(tmp_path)
-    app.run_fn = fake_run
-    app.list_interfaces(None)
-    assert calls[0][0] == ["networksetup", "-listallhardwareports"]
-    assert 0 < calls[0][1].get("timeout", 0) <= 10
-    assert any("Hardware Port: Wi-Fi" in note for note in _quiet_rumps)
-
-
-def test_configure_router_opens_the_configured_path(tmp_path, monkeypatch):
-    """Not the default path: an app started with `--config` elsewhere would
-    otherwise open a file it is not reading.
-    """
-    calls = []
-    app = build_app(tmp_path)
-    monkeypatch.setattr(
-        "netdnsmonitor.app.subprocess.run",
-        lambda *a, **k: pytest.fail("configure_router must go through run_fn"),
-    )
-    app.run_fn = lambda argv, **kwargs: calls.append((list(argv), kwargs)) or completed(argv)
+    app.config_path = str(tmp_path / "nested" / "other.yaml")
+    run = recording_run()
+    app.router_run_fn = run
 
     app.configure_router(None)
 
-    assert calls[0][0] == [OPEN_BIN, "-t", str(tmp_path / "config.yaml")]
-    assert 0 < calls[0][1].get("timeout", 0) <= 10
+    assert os.path.isfile(app.config_path)
+    assert run.calls[0]["argv"] == [OPEN_BIN, "-t", app.config_path]
+    assert run.calls[0]["timeout"]
+    assert app.notes == []
 
 
-def test_configure_router_survives_a_missing_open(tmp_path):
-    def missing(argv, **kwargs):
-        raise OSError("no open")
-
+def test_configure_reports_an_open_that_failed(tmp_path):
     app = build_app(tmp_path)
-    app.run_fn = missing
-    app.configure_router(None)  # a menu click must not raise
+    app.router_run_fn = lambda argv, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    app.configure_router(None)
+
+    assert any("open exited 1" in message for _s, message in app.notes)
 
 
-def test_open_router_window_failure_costs_the_window_not_the_app(
-    tmp_path, monkeypatch, _quiet_rumps
-):
-    class BrokenController:
-        def __init__(self, *args, **kwargs):
-            pass
+# --- the router window --------------------------------------------------------
 
-        def show(self):
-            raise RuntimeError("AppKit said no")
 
-    monkeypatch.setattr("netdnsmonitor.app.RouterWindowController", BrokenController)
+class RecordingController:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.shown = 0
+        RecordingController.instances.append(self)
+
+    def show(self):
+        self.shown += 1
+
+
+def test_the_router_window_reads_the_live_config_and_the_apps_path(tmp_path, monkeypatch):
+    """A dict captured at open went stale when Settings replaced it, and the
+    window then wrote the stale copy back over the user's edits.
+    """
+    RecordingController.instances = []
+    monkeypatch.setattr(app_module, "RouterWindowController", RecordingController)
     app = build_app(tmp_path)
+
     app.open_router_window(None)
+    app.open_router_window(None)
+
+    assert len(RecordingController.instances) == 1
+    controller = RecordingController.instances[0]
+    assert controller.shown == 2
+    assert controller.kwargs["config_path"] == app.config_path
+    assert controller.kwargs["app"] is app
+    assert controller.kwargs["config_getter"]() is app.config
+    assert "config" not in controller.kwargs
+
+
+class KeychainWithKey:
+    def __init__(self, items):
+        self.items = {name: value.encode() for name, value in items.items()}
+
+    def read(self, account):
+        if account not in self.items:
+            return ERR_SEC_ITEM_NOT_FOUND, None
+        return 0, self.items[account]
+
+
+def test_the_router_windows_ai_check_reads_the_key_from_the_apps_credential_store(
+    tmp_path, monkeypatch
+):
+    """An app launched from Finder or the Dock has no shell environment, so a
+    key saved in the Keychain is the only one it can have. The window read
+    os.environ, and the AI check said the key was missing.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    RecordingController.instances = []
+    monkeypatch.setattr(app_module, "RouterWindowController", RecordingController)
+    app = build_app(tmp_path)
+    keychain = KeychainWithKey({"ANTHROPIC_API_KEY": "sk-ant-keychain-not-real"})
+    app.credentials = CredentialStore(env={}, backend_factory=lambda: keychain)
+
+    app.open_router_window(None)
+
+    getter = RecordingController.instances[0].kwargs["api_key_getter"]
+    assert getter() == "sk-ant-keychain-not-real"
+    # Read when the check runs, not captured when the window opened.
+    keychain.items.clear()
+    assert getter() is None
+
+
+def test_a_router_window_that_fails_to_open_notifies_and_is_rebuilt_next_time(
+    tmp_path, monkeypatch
+):
+    class BrokenController(RecordingController):
+        def show(self):
+            raise RuntimeError("no window server at /private/path")
+
+    monkeypatch.setattr(app_module, "RouterWindowController", BrokenController)
+    app = build_app(tmp_path)
+
+    app.open_router_window(None)
+
     assert app.router_window is None
-    assert any("Could not open the router window (RuntimeError)" in n for n in _quiet_rumps)
+    assert app.notes == [
+        ("Router console", "Could not open the router console window (RuntimeError).")
+    ]
 
 
-def test_open_router_window_hands_the_controller_the_real_config_path(tmp_path, monkeypatch):
-    seen = {}
-
-    class RecordingController:
-        def __init__(self, config, app, **kwargs):
-            seen.update(kwargs)
-
-        def show(self):
-            pass
-
-    monkeypatch.setattr("netdnsmonitor.app.RouterWindowController", RecordingController)
-    app = build_app(tmp_path)
-    app.open_router_window(None)
-    assert seen["config_path"] == str(tmp_path / "config.yaml")
+# --- start at login -----------------------------------------------------------
 
 
-# --- start at login ------------------------------------------------------------
+class Sender:
+    def __init__(self, state=False):
+        self.state = state
 
 
-def agent_plist(home_dir):
-    return home_dir / "Library" / "LaunchAgents" / "com.netdnsmonitor.plist"
+SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(netdnsmonitor.__file__)))
 
 
-def test_toggle_login_writes_a_plist_pointing_at_this_interpreter(tmp_path, isolate_home):
-    """The launch agent must start the checkout that wrote it, with the
-    interpreter that is running -- a hardcoded path is a different machine.
+def test_turning_login_on_writes_an_agent_for_this_interpreter_and_checkout(tmp_path):
+    """The agent this replaced ran one named user's checkout, so on any other
+    account it started nothing -- while the item showed a checkmark.
     """
     app = build_app(tmp_path)
-    sender = Sender()
+    sender = Sender(state=False)
 
     app.toggle_login(sender)
 
+    with open(login_agent_path(LOGIN_AGENT_LABEL), "rb") as f:
+        plist = plistlib.load(f)
+    assert plist["Label"] == LOGIN_AGENT_LABEL
+    assert plist["ProgramArguments"] == [sys.executable, "-m", "netdnsmonitor.app"]
+    assert plist["WorkingDirectory"] == SOURCE_ROOT
+    assert "mitch.hudson" not in str(plist)
+    assert login_agent_path(LOGIN_AGENT_LABEL).startswith(os.environ["HOME"])
     assert sender.state is True
-    with open(agent_plist(isolate_home), "rb") as f:
-        data = plistlib.load(f)
-    assert data["ProgramArguments"] == [sys.executable, "-m", "netdnsmonitor.app"]
-    assert os.path.isfile(os.path.join(data["WorkingDirectory"], "netdnsmonitor", "app.py"))
-    assert data["RunAtLoad"] is True
 
 
-def test_toggle_login_leaves_the_checkbox_off_when_the_write_fails(
-    tmp_path, isolate_home, _quiet_rumps
-):
-    """A ticked box beside a plist that does not exist tells someone the app
-    will start at login when it will not.
+def test_turning_login_off_removes_the_agent(tmp_path):
+    app = build_app(tmp_path)
+    sender = Sender()
+    app.toggle_login(sender)
+
+    app.toggle_login(sender)
+
+    assert not os.path.exists(login_agent_path(LOGIN_AGENT_LABEL))
+    assert sender.state is False
+
+
+def test_a_failed_write_leaves_the_item_unchecked_and_says_why(tmp_path):
+    """The checkmark used to flip before the write, so a failure left it on."""
+    app = build_app(tmp_path)
+    library = os.path.join(os.environ["HOME"], "Library")
+    os.makedirs(library, exist_ok=True)
+    with open(os.path.join(library, "LaunchAgents"), "w") as f:
+        f.write("not a directory")
+    sender = Sender(state=False)
+
+    app.toggle_login(sender)
+
+    assert sender.state is False
+    assert len(app.notes) == 1
+    subtitle, message = app.notes[0]
+    assert subtitle == "Start at Login"
+    assert message.startswith("Not changed (")
+
+
+def test_the_service_scripts_agent_counts_as_on_and_is_not_removed(tmp_path):
+    """net-dns-monitor-service installs its own agent, which carries the
+    supervision flag. The item shows it, and leaves removing it to the script.
     """
-    if os.geteuid() == 0:
-        pytest.skip("root ignores directory modes")
-    agents = isolate_home / "Library" / "LaunchAgents"
-    agents.mkdir(parents=True)
-    agents.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    service = login_agent_path(SERVICE_AGENT_LABEL)
+    os.makedirs(os.path.dirname(service), exist_ok=True)
+    with open(service, "wb") as f:
+        plistlib.dump({"Label": SERVICE_AGENT_LABEL}, f)
+
     app = build_app(tmp_path)
-    sender = Sender()
-    try:
-        app.toggle_login(sender)
-    finally:
-        agents.chmod(stat.S_IRWXU)
-
-    assert sender.state is False
-    assert not agent_plist(isolate_home).exists()
-    assert any("Could not update the login item (PermissionError)" in n for n in _quiet_rumps)
-
-
-def test_toggle_login_off_removes_the_plist(tmp_path, isolate_home):
-    app = build_app(tmp_path)
-    sender = Sender()
-    app.toggle_login(sender)
-    assert agent_plist(isolate_home).exists()
+    assert app.menu["Start at Login"].state
+    sender = Sender(state=True)
 
     app.toggle_login(sender)
 
-    assert sender.state is False
-    assert not agent_plist(isolate_home).exists()
+    assert os.path.exists(service)
+    assert sender.state is True
+    assert any("net-dns-monitor-service uninstall" in message for _s, message in app.notes)
+
+
+def test_a_frozen_app_starts_its_own_bundle_executable():
+    plist = login_agent_plist(
+        True, "/Applications/Net-DNS-Monitor.app/Contents/MacOS/Net-DNS-Monitor", "/ignored"
+    )
+    assert plist["ProgramArguments"] == [
+        "/Applications/Net-DNS-Monitor.app/Contents/MacOS/Net-DNS-Monitor"
+    ]
+    assert "WorkingDirectory" not in plist

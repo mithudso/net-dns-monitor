@@ -246,3 +246,41 @@ def test_the_total_deadline_is_still_bounded_by_the_timeout():
     started = time.monotonic()
     assert probe("en0") is False
     assert time.monotonic() - started < 1.2  # not 3 x 0.6 plus slack
+
+
+def test_time_a_fast_failure_leaves_behind_goes_to_the_next_target():
+    """Each slice is the remaining budget over the targets still to try, not a
+    fixed timeout / N. A target that fails instantly (ENETUNREACH) used to leave
+    its unspent share stranded, so a slow-but-working second target was cut off
+    at half the budget it could have had.
+    """
+    budgets = []
+
+    def connect_fn(device, host, port, timeout):
+        budgets.append(timeout)
+        return False
+
+    probe = make_interface_prober(
+        [("10.0.0.1", 53), ("192.168.1.1", 53)],
+        timeout=1.0,
+        connect_fn=connect_fn,
+        index_fn=lambda d: 1,
+    )
+    assert probe("en0") is False
+    assert budgets[0] <= 0.5
+    assert budgets[1] >= 0.9
+
+
+def test_no_budget_at_all_is_none_not_false():
+    """With nothing attempted there is no reading: False would tell the report
+    and the failover policy that the link was probed and is dead.
+    """
+    calls = []
+    probe = make_interface_prober(
+        TARGETS,
+        timeout=0,
+        connect_fn=lambda d, h, p, t: calls.append(h) or True,
+        index_fn=lambda d: 1,
+    )
+    assert probe("en0") is None
+    assert calls == []

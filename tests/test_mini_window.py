@@ -30,11 +30,46 @@ GREEN, YELLOW, RED = "\U0001f7e2", "\U0001f7e1", "\U0001f534"
 
 def test_incident_spells_out_down_rather_than_showing_a_number():
     """The docstring's own claim: "DOWN" beats a dash someone has to interpret
-    while walking past. A round-trip time on a dead network is also a lie.
+    while walking past. With no reason given -- the caller predates `reason` --
+    the panel keeps its old wording, and a round-trip time during an incident
+    would be a stale reading presented as current.
     """
     text = mini_text("incident", rtt_ms=61.4, ping_down=True)
     assert "DOWN" in text
     assert "61" not in text
+
+
+def test_a_dns_incident_names_dns_rather_than_claiming_the_network_is_down():
+    """Pings answering and names failing is the one incident where "DOWN" sends
+    someone to check the cable instead of the resolver.
+    """
+    text = mini_text("incident", rtt_ms=30, reason="dns")
+    assert "DNS" in text
+    assert "DOWN" not in text
+    assert "30" not in text
+    assert RED in text
+
+
+def test_ping_and_network_incidents_still_read_down():
+    for reason in (None, "ping", "network"):
+        assert mini_text("incident", rtt_ms=30, reason=reason) == f"{RED}  DOWN"
+
+
+def test_an_unclassified_incident_is_not_presented_as_down():
+    """Unclassified means a load-bearing probe never ran. Showing "DOWN" would
+    turn that unknown into a failed reading.
+    """
+    text = mini_text("incident", reason="unclassified")
+    assert "DOWN" not in text
+    assert "UNCLASSIFIED" in text
+
+
+def test_a_reason_changes_nothing_outside_an_incident():
+    """The app passes the last classification on every refresh, and it can
+    outlive the incident that set it.
+    """
+    assert mini_text("healthy", rtt_ms=61.4, reason="dns") == f"{GREEN}  61ms"
+    assert mini_text("flaky", rtt_ms=61.4, reason="dns") == f"{YELLOW}  61ms"
 
 
 def test_a_dns_only_incident_keeps_the_live_round_trip():
@@ -129,6 +164,15 @@ def test_the_panel_is_draggable_by_its_background():
     """It is borderless, so there is no title bar to drag it by."""
     window = MiniWindow()
     assert window.window.isMovableByWindowBackground() is True
+
+
+def test_the_longest_incident_label_fits_the_panel():
+    """The panel is 168px and the label does not wrap, so a reason spelled out
+    too long is clipped into something unreadable at a glance.
+    """
+    window = MiniWindow()
+    window.set_text(mini_text("incident", reason="unclassified"))
+    assert window.label.attributedStringValue().size().width <= WIDTH
 
 
 def test_the_panel_opens_at_the_declared_size():

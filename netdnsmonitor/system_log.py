@@ -401,8 +401,9 @@ class LogBuffer:
         The return value is what makes automatic reporting possible: the caller
         announces new error lines without having to diff the buffer itself.
         """
+        batch = list(entries)
         added = []
-        for entry in entries:
+        for entry in batch:
             key = self._key(entry)
             if key in self._seen or key in self._evicted_lookup:
                 continue

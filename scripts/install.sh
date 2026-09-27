@@ -17,11 +17,13 @@
 # Why this exists separately from scripts/start.sh and net-dns-monitor-service
 #
 # start.sh launches the app in the foreground for development. net-dns-monitor-
-# service owns supervision, but it installs *from an already-built bundle* and
-# its default SOURCE_BUNDLE points at the developer's own worktree -- a path that
-# does not exist on any other machine. This script is the missing piece: it
-# builds the bundle first and then hands the service script an explicit
-# NDM_SOURCE_BUNDLE pointing into this checkout.
+# service owns supervision, but it installs *from an already-built bundle*. Its
+# default source is the bundle path it recorded at the last install, then the
+# dist/ of the checkout the script sits in -- and the installed copy in
+# ~/.local/bin sits in no checkout. This script is the missing piece: it builds
+# the bundle first and then hands the service script an explicit
+# NDM_SOURCE_BUNDLE pointing into this checkout, which the service script then
+# records for later `update` runs.
 #
 # "Starts on boot" precisely: a LaunchAgent, not a LaunchDaemon, so it starts at
 # *login* rather than at boot. That is deliberate and not a shortcut -- this is a
@@ -40,8 +42,15 @@ CONFIG_DIR="$HOME/.config/net-dns-monitor"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 LABEL="com.mitchhudson.net-dns-monitor"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+CONSTRAINTS="$REPO_DIR/constraints.txt"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-MIN_PYTHON_MINOR=9   # the code uses bare list[...]/tuple[...] annotations
+# 3.13: the version CLAUDE.md names, the only one CI runs, and the one
+# constraints.txt was frozen from, so it is the only dependency set anyone has
+# tested. The pins' own technical floor is 3.10 (pyobjc 12 and pytest 9 refuse
+# anything older). The old check here accepted 3.9, which passed this preflight
+# and then failed inside pip. scripts/start.sh enforces the same floor.
+MIN_PYTHON_MINOR=13
 
 step()  { printf '\n==> %s\n' "$*"; }
 info()  { printf '    %s\n' "$*"; }
@@ -56,10 +65,11 @@ step "Checking this machine"
 [ "$(uname -s)" = "Darwin" ] || die "macOS only -- this uses log show, scutil, dscacheutil and AppKit."
 ok "macOS $(sw_vers -productVersion)"
 
-command -v python3 >/dev/null 2>&1 || die "python3 not found. Install the Xcode command line tools: xcode-select --install"
-PY_MINOR="$(python3 -c 'import sys; print(sys.version_info[1])')"
-[ "$PY_MINOR" -ge "$MIN_PYTHON_MINOR" ] || die "need Python 3.$MIN_PYTHON_MINOR+, found 3.$PY_MINOR"
-ok "python3 $(python3 -c 'import platform; print(platform.python_version())')"
+PYTHON_HINT="install Python 3.$MIN_PYTHON_MINOR (python.org, or: brew install python@3.$MIN_PYTHON_MINOR), then re-run with PYTHON_BIN=python3.$MIN_PYTHON_MINOR if it is not first on PATH"
+command -v "$PYTHON_BIN" >/dev/null 2>&1 || die "$PYTHON_BIN not found. $PYTHON_HINT"
+"$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info >= (3, $MIN_PYTHON_MINOR) else 1)" \
+    || die "need Python 3.$MIN_PYTHON_MINOR+, found $("$PYTHON_BIN" -c 'import platform; print(platform.python_version())'). $PYTHON_HINT"
+ok "$PYTHON_BIN $("$PYTHON_BIN" -c 'import platform; print(platform.python_version())')"
 
 # Every external tool the app shells out to. Checked here rather than
 # discovered at runtime, when the failure would be a string in a report.
@@ -76,21 +86,29 @@ ok "all required system tools present"
 step "Setting up the virtualenv"
 
 if [ ! -x "$VENV_DIR/bin/python" ]; then
-    python3 -m venv "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
     ok "created $VENV_DIR"
 else
     ok "reusing $VENV_DIR"
 fi
 
 PY="$VENV_DIR/bin/python"
+# A reused venv keeps the interpreter it was created with, which the preflight
+# above never looked at. Without this, a venv left over from an older Python
+# fails later inside pip with a resolver error that does not name the cause.
+"$PY" -c "import sys; sys.exit(0 if sys.version_info >= (3, $MIN_PYTHON_MINOR) else 1)" \
+    || die "$VENV_DIR was created with Python older than 3.$MIN_PYTHON_MINOR -- remove it and re-run: rm -rf $VENV_DIR"
 "$PY" -m pip install --quiet --upgrade pip
-"$PY" -m pip install --quiet -r "$REPO_DIR/requirements.txt"
+"$PY" -m pip install --quiet -r "$REPO_DIR/requirements.txt" -c "$CONSTRAINTS"
 ok "installed runtime dependencies"
 
 # py2app is in neither requirements file on purpose: it is a build tool, not a
-# runtime dependency, and end users of a prebuilt bundle never need it.
-"$PY" -c "import py2app" >/dev/null 2>&1 || "$PY" -m pip install --quiet "py2app>=0.28"
-ok "py2app available"
+# runtime dependency, and end users of a prebuilt bundle never need it. Its
+# version is pinned in constraints.txt like everything else, and installed
+# unconditionally so an older py2app already in the venv is moved to that pin
+# rather than silently kept.
+"$PY" -m pip install --quiet py2app -c "$CONSTRAINTS"
+ok "py2app $("$PY" -c 'from importlib.metadata import version; print(version("py2app"))')"
 
 # --- 3. config -------------------------------------------------------------
 
@@ -102,8 +120,9 @@ if [ -f "$CONFIG_FILE" ]; then
 else
     cp "$REPO_DIR/config.yaml" "$CONFIG_FILE"
     ok "created $CONFIG_FILE from the repo's default config.yaml"
-    warn "edit 'domains' in that file. Left empty, dns_ok is never measured and the"
-    warn "anti-flap gate latches a permanent false incident -- see the comment there."
+    warn "add the sites you care about to 'domains' in that file. Until then the DNS"
+    warn "check resolves only control_domain and any name learned from the system log,"
+    warn "so a DNS fault that spares control_domain can go unnoticed."
 fi
 
 # Fail loudly here rather than after installing a LaunchAgent that cannot start.
@@ -145,8 +164,8 @@ install -m 0755 "$SERVICE_SRC" "$SERVICE_DST"
 ok "installed $SERVICE_DST"
 
 # The service script copies the bundle out to ~/Applications and writes the
-# plist. NDM_SOURCE_BUNDLE overrides its built-in default, which points at the
-# original author's worktree and does not exist here.
+# plist. NDM_SOURCE_BUNDLE is explicit here because the installed script's own
+# default (a recorded path, then its checkout's dist/) cannot know this build yet.
 NDM_SOURCE_BUNDLE="$BUNDLE" "$SERVICE_DST" install
 
 # --- 6. verify -------------------------------------------------------------

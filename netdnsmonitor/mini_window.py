@@ -35,25 +35,40 @@ FRAME_AUTOSAVE_NAME = "NetDnsMonitorMiniWindow"
 DOT = {"healthy": "\U0001f7e2", "flaky": "\U0001f7e1", "incident": "\U0001f534"}
 
 
+# "ping" and "network" mean nothing is getting through, so "DOWN" is true. None
+# is here only so a caller that passes no reason keeps the old wording. Anything
+# else is named: "DOWN" for a DNS incident with pings answering sends someone to
+# the cable instead of the resolver, and for "unclassified" it turns a probe that
+# never ran into a failed one.
+DOWN_REASONS = (None, "ping", "network")
+
+
 def mini_text(
     state: str,
     rtt_ms: Optional[float] = None,
     loss_pct: Optional[float] = None,
-    ping_down: bool = False,
+    reason: Optional[str] = None,
+    ping_down: Optional[bool] = None,
 ) -> str:
     """The one line the panel shows. Pure, so the wording is testable.
 
     Deliberately not the menu bar's title: at this size there is room for the
     state and one number, and "DOWN" spelled out beats a dash someone has to
     interpret while walking past.
+
+    `reason` is read only during an incident: "ping" for unanswered pings,
+    otherwise the incident's classification. None keeps the old "DOWN".
     """
     dot = DOT.get(state, DOT["healthy"])
-    # "DOWN" is keyed to the ping, not to the incident state: a DNS-only incident
-    # still has a live round trip, and telling someone the network is down when
-    # only resolution is broken sends them after the wrong fault. The red dot
-    # already carries the incident.
-    if ping_down:
-        return f"{dot}  DOWN"
+    if state == "incident":
+        if reason not in DOWN_REASONS:
+            return f"{dot}  {str(reason).upper()}"
+        # "DOWN" is keyed to the ping where the caller says so: a DNS-only
+        # incident still has a live round trip, and telling someone the network
+        # is down when only resolution is broken sends them after the wrong
+        # fault. A caller passing neither `reason` nor `ping_down` keeps "DOWN".
+        if ping_down is None or ping_down or reason in ("ping", "network"):
+            return f"{dot}  DOWN"
     if rtt_ms is None:
         return f"{dot}  --"
     text = f"{dot}  {rtt_ms:.0f}ms"

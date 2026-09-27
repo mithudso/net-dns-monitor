@@ -33,17 +33,25 @@ changes.
 thread, and returns. If the bind fails -- port already taken by another copy on
 this machine, or a sandbox denies it -- discovery is simply off and the monitor
 carries on; a network-monitoring tool that will not start because it could not
-open a discovery socket has its priorities backwards.
+open a discovery socket has its priorities backwards. The port is not shared
+(no SO_REUSEPORT; see start()), so a second copy on the same machine lands in
+this case rather than binding a port it would never hear pongs on.
 
-**What this discloses.** The socket is bound on every interface, so any host that
-can route a UDP datagram to this port can learn this machine's hostname and
-whether its network is currently healthy. That is the point of the feature, but
-it is a disclosure, so it is gated on `peer_discovery_enabled` and can be turned
-off in the config -- and a datagram from outside the private, loopback and
-link-local ranges is dropped unanswered, so the disclosure stays on the LAN.
-Received packets are parsed defensively (size cap, JSON only, protocol tag
-checked, every string sanitised by peers.py) and nothing in a packet is ever
-used as a path, a command, or an argument.
+**What this discloses.** Any host that can reach the port can learn this
+machine's hostname and whether its network is currently healthy. That is the
+point of the feature, but it is a disclosure, so it is gated on
+`peer_discovery_enabled` and can be turned off in the config. The socket binds
+every interface, so the listener drops any sender outside the IPv4 subnets
+attached to this machine's interfaces (loopback is always allowed). That limits
+who is recorded and who is sent a pong. It is not authentication: UDP source
+addresses can be forged.
+
+**What this trusts.** Messages are not authenticated. A sender on the local
+subnet can claim any id, including a known peer's, and report any status,
+`ext` and `dns`. Those values are stored and used by fault localization as
+reported. Received packets are parsed defensively (size cap, JSON only,
+protocol tag checked, every string sanitised by peers.py) and nothing in a
+packet is ever used as a path, a command, or an argument.
 """
 
 import contextlib
@@ -52,6 +60,7 @@ import json
 import socket
 import subprocess
 import threading
+import time
 import traceback
 from typing import Callable, Optional
 
@@ -69,6 +78,16 @@ MAX_DATAGRAM = 2048
 
 IFCONFIG_BIN = "/sbin/ifconfig"
 FALLBACK_BROADCAST = "255.255.255.255"
+
+# How long the listener trusts its list of local subnets. Interfaces change (a
+# Wi-Fi join, a DHCP renewal, a VPN), so the list is re-read, but never per
+# datagram: the port is reachable by anything on the network, and a flood of
+# packets must not become a flood of ifconfig subprocesses.
+LOCAL_NETWORKS_TTL_SECONDS = 60.0
+# A sender outside the known subnets triggers an early re-read, so a network
+# that has just come up is not ignored for a whole minute -- but at most this
+# often, for the same reason.
+LOCAL_NETWORKS_MISS_REFRESH_SECONDS = 5.0
 
 
 def build_message(
@@ -157,6 +176,48 @@ def broadcast_addresses(run_fn: Callable = subprocess.run) -> list:
     """
     addresses = []
     try:
+        for line in (_ifconfig_output(run_fn) or "").splitlines():
+            fields = line.split()
+            if "broadcast" in fields:
+                candidate = fields[fields.index("broadcast") + 1]
+                if candidate not in addresses:
+                    addresses.append(candidate)
+    except IndexError:
+        pass
+    if FALLBACK_BROADCAST not in addresses:
+        addresses.append(FALLBACK_BROADCAST)
+    return addresses
+
+
+def local_networks(run_fn: Callable = subprocess.run) -> Optional[list]:
+    """The IPv4 subnets attached to this machine's interfaces, from ifconfig.
+
+    None when ifconfig cannot be read. That means "unknown", not "no subnets":
+    the listener treats None as "accept the sender" so that an unreadable
+    ifconfig does not switch discovery off without a word.
+    """
+    output = _ifconfig_output(run_fn)
+    if output is None:
+        return None
+    networks = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or fields[0] != "inet" or "netmask" not in fields:
+            continue
+        try:
+            # macOS prints the mask as hex ("netmask 0xffffff00"). A point-to-point
+            # line ("inet A --> B netmask ...") still has the local address second.
+            mask = ipaddress.IPv4Address(int(fields[fields.index("netmask") + 1], 16))
+            network = ipaddress.IPv4Network(f"{fields[1]}/{mask}", strict=False)
+        except (IndexError, ValueError):
+            continue
+        if network not in networks:
+            networks.append(network)
+    return networks
+
+
+def _ifconfig_output(run_fn: Callable) -> Optional[str]:
+    try:
         result = run_fn(
             [IFCONFIG_BIN],
             capture_output=True,
@@ -165,25 +226,19 @@ def broadcast_addresses(run_fn: Callable = subprocess.run) -> list:
             errors="replace",
             timeout=5,
         )
-        if result.returncode == 0:
-            for line in (result.stdout or "").splitlines():
-                fields = line.split()
-                if "broadcast" in fields:
-                    candidate = fields[fields.index("broadcast") + 1]
-                    if candidate not in addresses:
-                        addresses.append(candidate)
-    except (subprocess.SubprocessError, OSError, IndexError, UnicodeError):
-        pass
-    if FALLBACK_BROADCAST not in addresses:
-        addresses.append(FALLBACK_BROADCAST)
-    return addresses
+    except (subprocess.SubprocessError, OSError, UnicodeError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout or ""
 
 
 class PeerNetwork:
-    """Owns the socket and the reader thread. Registry updates land in
-    `registry` from the listener thread; PeerRegistry serialises them against
-    the timer thread's reads with its own lock. `on_change` also runs on the
-    listener thread, so whatever it does must be safe off the main thread.
+    """Owns the socket and the reader thread.
+
+    Registry updates happen on the reader thread; PeerRegistry takes its own lock
+    for them. `on_change` is also called on the reader thread, so the app's
+    callback only sets a flag and does its file writing on the main thread.
     """
 
     def __init__(
@@ -196,6 +251,7 @@ class PeerNetwork:
         broadcast_fn: Callable[[], list] = broadcast_addresses,
         on_change: Optional[Callable[[], None]] = None,
         state_fn: Optional[Callable[[], dict]] = None,
+        local_networks_fn: Optional[Callable[[], Optional[list]]] = None,
     ):
         self.registry = registry
         self.host = host
@@ -217,6 +273,14 @@ class PeerNetwork:
         self._stop = threading.Event()
         self._awaiting_pong: set = set()
         self._lock = threading.Lock()
+        # Looked up on the module at call time rather than bound as a default, so
+        # a test can substitute it the same way it substitutes broadcast_addresses.
+        self.local_networks_fn = local_networks_fn or (lambda: local_networks())
+        self._networks: Optional[list] = None
+        self._networks_read_at: Optional[float] = None
+        # Pause after a receive error before reading again. An attribute so the
+        # tests can drive the reader loop without real sleeps.
+        self.read_error_backoff_seconds = 1.0
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -226,15 +290,26 @@ class PeerNetwork:
         Never raises. A monitor that refuses to run because a UDP port was busy
         would be worse than one running without peer discovery.
         """
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # Two copies on one machine (a dev run beside the installed app) both
-            # need to receive, rather than the second one failing to bind.
-            if hasattr(socket, "SO_REUSEPORT"):
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            # SO_REUSEPORT is deliberately not set. With it, a second copy on this
+            # machine (a dev run beside the installed app) binds the same port,
+            # but macOS hands each unicast datagram to only one of the two
+            # sockets: over loopback, 5 of 5 went to the first-bound socket and
+            # none to the second. The second copy never hears its pongs, every
+            # peer looks silent, and during an outage fault localization blames
+            # this machine's own link. Without it, the second wildcard bind fails
+            # with EADDRINUSE (SO_REUSEADDR alone does not allow it on Darwin),
+            # and that copy runs with discovery off and gives no peer verdict.
             sock.bind(("", self.bind_port))
+            # Read back, because a bind to port 0 gets a kernel-assigned port and
+            # the advertised port and the default send port must be the real one.
+            self.bind_port = sock.getsockname()[1]
+            if not self.send_port:
+                self.send_port = self.bind_port
             # So the reader wakes up regularly enough to notice _stop.
             sock.settimeout(1.0)
         except (OSError, OverflowError, ValueError, TypeError) as exc:
@@ -243,6 +318,9 @@ class PeerNetwork:
             # 70000 raises OverflowError and the quoted "45737" that YAML happily
             # produces raises TypeError. Both were reaching the caller before a
             # test pinned them.
+            if sock is not None:
+                with contextlib.suppress(OSError):
+                    sock.close()
             self.start_error = str(exc)
             return False
 
@@ -259,6 +337,20 @@ class PeerNetwork:
             with contextlib.suppress(OSError):
                 self.socket.close()
         self.started = False
+
+    def alive(self) -> bool:
+        """True while the reader thread is still running.
+
+        `started` only records that start() succeeded. The reader thread can end
+        afterwards (its socket closed under it) while `started` stays True, and a
+        caller that checks only `started` never notices discovery has stopped.
+        """
+        return (
+            self.started
+            and not self._stop.is_set()
+            and self.thread is not None
+            and self.thread.is_alive()
+        )
 
     # --- sending -----------------------------------------------------------
 
@@ -320,17 +412,62 @@ class PeerNetwork:
     def _read_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                payload, sender = self.socket.recvfrom(MAX_DATAGRAM)
+                # One byte over the cap. recvfrom() silently truncates a datagram
+                # to the buffer size, so a buffer of exactly MAX_DATAGRAM hands
+                # parse_message a cut-down copy that always passes its size check.
+                payload, sender = self.socket.recvfrom(MAX_DATAGRAM + 1)
             except socket.timeout:
                 continue
             except OSError:
-                # The socket was closed under us by stop(), or the interface
-                # went away. Either way there is nothing left to read.
-                return
+                if self._stop.is_set() or self._socket_closed():
+                    # stop() closed it, or something else did. A closed socket
+                    # never delivers again, so alive() goes False and the owner
+                    # can rebuild discovery.
+                    return
+                # Anything else (ENOBUFS, an interface going away) can pass.
+                # Returning here ended discovery for the rest of the session
+                # while `started` still read True.
+                self._stop.wait(self.read_error_backoff_seconds)
+                continue
             try:
                 self._handle(payload, sender[0])
             except Exception:  # noqa: BLE001 - one bad packet must not end discovery
                 traceback.print_exc()
+
+    def _socket_closed(self) -> bool:
+        if self.socket is None:
+            return True
+        try:
+            return self.socket.fileno() < 0
+        except OSError:
+            return True
+
+    def _sender_allowed(self, address: str) -> bool:
+        """Is `address` inside a subnet attached to one of our interfaces?
+
+        Reader thread only, so the cached list needs no lock.
+        """
+        try:
+            ip = ipaddress.IPv4Address(address)
+        except ValueError:
+            return False
+        if ip.is_loopback:
+            return True
+        now = time.monotonic()
+        read_at = self._networks_read_at
+        refresh = read_at is None or now - read_at >= LOCAL_NETWORKS_TTL_SECONDS
+        if (
+            not refresh
+            and self._networks is not None
+            and not any(ip in network for network in self._networks)
+        ):
+            refresh = now - read_at >= LOCAL_NETWORKS_MISS_REFRESH_SECONDS
+        if refresh:
+            self._networks = self.local_networks_fn()
+            self._networks_read_at = now
+        if self._networks is None:
+            return True
+        return any(ip in network for network in self._networks)
 
     def _handle(self, payload: bytes, address: str) -> None:
         message = parse_message(payload)
@@ -339,10 +476,9 @@ class PeerNetwork:
         if message["id"] == self.registry.self_id:
             # Our own broadcast, looped back on the same host.
             return
-        if not _is_local(address):
-            # The socket is bound on every interface. Answering a probe from
-            # beyond the LAN would hand this machine's hostname and health to
-            # whoever can route a packet here.
+        # Checked after parsing, so only well-formed messages of ours can cause
+        # the interface list to be re-read.
+        if not self._sender_allowed(address):
             return
 
         self.registry.observe(
@@ -367,14 +503,3 @@ class PeerNetwork:
             return
         with contextlib.suppress(OSError):
             self.socket.sendto(self._payload(PONG), (address, self.send_port))
-
-
-def _is_local(address: str) -> bool:
-    """Private, loopback or link-local. Loopback stays in because two copies on
-    one machine -- and the test suite -- talk over 127.0.0.1.
-    """
-    try:
-        parsed = ipaddress.ip_address(address)
-    except ValueError:
-        return False
-    return parsed.is_private or parsed.is_loopback or parsed.is_link_local

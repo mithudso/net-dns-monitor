@@ -1,8 +1,25 @@
-# Same ruff version as requirements-dev.txt and CI, so a commit that passes
-# here passes the lint job. Install once per clone: pre-commit install
+# Runs the lint half of the CI gate (.github/workflows/ci.yml) before a commit
+# is made, so a lint or format failure shows up locally instead of as a red CI
+# run. The test suite is not a hook: it needs macOS and AppKit and takes tens of
+# seconds, which is the wrong cost for every commit. Run it by hand:
+#
+#   python -m pytest -q
+#
+# Setup, once per clone (pre-commit is not in requirements-dev.txt; install it
+# with pipx or uv so it does not enter the app's virtualenv):
+#
+#   pipx install pre-commit     # or: uv tool install pre-commit
+#   pre-commit install
+#
+# `rev` must match the ruff pin in requirements-dev.txt. If the two differ, the
+# hook and CI check against different rule sets and can disagree about the same
+# file.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.1
     hooks:
-      - id: ruff
+      # Lint before format, and with --fix: a fix can leave code the formatter
+      # would then reflow, so the reverse order can need two runs to settle.
+      - id: ruff-check
+        args: [--fix]
       - id: ruff-format

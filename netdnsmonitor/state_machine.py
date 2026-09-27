@@ -15,13 +15,14 @@ injected callables, so this orchestration logic is testable without any real
 network, subprocess, or API calls.
 """
 
+import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from netdnsmonitor.classifier import Classification, classify
 from netdnsmonitor.escalation import redact, should_escalate
 from netdnsmonitor.flap_gate import FlapGate
-from netdnsmonitor.ladder import DEFAULT_FAILOVER_CLASSIFICATIONS, ladder_for
+from netdnsmonitor.ladder import DEFAULT_FAILOVER_CLASSIFICATIONS, LadderStep, ladder_for
 from netdnsmonitor.report import build_report
 
 ProbeResult = dict
@@ -31,6 +32,12 @@ Prober = Callable[[], ProbeResult]
 RepairExecutor = Callable[..., str]
 Escalator = Callable[[dict], Optional[dict]]
 LogWatcher = Callable[[], list]
+
+# Caps for the escalation bundle only. The on-disk report keeps every raw line
+# because it stays on this machine. The bundle leaves it, and a long lookback on
+# a noisy machine returns thousands of lines.
+MAX_OUTBOUND_LOG_LINES = 200
+MAX_OUTBOUND_LOG_LINE_CHARS = 300
 
 
 class StateMachine:
@@ -57,6 +64,13 @@ class StateMachine:
         # actually acted on, and then the verdict would explain a different event.
         self.last_probe: ProbeResult = {}
         self.failover_classifications = failover_classifications
+        # Held around the incident pipeline. A caller that runs repair steps
+        # outside tick() (the app's manual diagnosis runs on a worker thread)
+        # holds it too, so a manual repair or failover cannot interleave with the
+        # ladder's. The cost: tick() waits until that caller releases it. An
+        # RLock, so a step that takes the lock on the tick's own thread re-enters
+        # instead of deadlocking.
+        self.lock = threading.RLock()
 
     def tick(self) -> Optional[dict]:
         probe = self.prober()
@@ -85,7 +99,71 @@ class StateMachine:
         if not (prev_state == "healthy" and state == "incident"):
             return None
 
-        return self._run_incident_pipeline(classification, probe)
+        with self.lock:
+            return self._run_incident_pipeline(classification, probe)
+
+    # The gate has already moved to "incident" when the pipeline starts, and it
+    # reports only on that edge. So every injected call below fails as data: an
+    # exception escaping here would lose the only report, and the only alert,
+    # this incident will ever get. Exception messages are dropped in favour of
+    # the class name, because they can carry command output or request URLs.
+
+    def _run_step(self, step: LadderStep, classification: Classification) -> str:
+        try:
+            return self.repair_executor(step, classification.value)
+        except Exception as exc:  # noqa: BLE001 - a raising step must not cost the report
+            return f"failed: step raised {type(exc).__name__}"
+
+    def _recheck(self) -> tuple:
+        """(classification, probe). A recheck that did not run proves nothing."""
+        try:
+            probe = self.prober()
+            return classify(probe.get("external_reachable"), probe.get("dns_ok")), probe
+        except Exception:  # noqa: BLE001 - a recheck that did not run proves nothing
+            # UNCLASSIFIED, not HEALTHY: an unknown must never read as resolved.
+            return Classification.UNCLASSIFIED, {}
+
+    def _read_log_excerpts(self) -> list:
+        try:
+            return list(self.log_watcher() or [])
+        except Exception:  # noqa: BLE001 - missing evidence must not cost the report
+            return []
+
+    def _escalate(self, bundle: dict) -> Optional[dict]:
+        try:
+            return self.escalator(bundle)
+        except Exception as exc:  # noqa: BLE001 - a failed API call must not cost the report
+            return {"error": f"escalation raised {type(exc).__name__}"}
+
+    def _outbound_bundle(
+        self,
+        classification: Classification,
+        probe: ProbeResult,
+        log_excerpts: list,
+        ladder_results: list,
+    ) -> dict:
+        omitted = max(0, len(log_excerpts) - MAX_OUTBOUND_LOG_LINES)
+        # Redact the values, never the four top-level keys. Those keys are this
+        # code's schema, not evidence: redacting them let a sensitive string such
+        # as "excerpt" rename "log_excerpts", and the lookup below then raised
+        # after the gate had moved to incident. The escalator also picks its
+        # model from the classification value. Keys nested inside the values are
+        # still redacted, because domain_results is keyed by hostname.
+        # Truncate after redacting. Cutting first can split a sensitive string at
+        # the boundary into a fragment that no longer matches it, and the
+        # fragment then leaves the machine unredacted.
+        capped = [
+            str(line)[:MAX_OUTBOUND_LOG_LINE_CHARS]
+            for line in redact(log_excerpts[omitted:], self.sensitive_strings)
+        ]
+        if omitted:
+            capped.insert(0, f"[{omitted} earlier log lines omitted]")
+        return {
+            "classification": classification.value,
+            "probe_results": redact(probe, self.sensitive_strings),
+            "log_excerpts": capped,
+            "ladder_results": redact(ladder_results, self.sensitive_strings),
+        }
 
     def _run_incident_pipeline(self, classification: Classification, probe: ProbeResult) -> dict:
         started_at = datetime.now(timezone.utc)
@@ -93,7 +171,7 @@ class StateMachine:
         ladder_results = []
         repair_outcomes = []
         for step in ladder_for(classification, self.failover_classifications):
-            outcome = self.repair_executor(step, classification.value)
+            outcome = self._run_step(step, classification)
             ladder_results.append(
                 {
                     "name": step.name,
@@ -108,10 +186,7 @@ class StateMachine:
                 repair_outcomes.append(f"{step.name}: {outcome}")
         repair_outcome = "; ".join(repair_outcomes) if repair_outcomes else None
 
-        recheck_probe = self.prober()
-        recheck_classification = classify(
-            recheck_probe.get("external_reachable"), recheck_probe.get("dns_ok")
-        )
+        recheck_classification, recheck_probe = self._recheck()
         # The same rule as tick(): a recheck that confirmed one field and did
         # not read the other is evidence of nothing. It can neither claim the
         # incident resolved (so the report carries recheck_ok=None, not True)
@@ -125,22 +200,16 @@ class StateMachine:
             None if recheck_inconclusive else recheck_classification == Classification.HEALTHY
         )
 
+        log_excerpts = self._read_log_excerpts()
         escalation = None
         if not recheck_inconclusive and should_escalate(
             ladder_completed=True,
             repair_attempted_or_na=True,
             recheck_ok=bool(recheck_ok),
         ):
-            log_excerpts = self.log_watcher()
-            bundle = {
-                "classification": classification.value,
-                "probe_results": probe,
-                "log_excerpts": log_excerpts,
-                "ladder_results": ladder_results,
-            }
-            escalation = self.escalator(redact(bundle, self.sensitive_strings))
-        else:
-            log_excerpts = self.log_watcher()
+            escalation = self._escalate(
+                self._outbound_bundle(classification, probe, log_excerpts, ladder_results)
+            )
 
         ended_at = datetime.now(timezone.utc)
         return build_report(

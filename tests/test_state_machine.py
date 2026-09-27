@@ -1,3 +1,5 @@
+import threading
+
 from netdnsmonitor.state_machine import StateMachine
 
 
@@ -223,3 +225,283 @@ def test_redaction_covers_the_log_and_ladder_fields_that_carry_real_hostnames():
     assert "mail.corp.local" not in str(sent["log_excerpts"])
     assert "mail.corp.local" not in str(sent["ladder_results"])
     assert "mail.corp.local" not in str(sent)
+
+
+def test_a_sensitive_domain_used_as_a_domain_results_key_never_reaches_the_escalator():
+    """The real prober keys probe_results.domain_results by domain name, so a
+    value-only redaction sent every configured hostname as a dict key.
+    """
+    failing = {
+        "external_reachable": True,
+        "dns_ok": False,
+        "domain_results": {"mail.corp.local": {"resolved": False}},
+    }
+    escalator = FakeEscalator()
+    sm = StateMachine(
+        prober=FakeProber([failing, failing, failing]),
+        repair_executor=FakeRepairExecutor(),
+        escalator=escalator,
+        sensitive_strings=["mail.corp.local"],
+    )
+    sm.tick()
+    report = sm.tick()
+
+    assert "mail.corp.local" not in str(escalator.received_bundles[0])
+    # The on-disk report is not redacted (non-negotiable 6).
+    assert "mail.corp.local" in report["probe_results"]["domain_results"]
+
+
+# --- the anti-flap edge fires once per incident --------------------------------
+
+FAILING = {"external_reachable": True, "dns_ok": False}
+HEALTHY = {"external_reachable": True, "dns_ok": True}
+
+
+def test_a_long_incident_produces_exactly_one_report_and_a_new_incident_another():
+    """Every other test stops at the second tick, so a gate that fired on every
+    failing tick past onset kept the suite green. That is one alert per poll
+    interval for the whole outage (non-negotiable 8).
+    """
+    sm, prober, repair, escalate = make_sm(
+        [
+            FAILING,  # tick 1
+            FAILING,  # tick 2: incident declared
+            FAILING,  # recheck inside the pipeline
+            FAILING,  # tick 3
+            FAILING,  # tick 4
+            FAILING,  # tick 5
+            FAILING,  # tick 6
+            HEALTHY,  # tick 7
+            HEALTHY,  # tick 8: incident cleared
+            FAILING,  # tick 9
+            FAILING,  # tick 10: new incident declared
+            FAILING,  # recheck
+        ]
+    )
+    reports = [sm.tick() for _ in range(10)]
+
+    fired_on = [n for n, report in enumerate(reports, start=1) if report is not None]
+    assert fired_on == [2, 10]
+    assert prober.calls == 12
+    assert repair.executed_steps.count("flush_dns_cache") == 2
+
+
+# --- a raising injected callable must not consume the edge ---------------------
+#
+# The gate moves to "incident" before the pipeline runs, so an exception inside
+# the pipeline used to lose the only edge this incident will ever get: no report,
+# no alert, and no second chance until the gate clears and fails again.
+
+
+def test_a_raising_repair_step_is_recorded_as_failed_and_the_ladder_continues():
+    attempted = []
+
+    def repair_executor(step, classification=None):
+        attempted.append(step.name)
+        if step.name == "flush_dns_cache":
+            raise RuntimeError("token=hunter2")
+        return "done"
+
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING, HEALTHY]),
+        repair_executor=repair_executor,
+        escalator=FakeEscalator(),
+    )
+    sm.tick()
+    report = sm.tick()
+
+    assert report is not None
+    outcomes = {step["name"]: step["outcome"] for step in report["ladder_results"]}
+    assert outcomes["flush_dns_cache"] == "failed: step raised RuntimeError"
+    assert "resolve_against_public_resolver" in attempted  # the step after it
+    assert report["repair_outcome"].startswith("flush_dns_cache: failed:")
+    assert "hunter2" not in str(report)
+
+
+def test_a_raising_recheck_is_not_reported_as_resolved():
+    probes = iter([FAILING, FAILING])
+    escalator = FakeEscalator()
+
+    def prober():
+        try:
+            return next(probes)
+        except StopIteration:
+            raise OSError("probe exploded") from None
+
+    sm = StateMachine(
+        prober=prober,
+        repair_executor=FakeRepairExecutor(),
+        escalator=escalator,
+    )
+    sm.tick()
+    report = sm.tick()
+
+    assert report is not None
+    assert report["resolved"] is False
+    assert len(escalator.received_bundles) == 1
+
+
+def test_a_raising_log_watcher_still_produces_a_report_with_no_excerpts():
+    def log_watcher():
+        raise PermissionError("log show denied")
+
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING, FAILING]),
+        repair_executor=FakeRepairExecutor(),
+        escalator=FakeEscalator(),
+        log_watcher=log_watcher,
+    )
+    sm.tick()
+    report = sm.tick()
+
+    assert report is not None
+    assert report["log_excerpts"] == []
+
+
+def test_a_raising_escalator_is_recorded_by_class_name_only():
+    """The exception text from an API failure can carry request details, so only
+    the class name goes into the report (non-negotiable 4).
+    """
+
+    def escalator(bundle):
+        raise ConnectionError("POST https://api.example/v1?key=sk-secret failed")
+
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING, FAILING]),
+        repair_executor=FakeRepairExecutor(),
+        escalator=escalator,
+    )
+    sm.tick()
+    report = sm.tick()
+
+    assert report is not None
+    assert report["escalation"] == {"error": "escalation raised ConnectionError"}
+    assert "sk-secret" not in str(report)
+
+
+# --- manual actions and the tick pipeline share one lock -----------------------
+
+
+def test_the_incident_pipeline_waits_while_a_manual_action_holds_the_lock():
+    """app.py runs manual diagnosis steps on a worker thread. Without a shared
+    lock, a manual step and the tick's ladder could run repairs, or two
+    failovers, at the same time.
+    """
+    sm, prober, repair, escalate = make_sm([FAILING, FAILING, FAILING])
+    sm.tick()
+    results = []
+    worker = threading.Thread(target=lambda: results.append(sm.tick()), daemon=True)
+
+    with sm.lock:
+        worker.start()
+        worker.join(timeout=0.3)
+        assert worker.is_alive()
+        assert repair.executed_steps == []
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert results and results[0] is not None
+    assert "flush_dns_cache" in repair.executed_steps
+
+
+def test_a_step_that_takes_the_lock_on_the_tick_thread_does_not_deadlock():
+    """An RLock, so a step that itself takes the lock (as a shared helper in
+    app.py may) re-enters instead of hanging the tick forever.
+    """
+    holder = {}
+
+    def repair_executor(step, classification=None):
+        with holder["sm"].lock:
+            return "done"
+
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING, HEALTHY]),
+        repair_executor=repair_executor,
+        escalator=FakeEscalator(),
+    )
+    holder["sm"] = sm
+    results = []
+
+    def run():
+        sm.tick()
+        results.append(sm.tick())
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert results and results[0] is not None
+
+
+# --- outbound log excerpts are capped; the on-disk report is not ---------------
+
+
+def test_log_excerpts_sent_to_the_escalator_are_capped_but_the_report_keeps_all():
+    lines = [f"{i:05d} " + "x" * 1000 for i in range(5000)]
+    escalator = FakeEscalator()
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING, FAILING]),
+        repair_executor=FakeRepairExecutor(),
+        escalator=escalator,
+        log_watcher=lambda: lines,
+    )
+    sm.tick()
+    report = sm.tick()
+
+    sent = escalator.received_bundles[0]["log_excerpts"]
+    assert len(sent) <= 201
+    assert all(len(line) <= 300 for line in sent)
+    assert "4800" in sent[0]  # says how many earlier lines were left out
+    assert sent[1].startswith("04800 ")
+    assert sent[-1].startswith("04999 ")  # the most recent lines are the ones kept
+    assert len(report["log_excerpts"]) == 5000
+    assert report["log_excerpts"][0] == lines[0]
+
+
+def test_truncating_a_log_line_cannot_cut_a_sensitive_string_past_redaction():
+    """Truncating before redacting would leave "mail.corp." at the 300-char
+    boundary, which no longer matches the configured string.
+    """
+    escalator = FakeEscalator()
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING, FAILING]),
+        repair_executor=FakeRepairExecutor(),
+        escalator=escalator,
+        log_watcher=lambda: ["a" * 290 + "mail.corp.local is unreachable"],
+        sensitive_strings=["mail.corp.local"],
+    )
+    sm.tick()
+    sm.tick()
+
+    sent = escalator.received_bundles[0]["log_excerpts"]
+    assert "mail.corp" not in str(sent)
+    assert all(len(line) <= 300 for line in sent)
+
+
+def test_a_sensitive_string_matching_a_bundle_key_cannot_cost_the_report():
+    """The four top-level bundle keys are code-owned schema, not evidence. When
+    redaction ran over them, a configured "excerpt" renamed "log_excerpts", the
+    pipeline's own lookup of that key raised KeyError after the gate had moved to
+    incident, and that incident's only report and alert were lost.
+    """
+    escalator = FakeEscalator()
+    sm = StateMachine(
+        prober=FakeProber([FAILING, FAILING]),
+        repair_executor=FakeRepairExecutor(),
+        escalator=escalator,
+        log_watcher=lambda: ["excerpt from a result line"],
+        failure_threshold=1,
+        sensitive_strings=["excerpt", "result", "class"],
+    )
+
+    report = sm.tick()
+
+    assert report is not None
+    sent = escalator.received_bundles[0]
+    assert set(sent) == {"classification", "probe_results", "log_excerpts", "ladder_results"}
+    assert all(value is not None for value in sent.values())
+    # Left unredacted: the escalator picks its model from this value.
+    assert sent["classification"] == "dns"
+    # The evidence under the fixed keys is still redacted.
+    assert sent["log_excerpts"] == ["[REDACTED] from a [REDACTED] line"]
+    assert sent["ladder_results"]

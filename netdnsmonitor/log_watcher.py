@@ -2,11 +2,13 @@
 and filter down to error-like lines, so an incident report carries the log
 evidence a human would otherwise have to go dig up themselves.
 
-Failure is never an empty list. A timeout returns a marker line saying so,
-because [] here reads as "no errors found" and an incident report that
-silently carries no log evidence is worse than one that says the read failed.
-The marker is bracket-prefixed so `domain_learner` strips it before looking
-for hostnames.
+An empty list means `log show` ran and no line matched. When the log could not
+be read at all -- a timeout, a nonzero exit, a missing binary, a decode error --
+the watcher returns one line starting with `NO_EVIDENCE_PREFIX` instead. It used
+to return `[]` for those too, and a 30m lookback measured 10.15s against the
+10s limit: the report then showed an empty excerpt section that read as a quiet
+network. The line carries the exception class name only, never its message,
+because the excerpts go into the LLM bundle.
 """
 
 import subprocess
@@ -14,8 +16,13 @@ from typing import Callable
 
 ERROR_MARKERS = ("error", "fail", "timed out", "timeout", "unreachable", "refused")
 
+# Starts every line this module writes itself, so no reader mistakes it for a
+# line the unified log produced. domain_learner skips lines with this prefix.
+NO_EVIDENCE_PREFIX = "[net-dns-monitor]"
+
 # A 30m `log_lookback` measured 10.15s on this machine; 5m measured 2.25s.
-TIMEOUT_SECONDS = 10
+LOG_SHOW_TIMEOUT_SECONDS = 10
+TIMEOUT_SECONDS = LOG_SHOW_TIMEOUT_SECONDS
 
 # 424 error-like lines at 5m, 3,942 at 30m -- and the whole list goes into the
 # escalation prompt, where it overflows the context and the reply comes back as
@@ -36,11 +43,14 @@ def make_log_watcher(
         'OR eventMessage CONTAINS "network"'
     )
 
+    def no_evidence(reason: str) -> list[str]:
+        return [f"{NO_EVIDENCE_PREFIX} no log evidence: log show {reason}"]
+
     def watcher() -> list[str]:
         try:
             result = run_fn(
-                # Absolute path: a frozen .app does not inherit the shell's
-                # PATH, and a bare `log` there is FileNotFoundError.
+                # Absolute path, as in system_log.py: a frozen .app launched via
+                # `open` does not inherit the shell's PATH.
                 [
                     "/usr/bin/log",
                     "show",
@@ -58,16 +68,13 @@ def make_log_watcher(
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            return [
-                "[net-dns-monitor] system log read timed out; no log evidence was "
-                "collected for this incident"
-            ]
-        except (subprocess.SubprocessError, OSError, UnicodeError):
-            return []
-        # getattr: this runs inside an incident tick, and a result object
-        # without these attributes must not raise there.
+            return no_evidence(f"timed out after {timeout}s (lookback {lookback})")
+        except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
+            return no_evidence(f"failed: {type(exc).__name__}")
+        # getattr: this runs inside an incident tick, and a result object without
+        # these attributes must not raise there.
         if getattr(result, "returncode", 1) != 0:
-            return []
+            return no_evidence(f"exited {getattr(result, 'returncode', '?')}")
         stdout = getattr(result, "stdout", "") or ""
         lines = [
             line
