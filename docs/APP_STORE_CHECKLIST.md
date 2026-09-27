@@ -16,13 +16,14 @@ ship the full build outside the store instead (§10). Both can coexist.
 | Item | Evidence (2026-09-17) |
 |---|---|
 | Store edition code | `netdnsmonitor/distribution.py` (sandbox gating), `credentials.py` (Keychain), `ai_consent.py` (Guideline 5.1.2(i) permission) |
-| Tests and lint | `python3 -m pytest -q`: 1884 passed in 22 s, offline. `ruff check .` and `ruff format --check .` clean |
+| Tests and lint | `python3 -m pytest -q`: 2101 passed in 24 s, offline (2026-09-27). `ruff check .` and `ruff format --check .` clean |
 | Ad-hoc sandboxed build | `build_appstore.py adhoc --with-probe` produced `build/appstore/adhoc/dist/Net-DNS-Monitor.app`: 58 MB, arm64, `LSMinimumSystemVersion` 26.0, `codesign --verify --strict --deep` valid, entitlements exactly app-sandbox + network.client + network.server, no `itms-services` anywhere, icon holds the 512 and 512@2x elements |
 | Sandbox probe, run inside that bundle | Same result as 2026-09-14. Works: container write, TCP connect, `getaddrinfo`, UDP DNS, HTTPS, interface-bound connect on `en0`, UDP bind, Keychain round trip, `ping`, `networksetup -listnetworkserviceorder`, `scutil`, `netstat`, `ifconfig`, `route`. Refused: `log show` (`Cannot run while sandboxed`), reading the real `~/.config` |
 | Local-network permission text | `NSLocalNetworkUsageDescription` is in every build's plist; the store build refuses a bundle without it (macOS 15+ prompt, Apple TN3179) |
 | Apple rules re-checked | 5.1.2(i) names third-party AI (consent gate exists); privacy manifests and the April 2026 Xcode 26 SDK floor do not name macOS; the quarantine-attribute rule is handled by `xattr -cr`; the 2026 age-rating questionnaire and EU trader status are on the metadata list (§6) |
 | Metadata drafts | Subtitle, category, description, keywords, review notes, privacy-label answers and the export answer: §6 |
-| Privacy policy | `docs/PRIVACY_POLICY.md` drafted; three placeholders remain (publisher, contact, date) |
+| Privacy policy | `docs/PRIVACY_POLICY.md` complete (publisher, contact, effective date 2026-09-27); public copy at <https://llms-explorer.com/net-dns-monitor/privacy/>, support page at <https://llms-explorer.com/net-dns-monitor/> (both from the `llms-explorer` repository, deployed by Cloudflare Pages) |
+| Icon | Drawn in code by `scripts/appstore/make_icon.py`, reviewed 2026-09-27; the ICNS carries 512 and 512@2x |
 | Tooling | Xcode 27.0 (27A266a) on macOS 27.0, `altool` 27.0.5, Transporter installed, `.venv` on Python 3.13.15 with py2app 0.28.10 |
 | Rebuilt on `master` (2026-09-27) | After the dependency bumps (`anthropic` 1.8.0, `pyobjc` 12.2.2), with the repo `.venv` on Python 3.14.7: 81 MB, `LSMinimumSystemVersion` 26.0, signature valid, same three entitlements, probe result unchanged. The first rebuild said 27.0: Homebrew's `liblzma` bottle is built for macOS 27, and the build sets the minimum from the highest `minos` in the bundle. `setup.py` now excludes `lzma` from the store build; nothing uses xz |
 | Team ID | `L9ELX85ZFD`, from the OU field of the Apple Development certificate in the login keychain |
@@ -35,18 +36,23 @@ has never run: this Mac has no distribution certificates (step 2).
 
 ### Step 0. Decide (nothing to run)
 
-- [ ] **Bundle identifier.** Recommended `com.mitchhudson.netdnsmonitor`: reverse-DNS
-      on your name, and distinct from the direct build's `com.net-dns-monitor.app`
-      so both editions can be installed side by side. It cannot change after the
-      first upload (§3.1).
-- [ ] **Store name.** `Net-DNS-Monitor` (30 characters max, unique across the store).
-      Have a fallback ready, for example `Net-DNS-Monitor: Network Check`.
-- [ ] **Price and territories.** Free is fine. Including the European Union
-      requires the DSA trader-status declaration (§6.6).
-- [ ] **Publisher name, contact email, support URL, policy effective date.** They
-      go into `docs/PRIVACY_POLICY.md` and App Store Connect.
-- [ ] **Icon.** A designed 1024x1024 icon; the build generates a placeholder
-      otherwise. To make an `.icns` from a PNG set:
+- [x] **Bundle identifier.** Decided 2026-09-27: `com.mitchhudson.netdnsmonitor`,
+      reverse-DNS on the publisher's name, and distinct from the direct build's
+      `com.net-dns-monitor.app` so both editions can be installed side by side. It
+      cannot change after the first upload (§3.1).
+- [x] **Store name.** `Net-DNS-Monitor` (30 characters max, unique across the store).
+      Fallback if taken: `Net-DNS-Monitor: Network Check`.
+- [x] **Price and territories.** Free. All territories; the European Union needs
+      the DSA trader-status declaration (§6.6), answered as a non-trader since the
+      app earns nothing.
+- [x] **Publisher name, contact email, support URL, policy effective date.**
+      Mitchell Hudson · mitchphudson@gmail.com ·
+      <https://llms-explorer.com/net-dns-monitor/> · 2026-09-27. Filled into
+      `docs/PRIVACY_POLICY.md`; the same values go into App Store Connect.
+- [x] **Icon.** Drawn in code by `scripts/appstore/make_icon.py` (reviewed
+      2026-09-27 via `make_icon.py preview.png`); every build gets it without
+      `--icon`. A hand-made replacement still ships through `--icon`; to make an
+      `.icns` from a PNG set:
 
 ```bash
 mkdir AppIcon.iconset
@@ -92,14 +98,16 @@ security cms -D -i ~/Downloads/NetDNSMonitor_AppStore.provisionprofile \
 
 ### Step 3. Public pages
 
-- [ ] Replace `<PUBLISHER NAME>`, `<CONTACT EMAIL>` and `<EFFECTIVE DATE>` in
-      `docs/PRIVACY_POLICY.md`.
-- [ ] Host it at an `https://` URL. This repository is private and GitHub Pages on
-      a private repository needs a paid plan, so use a small public repository
-      with Pages, a public Gist, or a site you control. The release build refuses
-      to run until the URL is real (§4.2).
-- [ ] A support URL with real contact information (§6.4). The same page can serve
-      both.
+- [x] Publisher, contact and effective date filled into `docs/PRIVACY_POLICY.md`
+      (2026-09-27).
+- [x] Hosted at <https://llms-explorer.com/net-dns-monitor/privacy/>. This
+      repository is private and GitHub Pages on a private repository needs a paid
+      plan, so the page lives in the `llms-explorer` repository
+      (`site/src/pages/net-dns-monitor/privacy.astro`), which Cloudflare Pages
+      deploys on merge to `main`. The release build refuses to run until the URL
+      answers (§4.2); check with `curl -sI` before step 6.
+- [x] Support URL with real contact information (§6.4):
+      <https://llms-explorer.com/net-dns-monitor/>, same repository.
 
 ### Step 4. App Store Connect record
 
@@ -144,8 +152,8 @@ open build/appstore/adhoc/dist/Net-DNS-Monitor.app
 Run from the repository root with its `.venv`. Check that the build prints
 `Minimum macOS: 26.0`; a higher number means a newly bundled binary raised the
 floor (find it with `otool -l <file> | grep minos`).
-Replace the four placeholders; the identity strings must match
-`security find-identity -v` exactly.
+The identity strings must match `security find-identity -v` exactly; the icon
+needs no flag (the build draws it).
 
 ```bash
 .venv/bin/python scripts/appstore/build_appstore.py release \
@@ -153,9 +161,8 @@ Replace the four placeholders; the identity strings must match
   --bundle-id com.mitchhudson.netdnsmonitor \
   --version 1.0 --build-number 1 \
   --copyright "2026 Mitchell Hudson" \
-  --privacy-policy-url "https://<where the policy is hosted>" \
+  --privacy-policy-url "https://llms-explorer.com/net-dns-monitor/privacy/" \
   --declare-exempt-encryption \
-  --icon "<path to the designed .icns>" \
   --app-identity "Apple Distribution: Mitchell Hudson (L9ELX85ZFD)" \
   --installer-identity "3rd Party Mac Developer Installer: Mitchell Hudson (L9ELX85ZFD)" \
   --profile ~/Downloads/NetDNSMonitor_AppStore.provisionprofile
