@@ -347,6 +347,17 @@ def test_every_declared_action_gets_a_button():
     assert len(ALL_ACTIONS) == len(TROUBLESHOOTING_ACTIONS) + len(SECONDARY_ACTIONS)
 
 
+def test_the_grid_lays_out_only_the_actions_it_is_given():
+    """The store build passes ALL_ACTIONS minus what the sandbox forbids. The
+    window must lay out exactly that list, not fall back to the full one.
+    """
+    window = DashboardWindow(on_action=lambda action: None, actions=TROUBLESHOOTING_ACTIONS)
+    assert len(window.buttons) == len(TROUBLESHOOTING_ACTIONS)
+    assert [str(button.identifier()) for button in window.buttons] == [
+        action_id for _, action_id, _ in TROUBLESHOOTING_ACTIONS
+    ]
+
+
 # --- the log column --------------------------------------------------------
 
 

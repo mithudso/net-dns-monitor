@@ -24,6 +24,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling helpers, when run as a script
+from appkit_draw import BRAND_NAVY, brand_gradient, drawing, new_canvas, write_png  # noqa: E402
+
 ICONSET_SIZES = [
     ("icon_16x16.png", 16),
     ("icon_16x16@2x.png", 32),
@@ -41,22 +44,14 @@ ICONSET_SIZES = [
 def render_png(pixels: int, path: Path) -> None:
     import AppKit
 
-    rep = AppKit.NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
-        None, pixels, pixels, 8, 4, True, False, AppKit.NSDeviceRGBColorSpace, 0, 0
-    )
-    context = AppKit.NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
-    AppKit.NSGraphicsContext.saveGraphicsState()
-    AppKit.NSGraphicsContext.setCurrentContext_(context)
-    try:
+    rep = new_canvas(pixels, pixels)
+    with drawing(rep):
         scale = pixels / 1024.0
         transform = AppKit.NSAffineTransform.transform()
         transform.scaleBy_(scale)
         transform.concat()
         draw_icon()
-    finally:
-        AppKit.NSGraphicsContext.restoreGraphicsState()
-    data = rep.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
-    data.writeToFile_atomically_(str(path), True)
+    write_png(rep, path)
 
 
 def draw_icon() -> None:
@@ -74,16 +69,13 @@ def draw_icon() -> None:
     shadow.setShadowBlurRadius_(26)
     shadow.setShadowColor_(rgb(0.0, 0.0, 0.0, 0.32))
     shadow.set()
-    rgb(0.02, 0.11, 0.27, 1.0).setFill()
+    rgb(*BRAND_NAVY, 1.0).setFill()
     shape.fill()
     AppKit.NSGraphicsContext.restoreGraphicsState()
 
     # Teal at the top, deep navy at the bottom. Angle 90 runs the starting
     # colour from the bottom edge upwards, so the starting colour is the navy.
-    gradient = AppKit.NSGradient.alloc().initWithStartingColor_endingColor_(
-        rgb(0.02, 0.11, 0.27, 1.0), rgb(0.00, 0.52, 0.60, 1.0)
-    )
-    gradient.drawInBezierPath_angle_(shape, 90)
+    brand_gradient().drawInBezierPath_angle_(shape, 90)
     # Light from above: a sheen centred near the top edge, gone by the middle.
     sheen = AppKit.NSGradient.alloc().initWithStartingColor_endingColor_(
         rgb(1.0, 1.0, 1.0, 0.16), rgb(1.0, 1.0, 1.0, 0.0)

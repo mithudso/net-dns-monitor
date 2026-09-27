@@ -407,10 +407,14 @@ GRAPH_KINDS = (
 class DashboardWindow:
     """Retains an NSWindow and the views inside it that get updated."""
 
-    def __init__(self, on_action: Callable[[str], None]):
+    def __init__(self, on_action: Callable[[str], None], actions: Optional[list] = None):
         import AppKit
 
         self.on_action = on_action
+        # The troubleshooting grid. The store build passes ALL_ACTIONS minus the
+        # buttons the sandbox forbids, so a reviewer never meets an "arbitrary
+        # shell" button whose only answer is that it is unavailable.
+        self.actions = list(ALL_ACTIONS if actions is None else actions)
         self._target = _make_button_target(self._handle)
 
         rect = AppKit.NSMakeRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -506,7 +510,7 @@ class DashboardWindow:
         """Two columns, laid out downward from just under the graphs."""
         column_width = (LEFT_WIDTH - 2 * MARGIN - BUTTON_GAP) / 2
         top = self._graphs_bottom() - GRAPH_GAP
-        for index, (label, action_id, kind) in enumerate(ALL_ACTIONS):
+        for index, (label, action_id, kind) in enumerate(self.actions):
             row, column = divmod(index, 2)
             x = MARGIN + column * (column_width + BUTTON_GAP)
             y = top - (row + 1) * (BUTTON_HEIGHT + BUTTON_GAP)
@@ -586,7 +590,7 @@ class DashboardWindow:
             button.setIdentifier_(action_id)
             content.addSubview_(button)
             # Kept by id rather than appended to self.buttons: that list is the
-            # troubleshooting grid, and the tests count it against ALL_ACTIONS.
+            # troubleshooting grid, and the tests count it against self.actions.
             self.log_control_buttons[action_id] = button
 
         status_y = controls_y - LOG_ROW_GAP - LOG_STATUS_HEIGHT
