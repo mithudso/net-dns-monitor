@@ -60,9 +60,9 @@ notarization (§10). Both can coexist.
   - deletes rpaths that point outside the bundle, and refuses any link to a library outside the bundle or the OS;
   - sets the minimum macOS version from the bundled binaries;
   - signs inside-out, verifies, and runs `productbuild`.
-- `scripts/appstore/make_icon.py` generates a placeholder ICNS with the 512 and 512@2x sizes App Store Connect requires.
+- `scripts/appstore/make_icon.py` draws the app icon (teal-to-navy body, wireframe globe, heartbeat equator; reviewed 2026-09-27) as an ICNS with the 512 and 512@2x sizes App Store Connect requires. `make_icon.py preview.png` renders one 1024px PNG to look at.
 - `scripts/appstore/sandbox_probe.py` measures sandbox behaviour (§4.1).
-- `docs/PRIVACY_POLICY.md` is a draft privacy policy with placeholders.
+- `docs/PRIVACY_POLICY.md` is the privacy policy (publisher, contact and effective date filled in 2026-09-27); its public copy is <https://llms-explorer.com/net-dns-monitor/privacy/>, with the support page at <https://llms-explorer.com/net-dns-monitor/>.
 - `setup.py` declares `NSLocalNetworkUsageDescription` for every build. macOS 15
   and later ask the user before an app sends to local-network addresses, and
   this app does so on purpose: the peer announcement is a UDP broadcast and the
@@ -70,8 +70,8 @@ notarization (§10). Both can coexist.
   ([TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy)).
   The build refuses a bundle whose `Info.plist` lacks that key, the bundle
   identifier, either version string, the category or the minimum system version.
-- `build_appstore.py --icon <designed.icns>` ships a designed icon instead of
-  the placeholder, after checking that the file holds the 512x512 and
+- `build_appstore.py --icon <other.icns>` ships a hand-made icon instead of
+  the drawn one, after checking that the file holds the 512x512 and
   512x512@2x elements (`ic09`, `ic10`) that ITMS-90236 requires.
 
 **Not verified here:**
@@ -274,7 +274,7 @@ Use these titles for screenshots and in the review notes below.
 | Category | Primary **Utilities**; secondary **Developer Tools** | Must match `LSApplicationCategoryType` |
 | Content rights | Does not contain third-party content | |
 | Age rating | Answer the questionnaire truthfully | No web browsing, user-generated content, gambling or mature content. The app can show AI-written diagnostic text; say so if asked. The questionnaire changed on 2026-01-31 (tiers 4+, 9+, 13+, 16+, 18+), so answer it fresh rather than copying an older app's. ([age ratings](https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions), [requirement](https://developer.apple.com/news/upcoming-requirements/)) |
-| Privacy Policy URL | `<URL where you host docs/PRIVACY_POLICY.md>` | Required for macOS. This repository is **private** (checked 2026-09-17), and GitHub Pages on a private repository needs a paid GitHub plan, so host the page elsewhere: a small public repository with Pages, a public Gist, or any site you control. The URL must be `https://` and live before the release build, which refuses to run without it. |
+| Privacy Policy URL | `https://llms-explorer.com/net-dns-monitor/privacy/` | Required for macOS. This repository is **private** (checked 2026-09-17), so the policy is published on a site the publisher controls: the `llms-explorer` repository's `site/src/pages/net-dns-monitor/privacy.astro`, deployed by Cloudflare Pages. The URL must be `https://` and live before the release build, which refuses to run without it. |
 
 ### 6.2 Pricing and Availability
 
@@ -337,9 +337,9 @@ network,DNS,monitor,wifi,outage,internet,ping,latency,diagnostics,troubleshoot,m
 
 | Field | Value |
 |---|---|
-| Support URL | `<URL with real contact information>` (required ([source](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information))) |
+| Support URL | `https://llms-explorer.com/net-dns-monitor/` (required ([source](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information))); contact e-mail on the page |
 | Marketing URL | optional |
-| Copyright | `2026 <Your Name>` |
+| Copyright | `2026 Mitchell Hudson` |
 | Build | select the processed upload |
 
 **Screenshots:** 1 to 10 images, 16:10, exactly 1280x800, 1440x900, 2560x1600
@@ -434,7 +434,7 @@ you can reply without a new build when a note is enough.
 | 5.1.1(i): privacy policy link inside the app | Mitigated | The store build's Privacy Policy menu item opens the bundled `NDMPrivacyPolicyURL`; release builds refuse to run without `--privacy-policy-url` |
 | 2.4.5(viii): deprecated technologies | Risk | `rumps` posts notifications with `NSUserNotificationCenter`, deprecated since macOS 11; `alert.py` falls back to `osascript`. Neither has been tested sandboxed. If review objects, move to `UNUserNotificationCenter`, which needs a new dependency (`pyobjc-framework-UserNotifications`). |
 | 4.2: minimum functionality | Low | Native menu bar utility with a real window |
-| Icon quality | Placeholder | Replace `make_icon.py` output with a designed icon before release |
+| Icon quality | Done (2026-09-27) | `make_icon.py` draws the designed icon; review `make_icon.py preview.png` after any change to it |
 | ITMS-90236 (icon sizes) | Mitigated | ICNS includes 512 and 512@2x; `--icon` checks a designed icon for the same |
 | Local Network privacy prompt (macOS 15+) | Mitigated | `NSLocalNetworkUsageDescription` is in the plist and the build refuses a bundle without it. A denial is not detectable from inside the app; see `docs/known-issues.md` |
 | Privacy manifest / required-reason API (ITMS-91053) | Not applicable | Apple's requirement names iOS, iPadOS, tvOS, visionOS and watchOS only ([source](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)) |

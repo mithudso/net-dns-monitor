@@ -797,16 +797,24 @@ def test_candidate_probes_share_one_deadline(store):
 def test_the_failover_step_does_not_add_a_probe_per_backup(store):
     """The preferred link is probed first, then every backup at once: two probe
     rounds whatever the number of backups, where serially it was four.
+
+    A longer delay than the shared one: the bound sits one round above the
+    parallel time, and a loaded CI runner spent 0.27 s on overhead against a
+    0.25 s round. Scaling the round keeps serial and parallel far apart.
     """
-    failover = build(
-        store, FakeRunner(), prober=sleeping_prober, probe_timeout=2.0, **THREE_BACKUPS
-    )
+    delay = 2 * PROBE_DELAY
+
+    def slow_prober(dev):
+        time.sleep(delay)
+        return True
+
+    failover = build(store, FakeRunner(), prober=slow_prober, probe_timeout=2.0, **THREE_BACKUPS)
 
     started = time.monotonic()
     failover.attempt_failover("network")
     elapsed = time.monotonic() - started
 
-    assert elapsed < 3 * PROBE_DELAY
+    assert elapsed < 3 * delay
 
 
 def test_snapshot_probes_every_side_under_one_deadline(store):

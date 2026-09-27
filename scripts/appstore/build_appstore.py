@@ -592,7 +592,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--icon",
             type=Path,
             default=None,
-            help="a designed .icns to ship instead of the make_icon.py placeholder",
+            help="an .icns to ship instead of the one make_icon.py draws",
         )
         p.add_argument(
             "--privacy-policy-url",
@@ -627,11 +627,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit(problem)
         shutil.copyfile(args.icon, icon)
     else:
+        # The icon is drawn in code (make_icon.py) so the repo carries no binary
+        # asset; --icon exists for a hand-made replacement.
         run([sys.executable, REPO / "scripts" / "appstore" / "make_icon.py", icon])
-        if args.mode == "release":
-            # Not a validation failure, so not a refusal; but a placeholder on
-            # the store page is the first thing a reviewer and a buyer see.
-            print("WARNING: shipping the placeholder icon; pass --icon <designed.icns>", flush=True)
 
     app = py2app_build(args, dist, bdist, icon)
     info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())

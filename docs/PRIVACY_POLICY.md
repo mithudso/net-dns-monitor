@@ -1,15 +1,16 @@
 # Net-DNS-Monitor Privacy Policy
 
-> **Draft for the Mac App Store listing.** Replace every `<PLACEHOLDER>` before
-> publishing, host this page at a public URL, and enter that URL in App Store
-> Connect (App Information → Privacy Policy URL). Guideline 5.1.1(i) also
-> requires a link to it inside the app; the App Store build shows one in its
-> menu. Have it reviewed by someone qualified if you sell in regions with
-> specific privacy law obligations.
+> **Source of the published policy.** The public copy is
+> <https://llms-explorer.com/net-dns-monitor/privacy/>, rendered from
+> `site/src/pages/net-dns-monitor/privacy.astro` in the `llms-explorer`
+> repository; that URL is what App Store Connect (App Information → Privacy
+> Policy URL) and the store build's `NDMPrivacyPolicyURL` carry. Change the
+> wording here first, then mirror it there. Guideline 5.1.1(i) also requires a
+> link to it inside the app; the App Store build shows one in its menu.
 
-**Publisher:** `<PUBLISHER NAME>`
-**Contact:** `<CONTACT EMAIL>`
-**Effective date:** `<EFFECTIVE DATE>`
+**Publisher:** Mitchell Hudson
+**Contact:** mitchphudson@gmail.com
+**Effective date:** 2026-09-27
 
 ## Summary
 
@@ -106,4 +107,4 @@ ask for permission again before sending anything new to Anthropic.
 
 ## Contact
 
-Questions about this policy: `<CONTACT EMAIL>`.
+Questions about this policy: mitchphudson@gmail.com.
