@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2124 tests; the whole decision surface
+python3 -m pytest -q          # 2129 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2124 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2124 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2129 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -843,7 +843,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2124 passed
+python3 -m pytest -q            # 2129 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -862,9 +862,9 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 75 | `test_privileges.py` |
 | 61 | `test_status.py` |
 | 60 | `test_cli_console.py` |
-| 56 | `test_app_appstore_wiring.py` |
+| 58 | `test_app_appstore_wiring.py` |
+| 57 | `test_dashboard.py` |
 | 54 | `test_console.py` |
-| 54 | `test_dashboard.py` |
 | 53 | `test_app_dashboard_wiring.py` |
 | 52 | `test_peer_net.py` |
 | 51 | `test_system_log.py` |
@@ -890,10 +890,10 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 22 | `test_ping_monitor.py` |
 | 21 | `test_app_privilege_wiring.py` |
 | 21 | `test_state_machine.py` |
+| 20 | `test_appstore_screenshots.py` |
 | 20 | `test_service_order.py` |
 | 19 | `test_app_settings_wiring.py` |
 | 18 | `test_app_peer_wiring.py` |
-| 18 | `test_appstore_screenshots.py` |
 | 18 | `test_mini_window.py` |
 | 17 | `test_anthropic_escalator.py` |
 | 17 | `test_dock_icon.py` |
@@ -925,7 +925,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 6 | `test_classifier.py` |
 | 3 | `test_app_resolution_wiring.py` |
 | 2 | `test_app_report_storage_wiring.py` |
-| **2124** | **total** |
+| **2129** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

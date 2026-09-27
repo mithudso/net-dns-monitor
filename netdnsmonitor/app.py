@@ -1636,6 +1636,10 @@ class NetDnsMonitorApp(rumps.App):
         """
         if self._dashboard is None:
             return
+        # No pane to paint in a build that cannot read the log (the window leaves
+        # the column out), so skip the filter pass that would feed it.
+        if not self.capabilities.unified_log:
+            return
         # Same guard as _refresh_dashboard: LogBuffer.view() is a full filter-and-coalesce
         # pass over up to log_view_max_entries, and it was running once a second for a
         # hidden window.
@@ -2019,7 +2023,9 @@ class NetDnsMonitorApp(rumps.App):
             # reference is collected out from under AppKit, which looks exactly
             # like the window never opening.
             self._dashboard = DashboardWindow(
-                on_action=self.handle_dashboard_action, actions=self.dashboard_actions()
+                on_action=self.handle_dashboard_action,
+                actions=self.dashboard_actions(),
+                log_column=self.capabilities.unified_log,
             )
         return self._dashboard
 

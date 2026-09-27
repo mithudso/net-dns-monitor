@@ -51,7 +51,7 @@ notarization (§10). Both can coexist.
 ## 2. What is already done in this repo
 
 - `netdnsmonitor/distribution.py` detects the sandbox and says which features are off.
-- The dashboard's troubleshooting grid omits the buttons for those features (`App.dashboard_actions`, 2026-09-27): no "Open console (arbitrary shell)", router, prewarm-from-log, DNS-flush or elevated-permissions button in the store build. The menu already omitted them (§5.1), and `handle_dashboard_action` keeps its gate for any other path in.
+- The dashboard's troubleshooting grid omits the buttons for those features (`App.dashboard_actions`, 2026-09-27): no "Open console (arbitrary shell)", router, prewarm-from-log, DNS-flush or elevated-permissions button in the store build. The menu already omitted them (§5.1), and `handle_dashboard_action` keeps its gate for any other path in. The store build's dashboard also has no system-log column (`DashboardWindow(log_column=False)`): in the sandbox it could only say the log is unavailable.
 - `netdnsmonitor/credentials.py` reads API keys from the Keychain as well as the environment. A sandboxed app launched from Finder has no shell environment.
 - `netdnsmonitor/ai_consent.py` holds explicit, versioned, revocable permission before anything goes to Anthropic.
 - `packaging/appstore/entitlements.plist` and `entitlements-helper.plist` define the sandbox, network client and network server entitlements, with no temporary exceptions.
