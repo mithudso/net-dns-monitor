@@ -76,9 +76,9 @@ iconutil -c icns AppIcon.iconset -o NetDNSMonitor.icns
 
 ### Step 2. Identifier, certificates, profile
 
-- [ ] Register the App ID: explicit, the bundle ID from step 0, macOS, no
+- [x] Register the App ID: explicit, the bundle ID from step 0, macOS, no
       capabilities ticked (§3.2).
-- [ ] Create and install **Apple Distribution** and **Mac Installer Distribution**
+- [x] Create and install **Apple Distribution** and **Mac Installer Distribution**
       certificates (§3.3). Done when both lines print:
 
 ```bash
@@ -86,15 +86,18 @@ security find-identity -v -p codesigning | grep "Apple Distribution: Mitchell Hu
 security find-identity -v | grep "3rd Party Mac Developer Installer: Mitchell Hudson (L9ELX85ZFD)"
 ```
 
-- [ ] Create a **Mac App Store Connect** provisioning profile for the App ID with
+- [x] Create a **Mac App Store Connect** provisioning profile for the App ID with
       the Apple Distribution certificate (§3.4) and download it to
       `~/Downloads/NetDNSMonitor_AppStore.provisionprofile`. Done when this prints
       `L9ELX85ZFD.<your bundle id>`:
 
 ```bash
 security cms -D -i ~/Downloads/NetDNSMonitor_AppStore.provisionprofile \
-  | plutil -extract Entitlements.com.apple.application-identifier raw -
+  | python3 -c 'import plistlib,sys; print(plistlib.loads(sys.stdin.buffer.read())["Entitlements"]["com.apple.application-identifier"])'
 ```
+
+(Not `plutil -extract`: it splits key paths on dots, and the key name
+contains dots, so it reports "No value at that key path" for a good profile.)
 
 ### Step 3. Public pages
 
@@ -168,11 +171,18 @@ needs no flag (the build draws it).
   --profile ~/Downloads/NetDNSMonitor_AppStore.provisionprofile
 ```
 
-- [ ] Output is `build/appstore/release/Net-DNS-Monitor-1.0-1.pkg` and the
-      script's own `pkgutil --check-signature` passed.
-- [ ] This mode has never run with real certificates. If it stops, the message
-      names the check that failed (§4.2 lists them); an identity-not-found error
-      means the quoted name differs from `security find-identity -v`.
+- [x] Output is `build/appstore/release/Net-DNS-Monitor-1.0-1.pkg` and the
+      script's own `pkgutil --check-signature` passed. First run with real
+      certificates, 2026-09-27, from a clean checkout of `e71a6de`: 34 MB pkg;
+      app signed `Apple Distribution: Mitchell Hudson (L9ELX85ZFD)`, profile
+      embedded (expires 2027-09-27), entitlements app-sandbox + network.client +
+      network.server + the application and team identifiers,
+      `LSMinimumSystemVersion` 26.0, `ITSAppUsesNonExemptEncryption` false, no
+      sandbox probe. Build from a clean checkout: the build bundles whatever is
+      in the working tree, uncommitted edits included.
+- [ ] If it stops, the message names the check that failed (§4.2 lists them);
+      an identity-not-found error means the quoted name differs from
+      `security find-identity -v`.
 
 ### Step 7. Validate, upload, TestFlight
 
