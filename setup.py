@@ -77,6 +77,12 @@ if os.environ.get("NETDNS_BUILD") == "appstore":
     if policy_url:
         # Read by the app's "Privacy Policy" menu item (Guideline 5.1.1(i)).
         PLIST["NDMPrivacyPolicyURL"] = policy_url
+    # Nothing here uses xz; lzma is only reached through shutil's optional
+    # import, which tolerates its absence. Bundling it drags in Homebrew's
+    # liblzma, whose bottle is built for the host macOS, and
+    # build_appstore.py sets LSMinimumSystemVersion from the highest minos in
+    # the bundle -- so that one dylib raised the store floor to macOS 27.
+    OPTIONS["excludes"] = ["lzma", "_lzma"]
     icon = os.environ.get("NETDNS_ICON")
     if icon:
         OPTIONS["iconfile"] = icon

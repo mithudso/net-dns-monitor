@@ -163,13 +163,11 @@ comment that is wrong about why is as expensive as code that is wrong.
   `toggle_network_service` is never automated and returns `NOT_AUTOMATED`. Fakes cover
   all of this. `switch_to_backup_network` does not use the grant: it is genuinely
   attempted, and reports `NEEDS_PRIVILEGE` only when the write is actually refused.
-- **The canonical line is branch `feat/appstore-prep`**
-  (`.claude/worktrees/appstore-prep`), and the owner will merge it into `master`.
-  `master` (c31d044) was merged into this branch on 2026-09-17 (`a78fa0f`), so the
-  branch is a superset of it; `master` alone still lacks the optimizer pass and the
-  App Store work. Merging back changes the live resolver: `unbound/unbound.conf` and
-  `dnsmasq/dnsmasq.conf` are symlinked from `/opt/homebrew/etc` into the main checkout. The other worktrees under
-  `.claude/worktrees/` and the `docs/scripts-manual` branch are older and are not what
+- **The canonical line is `master`.** `feat/appstore-prep` (the optimizer pass and
+  the App Store work) merged into it in PR #6 (`bb4ef98`), and its worktree is gone.
+  `unbound/unbound.conf` and `dnsmasq/dnsmasq.conf` are symlinked from
+  `/opt/homebrew/etc` into the main checkout, so any change to them changes the live
+  resolver at the next restart. The `docs/scripts-manual` branch is older and is not what
   should run. `scripts/net-dns-monitor-service` resolves `SOURCE_BUNDLE` from
   `NDM_SOURCE_BUNDLE`, then the path its last install or update recorded in
   `~/Library/Application Support/net-dns-monitor/source-bundle`, then its own checkout's

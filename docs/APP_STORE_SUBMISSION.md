@@ -214,7 +214,7 @@ Output: `build/appstore/release/Net-DNS-Monitor-<version>-<build>.pkg`.
 |---|---|
 | Architecture | arm64 only |
 | Minimum macOS | 26.0 |
-| Size | about 57 MB |
+| Size | about 81 MB (Python 3.14 venv, 2026-09-27) |
 | Category | `public.app-category.utilities` |
 
 The minimum is 26.0 because Homebrew's Python 3.13 is built for macOS 26 on
@@ -223,6 +223,11 @@ binaries. Re-measured 2026-09-17 on macOS 27.0: `vtool -show-build` on
 Homebrew's Python 3.13.15 framework reports `minos 26.0`, `sdk 26.5`, so a
 buyer on macOS 26 can still install it. Apple accepts arm64-only Mac apps, and macOS 27 is Apple-silicon
 only ([Apple news](https://developer.apple.com/news/?id=k1mtkt1k)).
+
+The store build excludes `lzma` (`setup.py`). Homebrew's `liblzma` bottle is
+built for the host macOS, so on a macOS 27 build machine bundling it raised the
+minimum to 27.0 (measured 2026-09-27). Nothing in the app uses xz, and
+`shutil` only imports `lzma` optionally.
 
 To support older macOS or Intel Macs, build with a python.org universal2
 Python 3.13 instead. The script still patches `itms-services` and recomputes
