@@ -308,7 +308,13 @@ disclosed in the privacy policy either way.
 
 ### 6.4 Version information (1.0)
 
-**Description** (1,369 of 4,000 characters):
+**Promotional Text** (144 of 170 characters; editable at any time without a review):
+
+```
+Is it your Mac, your network or DNS? Net-DNS-Monitor watches your connection from the menu bar and writes an incident report you can hand to IT.
+```
+
+**Description** (1,296 of 4,000 characters; as entered 2026-09-27):
 
 ```
 Net-DNS-Monitor watches your Mac's internet and DNS connectivity from the menu bar and tells you what is actually wrong when it breaks.
@@ -321,20 +327,30 @@ When a check fails, it separates the three things that look identical from a bro
 • An anti-flap gate: one outage, one alert
 • Incident reports and a forensic timeline stored on your Mac
 • Read-only view of your network service order
-• Optional: Slack or email alerts when an incident starts
 • Optional: ask Claude (your own Anthropic API key) for a diagnosis when the checks cannot explain an outage. Nothing is sent until you explicitly allow it, and you can withdraw permission at any time.
 • Optional: compare notes with other Macs running the app on the same network
 
-The app never claims a repair it did not perform. Anything this edition cannot do inside the Mac App Store sandbox, such as changing network settings, is reported as unavailable rather than attempted.
+The app never claims a repair it did not perform. Anything the Mac App Store sandbox does not allow, such as changing network settings, is reported as unavailable rather than attempted.
 
 No account, no analytics, no ads.
 ```
 
-**Keywords** (87 of 100 bytes):
+Two changes from the first draft. The Slack/email bullet is out because no live
+Slack or SMTP delivery has been observed (CLAUDE.md, Known-unverified areas), and
+"Test network alert" only draws the local banner; add it back once a real alert
+arrives. "This edition" became "the Mac App Store sandbox", so the listing does
+not hint at a fuller build sold elsewhere.
+
+**Keywords** (94 of 100 bytes):
 
 ```
-network,DNS,monitor,wifi,outage,internet,ping,latency,diagnostics,troubleshoot,menu bar
+wifi,internet,outage,ping,latency,packet loss,connectivity,diagnostics,router,offline,menu bar
 ```
+
+Apple: "Don't repeat any words included in your app name, subtitle, or
+category" ([App Store search](https://developer.apple.com/app-store/search/)).
+Network, DNS, monitor and troubleshooter are already searchable from the name
+and subtitle, so the bytes go to other terms.
 
 | Field | Value |
 |---|---|
@@ -400,6 +416,12 @@ requires the account to declare whether it is a *trader* under the DSA
 A free app with no revenue fits a non-trader declaration; a trader must publish
 contact details on the product page. Decide this when you choose territories
 (§6.2), or leave the EU out of the territory list.
+
+It is an account setting, not a per-app question: the territories page does
+not ask (observed 2026-09-27). App Store Connect → Business → Agreements tab →
+Compliance → Digital Services Act → Complete Compliance Requirements → "This is
+not a trader account". An account with no status is asked at its first
+submission ([Apple](https://developer.apple.com/help/app-store-connect/manage-compliance-information/manage-european-union-digital-services-act-trader-requirements/)).
 
 ### 6.7 App Review Information
 

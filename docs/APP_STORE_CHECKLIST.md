@@ -65,14 +65,14 @@ iconutil -c icns AppIcon.iconset -o NetDNSMonitor.icns
 
 ### Step 1. Apple Developer Program
 
-- [ ] Membership is **paid and active** for team `L9ELX85ZFD`:
+- [x] Membership is **paid and active** (owner, 2026-09-27) for team `L9ELX85ZFD`:
       <https://developer.apple.com/account> → Membership details. A free
       "Personal Team" cannot create distribution certificates; enrolling costs
       $99/year and can take a day or two to activate.
-- [ ] The **latest Program License Agreement is accepted** (App Store Connect →
+- [x] The **latest Program License Agreement is accepted** (owner, 2026-09-27) (App Store Connect →
       Agreements). Uploads are refused until the account holder accepts the
       current version; this is the most common first-upload blocker.
-- [ ] Two-factor authentication is on for the Apple ID (required for the program).
+- [x] Two-factor authentication is on (the distribution certificates could not have been created without it) for the Apple ID (required for the program).
 
 ### Step 2. Identifier, certificates, profile
 
@@ -195,19 +195,28 @@ xcrun altool --upload-package build/appstore/release/Net-DNS-Monitor-1.0-1.pkg \
 
 Or drag the `.pkg` into `/Applications/Transporter.app` (§5).
 
+Uploads so far (2026-09-27):
+
+| Build | From | State |
+|---|---|---|
+| 1.0 (1) | `e71a6de` | Uploaded via Transporter. **Never submit it**: its store dashboard still shows "Open console (arbitrary shell)", the elevated-permission, router and prewarm buttons (Guidelines 2.5.2, 2.4.5) |
+| 1.0 (2) | `320fb1f` | Built from a clean checkout; those buttons and Flush DNS hidden; 2124 tests passed there; bundled `netdnsmonitor/` byte-identical to the commit. Staged at `build/appstore/upload/Net-DNS-Monitor-1.0-2.pkg` for upload |
+
 - [ ] The build shows as processed under the app's TestFlight tab (minutes to an
       hour). Processing e-mails name any ITMS-* problem; §8 has the known ones.
 - [ ] Optional but recommended: install it through TestFlight on a second Mac.
 
 ### Step 8. Metadata in App Store Connect (§6 has every value)
 
-- [ ] **App Information**: subtitle, primary category Utilities, secondary
+- [x] **App Information**: subtitle, primary category Utilities, secondary
       Developer Tools, content rights, privacy policy URL (§6.1).
-- [ ] **Pricing and Availability**: price tier (free), territories (§6.2).
+- [x] **Pricing and Availability**: price tier (free), territories (§6.2).
 - [ ] **EU trader status** declared if the EU is in the territory list (§6.6).
+      Account-level, so the territories page never asks: Business → Agreements
+      → Compliance → Digital Services Act → "This is not a trader account".
 - [ ] **App Privacy**: "Yes, we collect data" with the two declared types, not
       linked to the user, not used for tracking, App Functionality (§6.3).
-- [ ] **Age rating**: the questionnaire that took effect on 2026-01-31, answered
+- [x] **Age rating**: the questionnaire that took effect on 2026-01-31, answered
       fresh (§6.1).
 - [ ] **Version 1.0**: description, keywords, support URL, marketing URL
       (optional), copyright `2026 Mitchell Hudson`, the processed build, "What's
@@ -255,6 +264,15 @@ Or drag the `.pkg` into `/Applications/Transporter.app` (§5).
 4. Release build (step 6), validate and upload (step 7), "What's New", submit.
 
 ## 4. Open items that do not block submission
+
+- **Decide before submitting:** the store dashboard's right half is the
+  system-log pane, which in the sandbox can only show
+  `UNAVAILABLE_IN_APP_STORE_BUILD: reading the system log is not available…`,
+  with a search field and four buttons that answer the same. A reviewer may
+  read it as a non-working feature (Guideline 2.1), and it fills half of both
+  dashboard screenshots. Fix: skip the log column in `DashboardWindow` (and
+  size the window to `LEFT_WIDTH`) when `capabilities.unified_log` is off,
+  then build 3 and retake the screenshots.
 
 - The NAT LaunchDaemon on this Mac still runs a user-writable script as root
   until `sudo router/scripts/install_persistent_nat.sh` is re-run (CLAUDE.md,
