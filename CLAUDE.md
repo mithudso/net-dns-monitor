@@ -77,7 +77,7 @@ report, because someone will act on it.
 ## Before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2101 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2124 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -196,7 +196,8 @@ comment that is wrong about why is as expensive as code that is wrong.
   and names the features the sandbox or App Review forbid: the failover switch, the
   privileged repairs, the unified log, the router, the shell console and the
   LaunchAgent login item. Each must report itself unavailable, never fail in a way that
-  looks like a network fault. `credentials.py` adds a Keychain lookup after the environment, and
+  looks like a network fault, and the dashboard grid omits their buttons
+  (`App.dashboard_actions`) so a reviewer never meets an "arbitrary shell" button. `credentials.py` adds a Keychain lookup after the environment, and
   `ai_consent.py` records permission before anything goes to Anthropic.
   `docs/APP_STORE_SUBMISSION.md` is the authoritative document for the store build:
   what was measured, what is wired, and what is not verified.

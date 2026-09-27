@@ -62,6 +62,7 @@ from netdnsmonitor.classifier import Classification, classify
 from netdnsmonitor.config import ConfigError, load_config
 from netdnsmonitor.console_window import ConsoleWindowController
 from netdnsmonitor.dashboard import (
+    ALL_ACTIONS,
     DashboardWindow,
     dashboard_sections,
     install_main_menu,
@@ -171,6 +172,10 @@ GATED_DASHBOARD_ACTIONS = {
     "open_router_window": ("router", "the router console"),
     "grant_privileges": ("privileged_repairs", "granting elevated permissions"),
     "revoke_privileges": ("privileged_repairs", "revoking elevated permissions"),
+    # The executor already answers with the same text in the store build
+    # (repair_executor's unavailable_fn); gating it here keeps the button off
+    # the store grid as well.
+    "flush_dns_cache": ("privileged_repairs", "flushing the DNS cache"),
     # Prewarming reads its names out of `log show`, so it goes with the log.
     "prewarm_dns": ("unified_log", "prewarming DNS from the system log's query history"),
     "log_refresh": ("unified_log", "reading the system log"),
@@ -1993,12 +1998,29 @@ class NetDnsMonitorApp(rumps.App):
         self._refresh_dashboard()
         self._refresh_log_pane()
 
+    def dashboard_actions(self) -> list:
+        """The troubleshooting grid for this build: ALL_ACTIONS minus what it lacks.
+
+        A button the sandbox forbids could only ever print
+        `distribution.unavailable(...)`, and App Review reads an "arbitrary
+        shell" button as the feature itself. handle_dashboard_action keeps its
+        gate regardless, so any other path to a gated action still gets the text.
+        """
+        hidden = {
+            action_id
+            for action_id, (feature, _what) in GATED_DASHBOARD_ACTIONS.items()
+            if not getattr(self.capabilities, feature)
+        }
+        return [action for action in ALL_ACTIONS if action[1] not in hidden]
+
     def _ensure_dashboard(self) -> DashboardWindow:
         if self._dashboard is None:
             # Retained on the instance. An NSWindow with no strong Python
             # reference is collected out from under AppKit, which looks exactly
             # like the window never opening.
-            self._dashboard = DashboardWindow(on_action=self.handle_dashboard_action)
+            self._dashboard = DashboardWindow(
+                on_action=self.handle_dashboard_action, actions=self.dashboard_actions()
+            )
         return self._dashboard
 
     def open_dashboard(self, _sender=None, activate: bool = True):

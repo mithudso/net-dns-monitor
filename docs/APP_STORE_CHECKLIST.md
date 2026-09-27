@@ -16,7 +16,7 @@ ship the full build outside the store instead (§10). Both can coexist.
 | Item | Evidence (2026-09-17) |
 |---|---|
 | Store edition code | `netdnsmonitor/distribution.py` (sandbox gating), `credentials.py` (Keychain), `ai_consent.py` (Guideline 5.1.2(i) permission) |
-| Tests and lint | `python3 -m pytest -q`: 2101 passed in 24 s, offline (2026-09-27). `ruff check .` and `ruff format --check .` clean |
+| Tests and lint | `python3 -m pytest -q`: 2124 passed in 25 s, offline (2026-09-27). `ruff check .` and `ruff format --check .` clean |
 | Ad-hoc sandboxed build | `build_appstore.py adhoc --with-probe` produced `build/appstore/adhoc/dist/Net-DNS-Monitor.app`: 58 MB, arm64, `LSMinimumSystemVersion` 26.0, `codesign --verify --strict --deep` valid, entitlements exactly app-sandbox + network.client + network.server, no `itms-services` anywhere, icon holds the 512 and 512@2x elements |
 | Sandbox probe, run inside that bundle | Same result as 2026-09-14. Works: container write, TCP connect, `getaddrinfo`, UDP DNS, HTTPS, interface-bound connect on `en0`, UDP bind, Keychain round trip, `ping`, `networksetup -listnetworkserviceorder`, `scutil`, `netstat`, `ifconfig`, `route`. Refused: `log show` (`Cannot run while sandboxed`), reading the real `~/.config` |
 | Local-network permission text | `NSLocalNetworkUsageDescription` is in every build's plist; the store build refuses a bundle without it (macOS 15+ prompt, Apple TN3179) |
@@ -212,9 +212,25 @@ Or drag the `.pkg` into `/Applications/Transporter.app` (§5).
 - [ ] **Version 1.0**: description, keywords, support URL, marketing URL
       (optional), copyright `2026 Mitchell Hudson`, the processed build, "What's
       New" (not needed for 1.0) (§6.4).
-- [ ] **Screenshots**: 1 to 10, exactly 2880x1800 (or the other three 16:10
-      sizes), JPEG or PNG without alpha; capture at 1440x900 "looks like" on a
-      Retina display and strip alpha with `sips` (§6.4).
+- [x] **Screenshots**: three prepared 2026-09-27 in `build/appstore/screenshots/`
+      (the dashboard, the dashboard after Run full diagnosis, the Claude
+      permission dialog), each exactly 2880x1800 PNG without alpha. Retake
+      after any UI change:
+
+```bash
+.venv/bin/python scripts/appstore/shoot_screenshots.py build/appstore/screenshots/raw
+.venv/bin/python scripts/appstore/compose_screenshots.py build/appstore/screenshots/raw build/appstore/screenshots
+```
+
+      The first runs the app from source as the store edition, isolated under
+      its output directory (its own config with every path the app writes moved
+      there, alerts and peer discovery off, empty credentials, its own consent
+      file), waits for
+      each of the app's readiness signals and renders each window in-process,
+      so it needs no screen-recording permission; it clicks the diagnosis only
+      on a healthy network. The second composes each window on a 2880x1800
+      background. The spec: 1 to 10 images, exactly 2880x1800 (or the other
+      three 16:10 sizes), JPEG or PNG without alpha (§6.4).
 - [ ] **App Review Information**: contact name, phone, e-mail; sign-in not
       required; the notes text from §6.7.
 - [ ] **Export compliance**: exempt; the plist already says

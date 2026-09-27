@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2101 tests; the whole decision surface
+python3 -m pytest -q          # 2124 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2101 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2101 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2124 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -57,7 +57,9 @@ python3 -m pytest -q          # 2101 tests; the whole decision surface
 | menu bar **Switch to backup now** | **mutates system network config** — the intended live check | **yes** |
 | **failover live check** by hand (below) | **mutates system network config** | **yes** |
 | `scripts/appstore/build_appstore.py adhoc\|release` | build and sign the Mac App Store bundle | no |
-| `scripts/appstore/make_icon.py OUT.icns` | draw the placeholder app icon | no |
+| `scripts/appstore/make_icon.py OUT.icns` | draw the app icon (`PREVIEW.png` for one 1024px render) | no |
+| `scripts/appstore/shoot_screenshots.py OUT_DIR` | run the store edition from source and render its windows to PNG (GUI session) | no |
+| `scripts/appstore/compose_screenshots.py IN_DIR OUT_DIR` | place those renders on 2880x1800 backgrounds for App Store Connect | no |
 | `sandbox_probe` inside an ad-hoc bundle | measure what works inside the App Sandbox | **yes** |
 
 The CLI is the interface for diagnostics, and `app.py` stays a rumps shell over the
@@ -701,7 +703,7 @@ check is not dropped — by hand, you are the guard.
 
 `docs/APP_STORE_SUBMISSION.md` is the authoritative guide: Apple setup, entitlements,
 metadata, and what the store build cannot do. This section lists the entry points only.
-All three need macOS. The build also needs Xcode and a virtualenv with `py2app`:
+All of them need macOS. The build also needs Xcode and a virtualenv with `py2app`:
 
 ```bash
 python3.13 -m venv .venv
@@ -751,21 +753,61 @@ library outside the bundle, `/System/Library/` or `/usr/lib/`, if the bundle's
 `NSLocalNetworkUsageDescription`, or if `--icon` names a file that is not `.icns` or
 lacks the 512x512 elements (`ic09`, `ic10`).
 
-### `make_icon.py` — placeholder icon
+### `make_icon.py` — the app icon
 
-**Purpose.** Draw the app icon with AppKit and write an `.icns` with every size App
-Store Connect needs, including 512x512 and 512x512@2x. `build_appstore.py` runs it;
-run it alone only to look at the icon.
+**Purpose.** Draw the app icon with AppKit (the macOS icon grid, a teal-to-navy body,
+a wireframe globe, a heartbeat trace as its equator) and write an `.icns` with every
+size App Store Connect needs, including 512x512 and 512x512@2x. `build_appstore.py`
+runs it for every build; run it alone to look at the icon. The drawing helpers it
+shares with the two screenshot scripts live in `appkit_draw.py` beside it.
 
-**When *not* to use it.** As the release icon. It is a placeholder; replace it with a
-designed icon before the first public release.
+**When *not* to use it.** For a hand-made icon: ship that through
+`build_appstore.py --icon`, which checks it for the two 512 sizes.
 
 ```bash
 .venv/bin/python scripts/appstore/make_icon.py /tmp/AppIcon.icns
+.venv/bin/python scripts/appstore/make_icon.py /tmp/preview.png   # one 1024px render, to look at
 ```
 
-It prints the output path. With any other argument count, or a name that does not end
-in `.icns`, it prints its usage and exits 2.
+It prints the output path. With any other argument count, or a name that ends in
+neither `.icns` nor `.png`, it prints its usage and exits 2.
+
+### `shoot_screenshots.py` — render the app's own windows
+
+**Purpose.** Run the app from source as the store edition (`NETDNS_DISTRIBUTION=appstore`)
+and render the dashboard, the dashboard after "Run full diagnosis" and the Claude
+permission dialog to PNG, in-process, so no screen-recording permission is needed.
+The run is isolated under `OUT_DIR`: a config derived from `config.example.yaml` with
+every file the app writes moved to `OUT_DIR/app-data`, Slack, e-mail and peer discovery
+off, an empty credential store, its own consent file and the drawn `AppIcon.icns`. It refuses an
+`OUT_DIR` under the app's own data directories. Each phase waits for the app's own
+signal (first ping, the diagnosis worker finishing, the dialog appearing) with a
+deadline, and a watchdog ends the process after 180 s.
+
+**When *not* to use it.** From a script or an agent expecting completion: it starts the
+GUI app and needs a GUI session. On an unhealthy network: it stops before the diagnosis,
+whose capture would show an incident rather than the healthy state.
+
+```bash
+.venv/bin/python scripts/appstore/shoot_screenshots.py build/appstore/screenshots/raw
+```
+
+Prints each capture's name and pixel size, then `done`; exit 1 with the missing names on
+stderr if any of the three files is not there at the end.
+
+### `compose_screenshots.py` — compose for App Store Connect
+
+**Purpose.** Place every PNG in `IN_DIR` on a 2880x1800 brand-gradient background with a
+drop shadow, framed by its point size (so a 1x and a Retina capture of the same window
+come out alike) and never upscaled past Retina size, and write it to `OUT_DIR` as a PNG
+without an alpha channel, which is what the store requires.
+
+```bash
+.venv/bin/python scripts/appstore/compose_screenshots.py build/appstore/screenshots/raw build/appstore/screenshots
+```
+
+A source that is not an image is reported and skipped; the exit status is 1 if any
+was, or if `IN_DIR` holds no PNG at all.
 
 ### `sandbox_probe` — what works inside the sandbox
 
@@ -801,7 +843,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2101 passed
+python3 -m pytest -q            # 2124 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -820,10 +862,10 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 75 | `test_privileges.py` |
 | 61 | `test_status.py` |
 | 60 | `test_cli_console.py` |
-| 54 | `test_app_appstore_wiring.py` |
+| 56 | `test_app_appstore_wiring.py` |
 | 54 | `test_console.py` |
+| 54 | `test_dashboard.py` |
 | 53 | `test_app_dashboard_wiring.py` |
-| 53 | `test_dashboard.py` |
 | 52 | `test_peer_net.py` |
 | 51 | `test_system_log.py` |
 | 47 | `test_peers.py` |
@@ -851,6 +893,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 20 | `test_service_order.py` |
 | 19 | `test_app_settings_wiring.py` |
 | 18 | `test_app_peer_wiring.py` |
+| 18 | `test_appstore_screenshots.py` |
 | 18 | `test_mini_window.py` |
 | 17 | `test_anthropic_escalator.py` |
 | 17 | `test_dock_icon.py` |
@@ -882,7 +925,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 6 | `test_classifier.py` |
 | 3 | `test_app_resolution_wiring.py` |
 | 2 | `test_app_report_storage_wiring.py` |
-| **2101** | **total** |
+| **2124** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

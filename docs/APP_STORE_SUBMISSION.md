@@ -51,6 +51,7 @@ notarization (§10). Both can coexist.
 ## 2. What is already done in this repo
 
 - `netdnsmonitor/distribution.py` detects the sandbox and says which features are off.
+- The dashboard's troubleshooting grid omits the buttons for those features (`App.dashboard_actions`, 2026-09-27): no "Open console (arbitrary shell)", router, prewarm-from-log, DNS-flush or elevated-permissions button in the store build. The menu already omitted them (§5.1), and `handle_dashboard_action` keeps its gate for any other path in.
 - `netdnsmonitor/credentials.py` reads API keys from the Keychain as well as the environment. A sandboxed app launched from Finder has no shell environment.
 - `netdnsmonitor/ai_consent.py` holds explicit, versioned, revocable permission before anything goes to Anthropic.
 - `packaging/appstore/entitlements.plist` and `entitlements-helper.plist` define the sandbox, network client and network server entitlements, with no temporary exceptions.
@@ -345,15 +346,28 @@ network,DNS,monitor,wifi,outage,internet,ping,latency,diagnostics,troubleshoot,m
 **Screenshots:** 1 to 10 images, 16:10, exactly 1280x800, 1440x900, 2560x1600
 or 2880x1800, JPEG or PNG with no alpha
 ([spec](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications)).
-Suggested shots:
-1. dashboard with live graphs;
-2. menu bar menu open;
-3. an incident report;
-4. Settings;
-5. the Claude permission dialog.
+The three shipped ones are produced by two scripts (2026-09-27):
 
-Take them on a Retina display at 1440x900 "looks like" so captures come out
-at 2880x1800. Then strip alpha:
+```bash
+.venv/bin/python scripts/appstore/shoot_screenshots.py build/appstore/screenshots/raw
+.venv/bin/python scripts/appstore/compose_screenshots.py build/appstore/screenshots/raw build/appstore/screenshots
+```
+
+`shoot_screenshots.py` runs the app from source as the store edition, isolated
+under its output directory (its own config with every path the app writes
+moved there, alerts off, an empty credential store, its own consent file),
+waits for each of the app's own readiness signals, and renders the dashboard,
+the dashboard after "Run full diagnosis" and the Claude permission dialog
+in-process, so it needs no screen-recording permission. It clicks the
+diagnosis only while the network is healthy, because on an unhealthy one the
+capture would show an incident instead. `compose_screenshots.py`
+places each render, framed by its point size so 1x and Retina captures come
+out alike, on a 2880x1800 brand-gradient background with a shadow and writes
+PNGs without an alpha channel. `docs/SCRIPTS.md` has both entry points.
+
+For a one-off shot of something the scripts do not cover (the menu bar menu
+open, an incident report, Settings), capture on a Retina display at 1440x900
+"looks like" so it comes out at 2880x1800, then strip alpha:
 
 ```bash
 sips -s format jpeg shot.png --out shot.jpg

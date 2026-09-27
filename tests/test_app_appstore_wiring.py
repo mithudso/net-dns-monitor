@@ -942,3 +942,35 @@ def test_the_default_credential_store_goes_through_the_conftest_keychain():
     """
     store = app_module.default_credential_store()
     assert type(store._keychain()).__name__ == "_MemoryKeychain"
+
+
+# --- the dashboard grid ----------------------------------------------------
+
+
+def test_store_dashboard_grid_omits_every_gated_action_the_build_lacks(tmp_path):
+    """A reviewer must not meet an "arbitrary shell" or "grant elevated
+    permissions" button whose only answer is that it is unavailable. The grid
+    the store build lays out is ALL_ACTIONS minus every gated action whose
+    capability this build lacks; the gate in handle_dashboard_action stays for
+    any other path in.
+    """
+    from netdnsmonitor.dashboard import ALL_ACTIONS
+
+    app = build_app(tmp_path)
+    ids = [action_id for _, action_id, _ in app.dashboard_actions()]
+    lacking = {
+        action_id
+        for action_id, (feature, _what) in app_module.GATED_DASHBOARD_ACTIONS.items()
+        if not getattr(STORE, feature)
+    }
+    assert lacking >= {"open_console", "open_router_window", "grant_privileges", "prewarm_dns"}
+    assert not lacking.intersection(ids)
+    assert ids == [action_id for _, action_id, _ in ALL_ACTIONS if action_id not in lacking]
+    assert "full_diagnosis" in ids and "open_settings" in ids
+
+
+def test_direct_dashboard_grid_keeps_every_action(tmp_path):
+    from netdnsmonitor.dashboard import ALL_ACTIONS
+
+    app = build_app(tmp_path, capabilities=DIRECT)
+    assert app.dashboard_actions() == list(ALL_ACTIONS)
