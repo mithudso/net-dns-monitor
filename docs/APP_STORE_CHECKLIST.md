@@ -202,8 +202,11 @@ Uploads so far (2026-09-27):
 | 1.0 (1) | `e71a6de` | Uploaded via Transporter. **Never submit it**: its store dashboard still shows "Open console (arbitrary shell)", the elevated-permission, router and prewarm buttons (Guidelines 2.5.2, 2.4.5) |
 | 1.0 (2) | `320fb1f` | Built from a clean checkout; those buttons and Flush DNS hidden; 2124 tests passed there; bundled `netdnsmonitor/` byte-identical to the commit. Staged at `build/appstore/upload/Net-DNS-Monitor-1.0-2.pkg` for upload |
 
-- [ ] The build shows as processed under the app's TestFlight tab (minutes to an
+- [x] The build shows as processed under the app's TestFlight tab (minutes to an
       hour). Processing e-mails name any ITMS-* problem; §8 has the known ones.
+      1.0 (3), built from `395c14e` (the store dashboard without the log column),
+      uploaded 2026-09-27 19:59 CDT, processed by 20:01, and attached to
+      version 1.0. It is the submitted build.
 - [ ] Optional but recommended: install it through TestFlight on a second Mac.
 
 ### Step 8. Metadata in App Store Connect (§6 has every value)
@@ -211,16 +214,20 @@ Uploads so far (2026-09-27):
 - [x] **App Information**: subtitle, primary category Utilities, secondary
       Developer Tools, content rights, privacy policy URL (§6.1).
 - [x] **Pricing and Availability**: price tier (free), territories (§6.2).
-- [ ] **EU trader status** declared if the EU is in the territory list (§6.6).
+- [x] **EU trader status** declared if the EU is in the territory list (§6.6).
       Account-level, so the territories page never asks: Business → Agreements
-      → Compliance → Digital Services Act → "This is not a trader account".
-- [ ] **App Privacy**: "Yes, we collect data" with the two declared types, not
+      → the banner's "Complete Compliance Requirements" → "I'm not a trader
+      under the DSA". Done 2026-09-27; the Compliance table shows Digital
+      Services Act, 27 countries, Active.
+- [x] **App Privacy**: "Yes, we collect data" with the two declared types, not
       linked to the user, not used for tracking, App Functionality (§6.3).
+      Published 2026-09-27 (an earlier draft had picked Crash Data and
+      Performance Data, which the app does not collect; replaced).
 - [x] **Age rating**: the questionnaire that took effect on 2026-01-31, answered
       fresh (§6.1).
-- [ ] **Version 1.0**: description, keywords, support URL, marketing URL
+- [x] **Version 1.0**: description, keywords, support URL, marketing URL
       (optional), copyright `2026 Mitchell Hudson`, the processed build, "What's
-      New" (not needed for 1.0) (§6.4).
+      New" (not needed for 1.0) (§6.4). Build 1.0 (3) selected 2026-09-27.
 - [x] **Screenshots**: three prepared 2026-09-27 in `build/appstore/screenshots/`
       (the dashboard, the dashboard after Run full diagnosis, the Claude
       permission dialog), each exactly 2880x1800 PNG without alpha. Retake
@@ -240,21 +247,25 @@ Uploads so far (2026-09-27):
       on a healthy network. The second composes each window on a 2880x1800
       background. The spec: 1 to 10 images, exactly 2880x1800 (or the other
       three 16:10 sizes), JPEG or PNG without alpha (§6.4).
-- [ ] **App Review Information**: contact name, phone, e-mail; sign-in not
-      required; the notes text from §6.7.
-- [ ] **Export compliance**: exempt; the plist already says
-      `ITSAppUsesNonExemptEncryption = NO` (§6.5).
-- [ ] **EULA**: leave Apple's standard EULA unless you have your own.
+- [x] **App Review Information**: contact name, phone, e-mail; sign-in not
+      required; the notes text from §6.7. Done 2026-09-27 ("Sign-in required"
+      had been ticked with placeholder credentials; unticked).
+- [x] **Export compliance**: exempt; the plist already says
+      `ITSAppUsesNonExemptEncryption = NO` (§6.5). App Store Connect never
+      asked.
+- [x] **EULA**: Apple's standard EULA.
 
 ### Step 9. Submit and afterwards
 
-- [ ] **Add for Review**, then **Submit to App Review** (§7).
+- [x] **Add for Review**, then **Submit to App Review** (§7). Submitted
+      2026-09-27 at 20:08 CDT: "1.0 Waiting for Review", one item, build
+      1.0 (3), set to release automatically on approval. App Store Connect app
+      ID `6816765128` (<https://appstoreconnect.apple.com/apps/6816765128>).
 - [ ] On rejection, answer in Resolution Center; §8 lists the likely causes and
       the prepared responses. Only a code change needs a new build (bump
       `--build-number`).
-- [ ] After approval: tag the uploaded commit on `master`
-      (`git tag v1.0-appstore-1`) and record the App Store Connect app ID in
-      this file.
+- [ ] After approval: tag the submitted commit on `master`
+      (`git tag v1.0-appstore-3 395c14e && git push github v1.0-appstore-3`).
 
 ## 3. Every later upload
 
