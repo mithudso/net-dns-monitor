@@ -401,6 +401,18 @@ def test_store_build_launch_does_not_announce_the_missing_console(tmp_path, monk
     assert app.notes == []
 
 
+def test_store_build_starts_with_peer_discovery_off(tmp_path):
+    """The broadcast discloses the hostname and triggers the Local Network
+    prompt, so the store build waits for the user to turn it on."""
+    assert build_app(tmp_path).config["peer_discovery_enabled"] is False
+    assert build_app(tmp_path, capabilities=DIRECT).config["peer_discovery_enabled"] is True
+
+
+def test_store_build_honours_peer_discovery_set_in_the_file(tmp_path):
+    app = build_app(tmp_path, peer_discovery_enabled=True)
+    assert app.config["peer_discovery_enabled"] is True
+
+
 # --- the unified log ---------------------------------------------------------
 
 

@@ -108,6 +108,21 @@ def detect(env: Optional[Mapping[str, str]] = None) -> Capabilities:
     )
 
 
+def default_overrides(capabilities: Capabilities) -> dict:
+    """Config defaults this build changes. A key set in config.yaml still wins.
+
+    The store build starts with LAN peer discovery off: it broadcasts the
+    hostname and health to the subnet, which macOS gates behind the Local
+    Network prompt and App Review reads as data sharing, so it is the user's
+    choice to turn on, not the first thing the app does. The console has no
+    window in that build, so opening it at launch could only post the
+    unavailable banner.
+    """
+    if not capabilities.is_app_store:
+        return {}
+    return {"peer_discovery_enabled": False, "auto_open_console": False}
+
+
 def unavailable(feature: str, detail: Optional[str] = None) -> str:
     """The outcome text for a step this build does not attempt.
 

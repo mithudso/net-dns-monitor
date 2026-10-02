@@ -301,7 +301,7 @@ real time" ([definition](https://developer.apple.com/app-store/app-privacy-detai
 
 The alternative that was not chosen, for the record:
 
-- **Data Not Collected.** Defensible because nothing reaches the publisher, and the only destinations that receive incident content are services the user configures (Anthropic, Slack, email). It is weaker if a reviewer treats Anthropic as a third-party partner of the app. Note that the default connectivity checks (1.1.1.1, 8.8.8.8, a DNS lookup of api.anthropic.com) and the on-by-default LAN peer announcement run without configuration; they carry no incident content, and the privacy policy discloses both.
+- **Data Not Collected.** Defensible because nothing reaches the publisher, and the only destinations that receive incident content are services the user configures (Anthropic, Slack, email). It is weaker if a reviewer treats Anthropic as a third-party partner of the app. Note that the default connectivity checks (1.1.1.1, 8.8.8.8, a DNS lookup of api.anthropic.com) run without configuration, and the LAN peer announcement runs once the user turns it on (off by default in the store build since build 4); they carry no incident content, and the privacy policy discloses them.
 
 Slack and email alerts go to destinations the user controls. They are
 disclosed in the privacy policy either way.
@@ -430,38 +430,10 @@ submission ([Apple](https://developer.apple.com/help/app-store-connect/manage-co
 | Sign-in required | No |
 | Contact | your name, phone, email |
 
-**Notes** (expanded for Guideline 2.1 App Completeness):
-
-```
-Net-DNS-Monitor is a native macOS menu bar utility that monitors internet and DNS connectivity.
-
-NO ACCOUNT OR LOGIN REQUIRED:
-The app requires no account registration, login credentials, or test accounts. All monitoring is passive and local.
-
-HOW TO REVIEW:
-1. Launch the app. A status item appears in the menu bar and the Dock tile displays the current round-trip time.
-2. Select "Open dashboard" from the menu to inspect live interface reachability, ping statistics, and network service order.
-3. Click "Run full diagnosis" in the dashboard to execute the diagnostic checks. In compliance with the App Sandbox, checks requiring root or network reconfiguration privileges safely report as unavailable.
-4. Select "Toggle mini window" to see the floating HUD status display.
-5. Select "Test network alert" to trigger a simulated notification banner.
-6. Select "Allow Claude diagnosis…" to inspect the transparent user-consent dialog that governs optional third-party AI escalation.
-7. Select "Privacy Policy" to view the privacy policy in Safari.
-
-SANDBOX & ENTITLEMENTS:
-- com.apple.security.network.client: Outbound TCP reachability probes, system DNS resolution, and optional user-configured HTTPS API calls.
-- com.apple.security.network.server: Required for UDP DNS lookup responses, ICMP ping replies, and optional local subnet UDP peer status broadcasts.
-- NO temporary exception entitlements are used.
-
-EXTERNAL SERVICES & PRIVACY:
-- The app contacts standard public DNS anycast servers (1.1.1.1, 8.8.8.8) solely to measure reachability and latency.
-- Optional Claude diagnosis requires the user's personal Anthropic API key and explicit, versioned, revocable user consent.
-- Zero analytics, zero telemetry, zero advertising, zero remote tracking.
-
-A physical device walkthrough video is available at:
-https://llms-explorer.com/net-dns-monitor/app-review-demo.mp4
-```
-
-See `docs/APP_STORE_REVIEW_RESPONSE.md` for the complete Resolution Center reply text addressing Apple's Guideline 2.1 questionnaire.
+**Notes:** the current text is section 2 of `docs/APP_STORE_REVIEW_RESPONSE.md`. It is
+kept in one place because an earlier copy here gave a wrong peer port and a wrong
+`network.server` justification (corrected 2026-10-02, TASK-367). That file also holds
+the Guideline 2.1 Resolution Center reply.
 
 ## 7. Submit
 

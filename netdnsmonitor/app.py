@@ -730,7 +730,7 @@ class NetDnsMonitorApp(rumps.App):
         self.choice_prompt = choice_prompt
         self.url_opener = url_opener
         self.privacy_policy_url_fn = privacy_policy_url_fn
-        self.config = load_config(config_path)
+        self.config = self._load_config(config_path)
         self.failover = build_failover(self.config)
         self.state_machine = build_state_machine(
             self.config,
@@ -2064,7 +2064,7 @@ class NetDnsMonitorApp(rumps.App):
         # values in self.config, and the window edits what is on disk.
         problem = None
         try:
-            shown = load_config(self.config_path)
+            shown = self._load_config(self.config_path)
         except Exception as exc:  # noqa: BLE001 - an unreadable file must not block the window
             shown = self.config
             problem = config_error_text(exc)
@@ -2074,6 +2074,9 @@ class NetDnsMonitorApp(rumps.App):
             self._settings.set_status(
                 f"Showing the running config; the file was not read -- {problem}"
             )
+
+    def _load_config(self, path: str) -> dict:
+        return load_config(path, distribution.default_overrides(self.capabilities))
 
     def _save_settings(self, values: Optional[dict]) -> str:
         """Parse, write, and report. Called from the window's Save button.
@@ -2088,7 +2091,7 @@ class NetDnsMonitorApp(rumps.App):
         need a restart.
         """
         if values is None:
-            fresh = load_config(self.config_path)
+            fresh = self._load_config(self.config_path)
             self._apply_live_config(fresh)
             if self._settings is not None:
                 self._settings.load(fresh)
@@ -2097,7 +2100,7 @@ class NetDnsMonitorApp(rumps.App):
         updates = collect(values)  # raises ValueError, which the window reports
         previous = dict(self.config)
         result = save_config(self.config_path, updates)
-        self._apply_live_config(load_config(self.config_path))
+        self._apply_live_config(self._load_config(self.config_path))
         note = restart_note(updates, previous=previous, restart_hint=self._settings_restart_hint())
         if result["backup"]:
             note += f"\nPrevious config saved as {os.path.basename(result['backup'])}"

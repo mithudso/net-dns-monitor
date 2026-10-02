@@ -10,6 +10,7 @@ import ipaddress
 import math
 import os
 import re
+from collections.abc import Mapping
 from typing import Optional
 
 import yaml
@@ -577,11 +578,14 @@ def validate_config(config: dict) -> None:
                 )
 
 
-def load_config(path: str) -> dict:
+def load_config(path: str, default_overrides: Optional[Mapping[str, object]] = None) -> dict:
     # deepcopy, not dict(): the list defaults would otherwise be the same
     # objects in every load, and an append to one config's `domains` would
     # show up in the next.
     config = copy.deepcopy(DEFAULT_CONFIG)
+    # Applied under the user's file, so a build-specific default never
+    # overrides what someone actually set.
+    config.update(default_overrides or {})
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
             user_config = yaml.safe_load(f) or {}

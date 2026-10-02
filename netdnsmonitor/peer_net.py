@@ -40,7 +40,8 @@ this case rather than binding a port it would never hear pongs on.
 **What this discloses.** Any host that can reach the port can learn this
 machine's hostname and whether its network is currently healthy. That is the
 point of the feature, but it is a disclosure, so it is gated on
-`peer_discovery_enabled` and can be turned off in the config. The socket binds
+`peer_discovery_enabled` and can be turned off in the config; the Mac App Store
+build starts with it off (`distribution.default_overrides`). The socket binds
 every interface, so the listener drops any sender outside the IPv4 subnets
 attached to this machine's interfaces (loopback is always allowed). That limits
 who is recorded and who is sent a pong. It is not authentication: UDP source
