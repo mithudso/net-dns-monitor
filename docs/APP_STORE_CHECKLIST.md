@@ -261,9 +261,11 @@ Uploads so far (2026-09-27):
       2026-09-27 at 20:08 CDT: "1.0 Waiting for Review", one item, build
       1.0 (3), set to release automatically on approval. App Store Connect app
       ID `6816765128` (<https://appstoreconnect.apple.com/apps/6816765128>).
-- [ ] On rejection, answer in Resolution Center; §8 lists the likely causes and
-      the prepared responses. Only a code change needs a new build (bump
-      `--build-number`).
+- [x] On rejection (2026-09-28: Guideline 2.1 App Completeness / new developer account questionnaire):
+      Complete response prepared in `docs/APP_STORE_REVIEW_RESPONSE.md` addressing all 6 items
+      (screen recording walkthrough guide, purpose, setup instructions, external services,
+      regional consistency, regulatory compliance). Updated review notes in `docs/APP_STORE_SUBMISSION.md`.
+      No new build required; reply directly in App Store Connect Resolution Center.
 - [ ] After approval: tag the submitted commit on `master`
       (`git tag v1.0-appstore-3 395c14e && git push github v1.0-appstore-3`).
 
