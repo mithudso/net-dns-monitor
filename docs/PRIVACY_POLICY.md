@@ -42,7 +42,8 @@ or by removing items from Keychain Access. The forensic journal rotates at
 ## Connectivity checks
 
 To test your connection, the app contacts the network addresses in its
-settings. By default these are Cloudflare (1.1.1.1) and Google (8.8.8.8). It
+settings. By default these are Cloudflare (1.1.1.1 and 2606:4700:4700::1111) and
+Google (8.8.8.8 and 2001:4860:4860::8888). It
 also resolves `api.anthropic.com` as a DNS control check and resolves any
 domains you add. These checks send ordinary connection attempts and DNS
 queries. They carry no personal information beyond what any network

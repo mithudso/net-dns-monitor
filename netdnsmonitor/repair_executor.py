@@ -36,7 +36,7 @@ from types import SimpleNamespace
 from typing import Callable, Optional
 
 from netdnsmonitor import privileges
-from netdnsmonitor.dns_query import query_public_dns
+from netdnsmonitor.dns_query import query_public_dns_any
 from netdnsmonitor.ladder import LadderStep
 
 RunFn = Callable[..., object]
@@ -61,7 +61,7 @@ _LEASE_LINE = re.compile(r"^lease_time\b", re.MULTILINE)
 
 def make_repair_executor(
     run_fn: RunFn = subprocess.run,
-    query_fn: Callable[[str], Optional[bool]] = query_public_dns,
+    query_fn: Callable[[str], Optional[bool]] = query_public_dns_any,
     resolver_dir_exists_fn: Callable[[str], bool] = os.path.isdir,
     resolver_listdir_fn: Callable[[str], list] = os.listdir,
     probe_domain: str = "example.com",

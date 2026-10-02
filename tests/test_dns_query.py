@@ -1,6 +1,6 @@
 import struct
 
-from netdnsmonitor.dns_query import query_public_dns
+from netdnsmonitor.dns_query import PUBLIC_RESOLVERS, query_public_dns, query_public_dns_any
 
 
 def _response(packet: bytes, rcode: int) -> bytes:
@@ -142,3 +142,36 @@ def test_a_label_over_63_bytes_is_refused_before_it_reaches_the_wire():
     assert query_public_dns("a" * 64 + ".com", send_recv_fn=capture) is False
     assert sends == []
     assert query_public_dns("a" * 63 + ".com", send_recv_fn=capture) is True
+
+
+def test_any_tries_the_ipv6_resolver_first():
+    asked = []
+
+    def send_recv(packet, server, port, timeout):
+        asked.append(server)
+        return _response(packet, 0)
+
+    assert query_public_dns_any("example.com", send_recv_fn=send_recv) is True
+    assert asked == [PUBLIC_RESOLVERS[0]]
+    assert ":" in PUBLIC_RESOLVERS[0]
+
+
+def test_any_falls_back_to_ipv4_when_ipv6_does_not_reply():
+    asked = []
+
+    def send_recv(packet, server, port, timeout):
+        asked.append(server)
+        if ":" in server:
+            raise OSError("no route to host")
+        return _response(packet, 3)
+
+    # NXDOMAIN from the IPv4 resolver is an answer, and False, not None.
+    assert query_public_dns_any("example.com", send_recv_fn=send_recv) is False
+    assert asked == list(PUBLIC_RESOLVERS)
+
+
+def test_any_is_none_only_when_no_resolver_replied():
+    def send_recv(packet, server, port, timeout):
+        raise OSError("no route to host")
+
+    assert query_public_dns_any("example.com", send_recv_fn=send_recv) is None

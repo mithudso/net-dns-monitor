@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from netdnsmonitor.ping import PING_BIN, ping_once
+from netdnsmonitor.ping import PING6_BIN, PING_BIN, ping_once
 
 REPLY = """PING 8.8.8.8 (8.8.8.8): 56 data bytes
 64 bytes from 8.8.8.8: icmp_seq=0 ttl=117 time=61.366 ms
@@ -189,3 +189,37 @@ def test_unicode_decode_error_is_reported_not_raised():
     result = ping_once("8.8.8.8", run_fn=bad_decode)
     assert result["ok"] is False
     assert result["error"]
+
+
+# --- IPv6 -------------------------------------------------------------------
+
+
+def test_an_ipv6_literal_goes_to_ping6_bounded_by_the_subprocess_timeout():
+    """ping6 rejects -W and -t, and waits 11s for an unroutable host, so the
+    subprocess timeout is the only bound and must equal the ping timeout."""
+    fake_run, calls = fake_run_factory()
+    ping_once("2001:4860:4860::8888", timeout_seconds=2.0, run_fn=fake_run)
+    args, kwargs = calls[0]
+    assert args == [PING6_BIN, "-c", "1", "2001:4860:4860::8888"]
+    assert kwargs["timeout"] == 2.0
+
+
+def test_ping6_rtt_is_parsed_from_its_own_reply_format():
+    reply = (
+        "PING6(56=40+8+8 bytes) 2600::1 --> 2001:4860:4860::8888\n"
+        "16 bytes from 2001:4860:4860::8888, icmp_seq=0 hlim=117 time=11.763 ms\n"
+    )
+    fake_run, _ = fake_run_factory(stdout=reply)
+    assert ping_once("2001:4860:4860::8888", run_fn=fake_run)["rtt_ms"] == 11.763
+
+
+def test_a_ping6_that_times_out_is_a_failed_reading_naming_the_host():
+    def timing_out(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    result = ping_once("2001:db8::1", timeout_seconds=2.0, run_fn=timing_out)
+    assert result == {
+        "ok": False,
+        "rtt_ms": None,
+        "error": "no reply from 2001:db8::1 within 2s",
+    }

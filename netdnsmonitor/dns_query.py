@@ -14,8 +14,20 @@ from typing import Callable, Optional
 SendRecvFn = Callable[[bytes, str, int, float], bytes]
 
 
+# Tried in order by query_public_dns_any: Cloudflare over IPv6, then over IPv4.
+# IPv6 first because App Review tests on an IPv6-only NAT64 network, where a
+# hard-coded AF_INET socket has no route and every query reads as "no reply".
+PUBLIC_RESOLVERS = ("2606:4700:4700::1111", "1.1.1.1")
+
+
 def _default_send_recv(packet: bytes, server: str, port: int, timeout: float) -> bytes:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # The family comes from getaddrinfo rather than being fixed: an IPv6
+    # literal needs AF_INET6, and on a NAT64 network macOS answers an IPv4
+    # literal with a synthesized IPv6 address that only AF_INET6 can reach.
+    family, socktype, proto, _canon, address = socket.getaddrinfo(
+        server, port, 0, socket.SOCK_DGRAM
+    )[0]
+    sock = socket.socket(family, socktype, proto)
     sock.settimeout(timeout)
     try:
         # connect() makes the kernel drop datagrams from any other source. An
@@ -23,7 +35,7 @@ def _default_send_recv(packet: bytes, server: str, port: int, timeout: float) ->
         # and a stray one fails the transaction-id check below, which reads as
         # "the public resolver did not answer" -- the wrong half of the one
         # distinction this module exists to draw.
-        sock.connect((server, port))
+        sock.connect(address)
         sock.send(packet)
         return sock.recv(512)
     finally:
@@ -93,3 +105,24 @@ def query_public_dns(
 
     rcode = response[3] & 0x0F
     return rcode == 0
+
+
+def query_public_dns_any(
+    domain: str,
+    servers: tuple = PUBLIC_RESOLVERS,
+    timeout: float = 2.0,
+    send_recv_fn: Optional[SendRecvFn] = None,
+) -> Optional[bool]:
+    """The first answer from `servers`, tried in order.
+
+    A server that does not reply (None) moves on to the next; an answer, True
+    or False, ends the search. None only if no server replied at all, so an
+    IPv4-only network still gets a real answer from the IPv4 resolver.
+    """
+    for server in servers:
+        answered = query_public_dns(
+            domain, server=server, timeout=timeout, send_recv_fn=send_recv_fn
+        )
+        if answered is not None:
+            return answered
+    return None
