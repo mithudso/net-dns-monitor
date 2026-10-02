@@ -141,6 +141,7 @@ it can go without them.
 
 | Risk | Where | Option |
 |---|---|---|
+| **Untested on App Review's IPv6-only NAT64 network (Guideline 2.5.5).** The ICMP heartbeat runs `/sbin/ping 8.8.8.8`, and the diagnosis DNS query opens an `AF_INET` socket to 1.1.1.1. Both are IPv4-only, and neither is expected to work without an IPv4 route. The reviewer could see a "network failed" alert and a ✕ on the Dock tile on first launch. The TCP probes use `socket.create_connection` on IPv4 literals, which macOS rewrites for NAT64, so they should pass. | `netdnsmonitor/ping.py:51`, `netdnsmonitor/dns_query.py:18`, `netdnsmonitor/config.py:58` | Before build 4: on a second Mac, hold Option and open System Settings → General → Sharing → Internet Sharing, tick **Create NAT64 Network**, join this Mac to it, and run the app. If the heartbeat fails, fall back to `ping6` or skip the ICMP verdict when there is no IPv4 route. https://developer.apple.com/support/ipv6 |
 | Alert banners rely on deprecated `NSUserNotificationCenter`; the store build has no fallback if it fails. | `netdnsmonitor/alert.py` | Move to `UNUserNotificationCenter`. |
 | Gated modules (shell console, router, failover) still ship in the store bundle. | `netdnsmonitor/distribution.py` | Exclude them from the store bundle at build time. |
 | The `api.anthropic.com` control lookup runs before AI consent. | `netdnsmonitor/config.py:180` | Use a neutral control domain in the store build. |
