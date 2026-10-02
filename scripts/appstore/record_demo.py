@@ -62,7 +62,20 @@ def stop() -> None:
         pid = int(pid_str)
         os.kill(pid, signal.SIGINT)
         print(f"Sent SIGINT to process {pid}. Waiting for file finalize...")
-        time.sleep(2)
+        # screencapture writes the moov atom on exit; a fixed sleep let ffmpeg
+        # read a half-written .mov after a long recording. Wait for the exit.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.25)
+        else:
+            print(
+                f"Process {pid} still running after 60s; the .mov may be incomplete.",
+                file=sys.stderr,
+            )
     except (OSError, ValueError) as e:
         print(f"Process {pid_str} termination note: {e}")
 

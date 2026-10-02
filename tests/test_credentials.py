@@ -160,3 +160,20 @@ def test_the_env_view_lets_env_taking_code_read_keychain_values():
 def test_undecodable_keychain_bytes_read_as_missing():
     creds, _ = store(keychain=FakeKeychain({"SMTP_PASSWORD": b"\xff\xfe"}))
     assert creds.get("SMTP_PASSWORD") is None
+
+
+class RaisingKeychain(FakeKeychain):
+    def read(self, account):
+        raise TypeError("bridge error")
+
+
+def test_a_keychain_read_that_raises_reads_as_missing():
+    """get() runs inside app construction; an exception there kills the launch."""
+    creds, _ = store(keychain=RaisingKeychain())
+    assert creds.get("ANTHROPIC_API_KEY") is None
+    assert creds.source("ANTHROPIC_API_KEY") is None
+
+
+def test_source_agrees_with_get_on_undecodable_bytes():
+    creds, _ = store(keychain=FakeKeychain({"SMTP_PASSWORD": b"\xff\xfe"}))
+    assert creds.source("SMTP_PASSWORD") is None

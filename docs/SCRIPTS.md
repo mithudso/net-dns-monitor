@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2129 tests; the whole decision surface
+python3 -m pytest -q          # 2134 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2129 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2129 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2134 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -843,7 +843,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2129 passed
+python3 -m pytest -q            # 2134 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -862,7 +862,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 75 | `test_privileges.py` |
 | 61 | `test_status.py` |
 | 60 | `test_cli_console.py` |
-| 58 | `test_app_appstore_wiring.py` |
+| 60 | `test_app_appstore_wiring.py` |
 | 57 | `test_dashboard.py` |
 | 54 | `test_console.py` |
 | 53 | `test_app_dashboard_wiring.py` |
@@ -898,7 +898,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 17 | `test_anthropic_escalator.py` |
 | 17 | `test_dock_icon.py` |
 | 17 | `test_stall_log.py` |
-| 16 | `test_alert.py` |
+| 17 | `test_alert.py` |
 | 16 | `test_app_ping_wiring.py` |
 | 16 | `test_indexer_scripts.py` |
 | 16 | `test_interface_probe.py` |
@@ -907,7 +907,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 15 | `test_escalation.py` |
 | 15 | `test_router_scripts.py` |
 | 14 | `test_app_notification_wiring.py` |
-| 14 | `test_credentials.py` |
+| 16 | `test_credentials.py` |
 | 13 | `test_app_console_wiring.py` |
 | 13 | `test_log_watcher.py` |
 | 13 | `test_prober.py` |
@@ -925,7 +925,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 6 | `test_classifier.py` |
 | 3 | `test_app_resolution_wiring.py` |
 | 2 | `test_app_report_storage_wiring.py` |
-| **2129** | **total** |
+| **2134** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

@@ -1,174 +1,147 @@
-# Apple App Review Guideline 2.1 Rejection Response & Operational Package
+# App Review reply — Guideline 2.1 Information Needed, build 1.0 (3)
 
-**App Name:** Net-DNS-Monitor  
-**Bundle ID:** `com.mitchhudson.netdnsmonitor`  
-**Version / Build:** 1.0 (3)  
-**Submission ID:** `4283c533-7a50-4d5d-91ff-af3f312417de`  
-**Rejection Reason:** Guideline 2.1 - Performance: App Completeness (New App Submission Information Needed)  
-**Date of Rejection:** September 28, 2026 (7:16 PM)  
-**Resolution Date:** September 28, 2026  
+- **Submission ID:** `4283c533-7a50-4d5d-91ff-af3f312417de`
+- **Rejected:** 2026-09-28 19:16, Guideline 2.1 — Information Needed (new developer account)
+- **Bundle ID:** confirm in App Store Connect before sending. The repo default
+  (`com.net-dns-monitor.app`, `scripts/appstore/build_appstore.py:586`) is a dev value.
+- **Status of this document:** every claim below was checked against the code on
+  2026-10-02 (TASK-367). Re-check any line you change.
 
----
+## Before you send — do these in order
 
-## 1. App Store Connect: "Reply to App Review" Response Text
+0. **Build 1.0 (4) from `master` and select it on the version page.** Build 3 posts a
+   "Console … UNAVAILABLE_IN_APP_STORE_BUILD" banner about a second after every launch:
+   `launch_tick` opened the shell console because `auto_open_console` defaults on. The
+   reviewer, and the video, would see it. Fixed on `master` 2026-10-02 (TASK-367). The
+   version is in Rejected, not Waiting for Review, so a new build can go with the reply.
+1. **Record the video on this Mac (macOS 27.2) from the signed, sandboxed build 4.**
+   The GUI has never been launched sandboxed on 27.2, so the recording is also the
+   first real test. Use `scripts/appstore/record_demo.py` (section 3).
+2. **Watch for two things while recording.** If the prompt does not appear, quit the app
+   and re-record. If the banner does not appear, leave that
+   step out:
+   - The **Local Network** permission prompt appears on the first peer broadcast. Click
+     Allow on camera, and keep it in the video.
+   - **Test network alert** must show a banner. `rumps.notification` uses the deprecated
+     `NSUserNotificationCenter` (`netdnsmonitor/alert.py:31-35`). If no banner appears,
+     leave that step out of the video rather than ship a step that fails.
+3. **Attach the MP4 to the reply** in the Resolution Center. Do not cite
+   `https://llms-explorer.com/net-dns-monitor/app-review-demo.mp4` until it serves a video:
+   on 2026-10-02 it returned the site's HTML shell (`content-type: text/html`).
+4. Paste section 2 into **App Review Information → Notes** first, then section 1 into
+   **Reply to App Review**, then **Resubmit to App Review**. After that, do not upload
+   another build while the submission is waiting for review.
 
-*Copy and paste the exact text below into the Resolution Center reply box in App Store Connect:*
+## 1. Reply to App Review (2,563 characters — limit 4,000)
 
-```markdown
-Dear Apple App Review Team,
+```text
+Hello,
 
-Thank you for reviewing Net-DNS-Monitor. We are providing the complete information requested under Guideline 2.1 to clarify the app's functionality, architecture, and operational model. We have also mirrored this information into the Notes field of the App Review Information section for future submissions.
+Thank you for the review. Answers to each item follow; the setup, entitlement and privacy information is also in the App Review Information Notes.
 
----
+1. SCREEN RECORDING
+Attached: app-review-demo.mp4, recorded on a physical Mac running macOS 27.2. It starts at launch and shows: the menu bar status item and Dock latency badge; the Local Network permission prompt; the menu; the dashboard; "Run full diagnosis"; the mini window; the Claude consent dialog (Allow, then Withdraw Claude permission); and the Privacy Policy link.
 
-### 1. Demonstration Screen Recording
-We have uploaded a screen recording captured on a physical Mac running macOS Sonoma/Sequoia demonstrating the end-to-end user flow:
-- Video URL: https://llms-explorer.com/net-dns-monitor/app-review-demo.mp4
-  (Also attached directly to this message / uploaded to App Store Connect)
-- Demonstration Steps Shown:
-  1. Launching Net-DNS-Monitor from Finder / Applications.
-  2. Appearance of the live status item in the macOS menu bar and live RTT latency badge on the macOS Dock tile.
-  3. Clicking the menu bar item to reveal the primary menu surfaces.
-  4. Opening the live Dashboard window displaying real-time interface reachability, TCP connect heartbeats, throughput counters, and read-only network service order.
-  5. Clicking "Run full diagnosis" to execute the troubleshooting ladder, showing real-time checks and sandboxed safety notices.
-  6. Opening the floating HUD Mini Window.
-  7. Opening "Allow Claude diagnosis…" showing the granular, versioned user-consent dialog that details the exact data payload before any external AI transmission.
-  8. Accessing "Privacy Policy" directly from the application menu, which opens our public privacy documentation.
+2. PURPOSE AND AUDIENCE
+Net-DNS-Monitor is a menu bar utility that tells a Mac user whether a connectivity problem is their Wi-Fi/Ethernet link, their router, or DNS. A browser only says "no internet". The app checks reachability every few seconds, runs a read-only troubleshooting ladder when something fails, and writes a local incident report the user can hand to IT. Audience: remote workers, developers, and IT/help-desk staff.
 
-*Specific Flow Confirmations:*
-- Account creation, login, and deletion: Net-DNS-Monitor requires NO account, registration, or login. All monitoring operates locally on-device. No user accounts exist to delete.
-- User-generated content: There is NO user-generated content, public posting, social feed, or public communication channel.
-- Paid content / In-App Purchases: There are NO paid features, subscriptions, in-app purchases, or paywalls. All functionality in this edition is free and unlocked.
+3. SETUP
+The app has no accounts, no login, no user-generated content, and no paid content or in-app purchases. No credentials or sample files are needed.
+1) Launch the app. A status item appears in the menu bar; the Dock tile shows the latest ping time.
+2) Allow Local Network access when macOS asks (used to compare status with other Macs on the same LAN; optional).
+3) Menu > Open dashboard shows live status. Click "Run full diagnosis".
+4) Optional: Menu > Credentials stores the user's own Anthropic API key, Slack webhook, or SMTP password in the macOS Keychain. Every core feature works without them.
 
----
+4. EXTERNAL SERVICES
+- Reachability: ICMP ping to 8.8.8.8; TCP connects to 1.1.1.1:443 and 8.8.8.8:443; a DNS query to 1.1.1.1:53 during diagnosis; a system DNS lookup of api.anthropic.com as a control name (name resolution only, no data sent). These carry no personal data.
+- LAN peer status (on by default, can be turned off in Settings): a UDP broadcast on the local subnet, port 45737, containing the Mac's hostname and health. Nothing leaves the LAN.
+- Anthropic Claude API (optional): only with the user's own API key AND explicit consent in an in-app dialog that lists the data sent. Consent is versioned and can be withdrawn from the menu.
+- Slack webhook / SMTP (optional): alerts to the user's own channel or mailbox.
+- No analytics, advertising, tracking, or crash-reporting SDKs.
 
-### 2. Purpose and Target Audience
-- **Problem Solved:** When internet connectivity fails, macOS users and IT professionals struggle to identify whether the failure is caused by their local Wi-Fi/Ethernet link, local router/DHCP gateway, or remote upstream DNS resolution. Typical browsers simply display a generic "No Internet" screen.
-- **App Purpose:** Net-DNS-Monitor is a native macOS menu bar utility that runs continuous, low-overhead connectivity probes across two tiers (a 5-second TCP heartbeat and a 30-second multi-resolver DNS matrix). When connectivity degrades, it executes an offline troubleshooting ladder and generates structured incident reports with forensic timestamps that users can inspect or hand to network administrators.
-- **Target Audience:** Mac users, remote professionals, software developers, network administrators, and IT support staff who require transparent, verifiable network status and forensic evidence during outages.
+5. REGIONS
+The app works the same in every region. No regional differences.
 
----
+6. REGULATION
+The app is not in a regulated industry and contains no protected third-party material.
 
-### 3. Setup and Access Instructions
-- **Credentials Required:** NONE. No login credentials, test accounts, or sample files are required.
-- **Step-by-step Setup:**
-  1. Open Net-DNS-Monitor.app.
-  2. The app immediately initializes its passive network probes and displays a green/amber/red status item in the menu bar and latency reading on the Dock tile.
-  3. Click the menu bar icon and select "Open dashboard" to view live telemetry.
-  4. Click "Run full diagnosis" to run the local diagnostic checks.
-  5. (Optional) Under "Credentials ▸", users may optionally store their own personal Anthropic API key, Slack webhook URL, or SMTP credentials in their secure macOS Keychain if they wish to receive remote alerts or optional AI incident diagnoses. The entire application is fully functional without setting any of these optional keys.
-
----
-
-### 4. External Services, Tools, and Platforms
-Net-DNS-Monitor communicates strictly with standard, publicly accessible network infrastructure and user-configured endpoints:
-- **Connectivity Probes (Default):**
-  - Cloudflare Public DNS (`1.1.1.1:443` via TCP, port 53 via UDP)
-  - Google Public DNS (`8.8.8.8:443` via TCP, port 53 via UDP)
-  - DNS control query resolving `api.anthropic.com`
-  *Note:* These outbound packets contain no personal data, user identifiers, or device telemetry.
-- **Local Subnet Peer Discovery (Default, Optional):**
-  - Sends UDP broadcast packets on the local subnet (`255.255.255.255:51413`) allowing multiple Macs running Net-DNS-Monitor on the same LAN to compare connectivity state. Can be disabled in settings.
-- **Anthropic Claude API (Optional, User-Configured):**
-  - Service: Anthropic Messages API (`https://api.anthropic.com/v1/messages`).
-  - Purpose: Generates plain-language diagnostic explanations of network incidents.
-  - Safeguards: Strictly opt-in. Requires the user's own API key stored in macOS Keychain. Requires explicit consent via an in-app permission dialog listing all payload fields before transmission. Explicitly revocable at any time via "Withdraw Claude permission". Sensitive strings configured by the user are redacted prior to sending.
-- **Slack Webhooks & SMTP (Optional, User-Configured):**
-  - Delivers incident alert summaries directly to the user's private Slack channel or personal email.
-- **Analytics & Tracking:**
-  - NONE. No third-party SDKs, telemetry frameworks, crash reporters, or advertising networks are bundled.
-
----
-
-### 5. Regional Differences
-- The application functions consistently across all geographic regions and territories.
-- There are no regional feature restrictions, geofences, or localized content variations. Default target IP addresses (1.1.1.1 and 8.8.8.8) utilize global anycast routing.
-
----
-
-### 6. Regulatory and Third-Party Material Documentation
-- Net-DNS-Monitor does not operate in a highly regulated industry (finance, banking, medical, gambling, legal).
-- It contains no proprietary third-party copyrighted media, trademarks, or restricted intellectual property.
-- All code is executed locally within the App Store App Sandbox using standard macOS POSIX and AppKit APIs.
-
-Please let us know if any further clarification or demonstration is needed to finalize approval.
-
-Sincerely,  
-Mitchell Hudson  
-Developer, Net-DNS-Monitor
+Mitchell Hudson
 ```
 
----
+## 2. App Review Information → Notes (1,991 characters — limit 4,000)
 
-## 2. Updated App Review Information Notes
+```text
+NO ACCOUNT NEEDED. No login, no demo account, no sample files, no in-app purchases.
 
-*Paste this text into the "Notes" field under App Store Connect → App Review Information (under 4,000 characters):*
+WHAT IT DOES: Menu bar utility that tells the user whether a connection problem is the local link, the router, or DNS, and writes a local incident report.
 
-```
-Net-DNS-Monitor is a native macOS menu bar utility that monitors internet and DNS connectivity.
+HOW TO REVIEW
+1. Launch. A status item appears in the menu bar; the Dock tile shows the latest ping time.
+2. macOS asks for Local Network access (LAN peer status). Allow or deny; the app works either way.
+3. Menu > Open dashboard: live link, gateway, DNS and latency status.
+4. Dashboard > Run full diagnosis. On a healthy network it reports that nothing is broken. Steps that need administrator rights are not in this edition and say so.
+5. Menu > Toggle mini window: floating status window.
+6. Menu > Allow Claude diagnosis…: consent dialog listing exactly what would be sent to Anthropic. Menu > Withdraw Claude permission revokes it.
+7. Menu > Privacy Policy opens https://llms-explorer.com/net-dns-monitor/privacy/
 
-NO ACCOUNT OR LOGIN REQUIRED:
-The app requires no account registration, login credentials, or test accounts. All monitoring is passive and local.
+NOT IN THE MAC APP STORE EDITION: switching the network service order, privileged repairs (DNS cache restart, DHCP renew), reading the system log, the router feature, the shell console, and the login-item agent. These need privileges the App Sandbox does not grant; the edition omits their controls.
 
-HOW TO REVIEW:
-1. Launch the app. A status item appears in the menu bar and the Dock tile displays the current round-trip time.
-2. Select "Open dashboard" from the menu to inspect live interface reachability, ping statistics, and network service order.
-3. Click "Run full diagnosis" in the dashboard to execute the diagnostic checks. In compliance with the App Sandbox, checks requiring root or network reconfiguration privileges safely report as unavailable.
-4. Select "Toggle mini window" to see the floating HUD status display.
-5. Select "Test network alert" to trigger a simulated notification banner.
-6. Select "Allow Claude diagnosis…" to inspect the transparent user-consent dialog that governs optional third-party AI escalation.
-7. Select "Privacy Policy" to view the privacy policy in Safari.
+ENTITLEMENTS (no temporary exceptions)
+- com.apple.security.network.client: outbound reachability probes, DNS lookups, and optional user-configured HTTPS (Anthropic, Slack) and SMTP.
+- com.apple.security.network.server: binds one UDP socket on port 45737 to receive LAN peer-status broadcasts. Can be turned off in Settings.
 
-SANDBOX & ENTITLEMENTS:
-- com.apple.security.network.client: Outbound TCP reachability probes, system DNS resolution, and optional user-configured HTTPS API calls.
-- com.apple.security.network.server: Required for UDP DNS lookup responses, ICMP ping replies, and optional local subnet UDP peer status broadcasts.
-- NO temporary exception entitlements are used.
+AI DISCLOSURE (5.1.2(i)): Nothing is sent to Anthropic unless the user has added their own API key and accepted the consent dialog, which names Anthropic and lists the data. Consent is versioned and revocable.
 
-EXTERNAL SERVICES & PRIVACY:
-- The app contacts standard public DNS anycast servers (1.1.1.1, 8.8.8.8) solely to measure reachability and latency.
-- Optional Claude diagnosis requires the user's personal Anthropic API key and explicit, versioned, revocable user consent.
-- Zero analytics, zero telemetry, zero advertising, zero remote tracking.
+PRIVACY: No analytics, advertising, tracking or crash-reporting SDKs. Incident reports stay on the Mac.
 
-A physical device walkthrough video is available at:
-https://llms-explorer.com/net-dns-monitor/app-review-demo.mp4
+The app bundles a Python runtime inside the signed app. It downloads and runs no code.
 ```
 
----
+## 3. Making the recording
 
-## 3. Demo Screen Recording Guide
+`scripts/appstore/record_demo.py` wraps `screencapture -v` and an `ffmpeg` H.264 encode.
+It captures the full screen, and the terminal needs Screen Recording permission
+(System Settings → Privacy & Security → Screen Recording).
 
-Apple requires a screen recording captured on a physical Mac showing the app launching and walking through the typical user flow.
+Quit the app first, so the video starts at launch.
 
-### Required Recording Sequence (60 - 90 Seconds)
-
-1. **Launch App (0:00 - 0:10):**
-   - Double-click `Net-DNS-Monitor.app` in Finder / Applications.
-   - Point cursor to menu bar showing status item `🟢 Net/DNS: healthy` and Dock icon displaying latency badge (e.g. `12ms`).
-2. **Open Menu Bar Menu (0:10 - 0:25):**
-   - Click status item. Show top readout items (Active service, Preferred, Backup).
-   - Show menu options: Open dashboard, Toggle mini window, Open last report, Test network alert, Credentials ▸, Allow Claude diagnosis…, Privacy Policy.
-3. **Open Dashboard (0:25 - 0:45):**
-   - Click "Open dashboard". Show the dashboard window.
-   - Show interface table with green checkmarks, latency charts, and network service order.
-   - Click "Run full diagnosis". Show the troubleshooting ladder steps executing and completing cleanly.
-4. **Mini Window & Alert (0:45 - 0:55):**
-   - From menu bar, click "Toggle mini window". Show floating HUD status card.
-   - From menu bar, click "Test network alert". Show system notification banner appearing in top right corner.
-5. **AI Consent Dialog (0:55 - 1:10):**
-   - Click "Allow Claude diagnosis…".
-   - Show modal dialog explicitly detailing the exact data payload (classification, check results, repair outcomes) and asking for user permission.
-   - Click "Deny" or "Allow" to demonstrate user control.
-6. **Privacy Policy (1:10 - 1:20):**
-   - Click "Privacy Policy" from menu bar.
-   - Show default browser opening `https://llms-explorer.com/net-dns-monitor/privacy/`.
-
-### Video Recording & Encoding Command
-To record and convert the video to App Store Connect compatible MP4:
 ```bash
-# Record display (press Ctrl+C when finished):
-screencapture -v demo_raw.mov
-
-# Transcode to optimized web/H.264 MP4:
-ffmpeg -i demo_raw.mov -c:v libx264 -profile:v high -pix_fmt yuv420p -crf 22 -preset fast -c:a aac -b:a 128k app-review-demo.mp4
+cd /Users/mitch/dev/net-dns-monitor
+python3 scripts/appstore/record_demo.py start
+# … perform the steps below …
+python3 scripts/appstore/record_demo.py stop   # writes build/appstore/demo/app-review-demo.mp4
 ```
-Host `app-review-demo.mp4` at `https://llms-explorer.com/net-dns-monitor/app-review-demo.mp4` or attach directly to App Store Connect Resolution Center.
+
+Recording order (60–120 s):
+
+1. Open the store build from `/Applications` (Finder double-click).
+2. Point at the menu bar status item and the Dock latency badge.
+3. Allow the **Local Network** prompt when it appears.
+4. Open the menu. Pause on it so every item is readable.
+5. **Open dashboard** → **Run full diagnosis**. Let the output finish.
+6. **Toggle mini window**, then close it.
+7. **Test network alert** — keep only if a banner appears (see "Before you send").
+8. **Allow Claude diagnosis…** → read the dialog → Allow. Then **Withdraw Claude permission**.
+9. **Privacy Policy** → the browser opens the policy page.
+
+Keep the file small (well under 100 MB). Apple publishes no Resolution Center attachment
+limit, and App Preview limits (15–30 s) do not apply to a review recording.
+
+## 4. Known second-rejection risks (open on `master`)
+
+Fixed on `master` on 2026-10-02 and shipped in build 4: the launch console banner, the
+`osascript` notification fallback in the sandbox (now skipped), a Keychain read that could
+raise during app construction, and the failover rows that pointed store users at
+`config.yaml`. The risks below remain. The reply above describes the build as it is, so
+it can go without them.
+
+| Risk | Where | Option |
+|---|---|---|
+| Peer discovery is on by default, so the Local Network prompt appears at launch; `network.server` exists only for it. | `netdnsmonitor/config.py:115`, `packaging/appstore/entitlements.plist` | Default it off in the store build, or drop it and the entitlement. |
+| Alert banners rely on deprecated `NSUserNotificationCenter`; the store build has no fallback if it fails. | `netdnsmonitor/alert.py` | Move to `UNUserNotificationCenter`. |
+| Gated modules (shell console, router, failover) still ship in the store bundle. | `netdnsmonitor/distribution.py` | Exclude them from the store bundle at build time. |
+| The `api.anthropic.com` control lookup runs before AI consent. | `netdnsmonitor/config.py:180` | Use a neutral control domain in the store build. |
+
+Research behind this: rabbithole report (session scratchpad, 2026-10-02) citing
+https://developer.apple.com/app-store/review/guidelines/ and
+https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy

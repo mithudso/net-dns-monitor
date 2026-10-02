@@ -13,7 +13,7 @@ import subprocess
 import AppKit
 import pytest
 
-from netdnsmonitor import alert
+from netdnsmonitor import alert, distribution
 
 
 class FakeApp:
@@ -158,6 +158,22 @@ def test_osascript_fallback_runs_only_when_rumps_raises(monkeypatch, capsys):
     # The rumps failure has to leave a trace; otherwise a permanently broken
     # primary path is invisible.
     assert "notification centre unavailable" in capsys.readouterr().err
+
+
+def test_no_osascript_fallback_in_the_app_store_build(monkeypatch):
+    calls = []
+
+    def exploding_notification(*args, **kwargs):
+        raise RuntimeError("notification centre unavailable")
+
+    monkeypatch.setattr("rumps.notification", exploding_notification)
+    alert.notify(
+        "net down",
+        run_fn=lambda args, **kwargs: calls.append(args),
+        env={distribution.SANDBOX_ENV: "com.example.netdnsmonitor"},
+    )
+
+    assert calls == []
 
 
 def test_no_osascript_when_rumps_succeeds(monkeypatch):

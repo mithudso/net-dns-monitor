@@ -139,31 +139,38 @@ class CredentialStore:
         if name not in NAMES:
             raise ValueError(f"unknown credential {name!r}; expected one of {', '.join(NAMES)}")
 
-    def source(self, name: str) -> Optional[str]:
-        self._check(name)
-        if self._env.get(name):
-            return "environment"
+    def _read_keychain(self, name: str) -> Optional[str]:
+        # One decode path for source() and get(): if they judged the stored bytes
+        # separately, an undecodable item would show as "set (Keychain)" while
+        # nothing could use it. A read that raises (a PyObjC bridge error) means
+        # "not set", as a backend that failed to build already does -- this runs
+        # inside app construction, where an exception kills the launch.
         backend = self._keychain()
         if backend is None:
             return None
-        status, value = backend.read(name)
-        return "keychain" if status == 0 and value else None
-
-    def get(self, name: str) -> Optional[str]:
-        self._check(name)
-        from_env = self._env.get(name)
-        if from_env:
-            return from_env
-        backend = self._keychain()
-        if backend is None:
+        try:
+            status, value = backend.read(name)
+        except Exception:  # noqa: BLE001 - a failed lookup is "not set", never a crash
             return None
-        status, value = backend.read(name)
         if status != 0 or not value:
             return None
         try:
             return value.decode("utf-8")
         except UnicodeDecodeError:
             return None
+
+    def source(self, name: str) -> Optional[str]:
+        self._check(name)
+        if self._env.get(name):
+            return "environment"
+        return "keychain" if self._read_keychain(name) else None
+
+    def get(self, name: str) -> Optional[str]:
+        self._check(name)
+        from_env = self._env.get(name)
+        if from_env:
+            return from_env
+        return self._read_keychain(name)
 
     def set(self, name: str, value: str) -> str:
         self._check(name)

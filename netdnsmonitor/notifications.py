@@ -143,14 +143,6 @@ def make_email_notifier(
         message["To"] = ", ".join(recipients)
         message.set_content(text)
 
-        # login() over a plain connection puts SMTP_PASSWORD on the wire in
-        # cleartext. Refused before connecting, so no socket is opened either.
-        if username and password and not use_starttls:
-            return {
-                "channel": "email",
-                "error": "refusing to send SMTP credentials without STARTTLS",
-            }
-
         factory = smtp_factory or smtplib.SMTP
         try:
             client = factory(host, port, timeout=timeout)

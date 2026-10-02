@@ -164,9 +164,9 @@ NO_PING_YET = {
     "down": False,
 }
 
-# Dashboard buttons that exist in every build but act only where the feature does.
-# The action grid is the same in both builds; in one without the feature, the click
-# prints the unavailable text instead of acting. (action id -> (capability, what))
+# Dashboard buttons that act only where the feature exists. dashboard_actions()
+# leaves them out of the grid in a build without the feature; any other path to
+# one prints the unavailable text instead of acting. (action id -> (capability, what))
 GATED_DASHBOARD_ACTIONS = {
     "open_console": ("shell_console", "the console"),
     "open_router_window": ("router", "the router console"),
@@ -954,7 +954,10 @@ class NetDnsMonitorApp(rumps.App):
         if self.config["open_dashboard_at_launch"]:
             # activate=False: ordered front without stealing focus at login.
             self.open_dashboard(activate=False)
-        if self.config.get("auto_open_console", True):
+        # Checked against the capability as well as the setting: in a build without
+        # the console, open_console would post its unavailable banner on every
+        # launch, advertising the one feature that build exists to leave out.
+        if self.config.get("auto_open_console", True) and self.capabilities.shell_console:
             # open_console is guarded: a failure to build the window costs the
             # console, never the launch tick.
             self.open_console()
@@ -2879,7 +2882,14 @@ class NetDnsMonitorApp(rumps.App):
             lines = build_failover_lines(snapshot)
         except Exception as exc:  # noqa: BLE001 - an indicator is not worth a crash
             lines = [f"Failover: status unavailable ({type(exc).__name__})"]
-        if not self.capabilities.network_order_write and lines and lines[0].startswith("Active: "):
+        if not self.capabilities.network_order_write and self.failover is None:
+            # build_failover_lines would say "set both service names in
+            # config.yaml", which sends someone to a setting that cannot help in
+            # a build that cannot write the order.
+            lines = ["Failover: not available in this build"]
+        elif (
+            not self.capabilities.network_order_write and lines and lines[0].startswith("Active: ")
+        ):
             # "failover is automatic" would be false here: nothing can switch.
             lines[0] = lines[0].split(" — ")[0] + " — read-only in this build"
         # strict=False: the padded list is longer than the rows on purpose.
@@ -2920,8 +2930,10 @@ class NetDnsMonitorApp(rumps.App):
         self._refresh_failover_menu()
         text = failover_status_text(self.failover)
         unavailable = self._unavailable_text("network_order_write", "switching networks")
-        if self.failover is not None and unavailable is not None:
-            text = f"{text} {unavailable}"
+        if unavailable is not None:
+            # With no failover configured, the config.yaml hint would be wrong
+            # here; the unavailable text alone is the whole answer.
+            text = unavailable if self.failover is None else f"{text} {unavailable}"
         rumps.notification("Net/DNS Monitor", "Network failover", text)
 
     def open_last_report(self, _sender=None) -> str:

@@ -162,8 +162,14 @@ def container_write():
 def read_real_home_config():
     real_home = pwd.getpwuid(os.getuid()).pw_dir
     path = os.path.join(real_home, ".config", "net-dns-monitor", "config.yaml")
-    if not os.path.lexists(path):
+    # os.lstat, not os.path.lexists: lexists turns the sandbox's EPERM into
+    # False, which would report the very block this probe measures as "absent".
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
         return {"ok": None, "note": "no config at the real home path; not probed"}
+    except PermissionError:
+        return {"ok": False, "note": "blocked by the sandbox, as expected"}
     try:
         with open(path, encoding="utf-8") as handle:
             handle.read(1)

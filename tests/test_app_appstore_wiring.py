@@ -379,6 +379,28 @@ def test_store_build_failover_rows_are_read_only(tmp_path):
     assert direct.failover_rows[0].title == "Active: AX88179B — failover is automatic"
 
 
+def test_store_build_unconfigured_failover_does_not_point_at_config_yaml(tmp_path):
+    """No setting can make the switch work here, so the row must not suggest one."""
+    app = build_app(tmp_path)
+    app.failover = None
+    app._refresh_failover_menu()
+    assert app.failover_rows[0].title == "Failover: not available in this build"
+    assert all("config.yaml" not in row.title for row in app.failover_rows)
+
+
+def test_store_build_launch_does_not_announce_the_missing_console(tmp_path, monkeypatch):
+    """auto_open_console defaults on; in the store build that once posted the
+    console's unavailable banner on every launch."""
+    monkeypatch.setattr("netdnsmonitor.app.install_main_menu", lambda on_action: None)
+    app = build_app(tmp_path, open_dashboard_at_launch=False)
+    app._install_activation_observer = lambda: None
+    app.open_console = refuse("open_console")
+
+    app.launch_tick()
+
+    assert app.notes == []
+
+
 # --- the unified log ---------------------------------------------------------
 
 

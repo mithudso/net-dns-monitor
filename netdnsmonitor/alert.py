@@ -41,7 +41,9 @@ that is what `Test network alert` in the menu is for.
 import subprocess
 import sys
 import traceback
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
+
+from . import distribution
 
 APP_NAME = "Net-DNS-Monitor"
 OSASCRIPT_BIN = "/usr/bin/osascript"
@@ -93,6 +95,7 @@ def notify(
     title: str = APP_NAME,
     subtitle: str = "",
     run_fn: RunFn = subprocess.run,
+    env: Optional[Mapping[str, str]] = None,
 ) -> None:
     try:
         import rumps
@@ -101,6 +104,12 @@ def notify(
         return
     except Exception:  # noqa: BLE001 - fall through to the osascript path
         traceback.print_exc()
+
+    # The sandboxed build stops here. osascript sends Apple Events, which that
+    # build holds no entitlement for, and spawning a scripting host is a surface
+    # App Review would ask about -- app.py avoids it for URLs for the same reason.
+    if distribution.detect(env).is_app_store:
+        return
 
     # Reached only when rumps raised. Note the banner then comes from the
     # scripting host rather than this app, which is why it is the fallback.
