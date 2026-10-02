@@ -15,8 +15,11 @@
    `launch_tick` opened the shell console because `auto_open_console` defaults on. The
    reviewer, and the video, would see it. Fixed on `master` 2026-10-02 (TASK-367). The
    version is in Rejected, not Waiting for Review, so a new build can go with the reply.
-1. **Record the video on this Mac (macOS 27.2) from the signed, sandboxed build 4.**
-   The GUI has never been launched sandboxed on 27.2, so the recording is also the
+1. **Record the video from the signed, sandboxed build 4 on a release macOS, and put
+   its exact version in the reply** (Apple menu → About This Mac). This Mac reports
+   macOS 27.2 build 26B5091g, which is a beta. Apple asks for "the latest operating
+   system", so record on the current public release if you can, and never call a beta a
+   release. The GUI has never been launched sandboxed on 27.x, so the recording is also the
    first real test. Use `scripts/appstore/record_demo.py` (section 3).
 2. **Watch for two things while recording.** If the prompt does not appear, quit the app
    and re-record. If the banner does not appear, leave that
@@ -34,7 +37,7 @@
    **Reply to App Review**, then **Resubmit to App Review**. After that, do not upload
    another build while the submission is waiting for review.
 
-## 1. Reply to App Review (2,770 characters — limit 4,000)
+## 1. Reply to App Review (2,811 characters — limit 4,000)
 
 ```text
 Hello,
@@ -42,7 +45,7 @@ Hello,
 Thank you for the review. Answers to each item follow; the setup, entitlement and privacy information is also in the App Review Information Notes.
 
 1. SCREEN RECORDING
-Attached: app-review-demo.mp4, recorded on a physical Mac running macOS 27.2. It starts at launch and shows: the menu bar status item and Dock latency badge; the menu; the dashboard; "Run full diagnosis"; the mini window; the Claude consent dialog (Allow, then Withdraw Claude permission); turning on LAN peer status and the Local Network permission prompt; and the Privacy Policy link.
+Attached: app-review-demo.mp4, recorded on a physical Mac running macOS [EXACT VERSION — fill in from About This Mac]. It starts at launch and shows: the menu bar status item and Dock latency badge; the menu; the dashboard; "Run full diagnosis"; the mini window; the Claude consent dialog (Allow, then Withdraw Claude permission); turning on LAN peer status and the Local Network permission prompt; and the Privacy Policy link.
 
 2. PURPOSE AND AUDIENCE
 Net-DNS-Monitor is a menu bar utility that tells a Mac user whether a connectivity problem is their Wi-Fi/Ethernet link, their router, or DNS. A browser only says "no internet". The app checks reachability every few seconds, runs a read-only troubleshooting ladder when something fails, and writes a local incident report the user can hand to IT. Audience: remote workers, developers, and IT/help-desk staff.

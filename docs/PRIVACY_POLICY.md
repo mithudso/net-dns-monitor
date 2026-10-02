@@ -19,9 +19,10 @@ work out what is wrong when it breaks. The publisher does not receive,
 collect, sell or track any of your data. The app has no analytics, no
 advertising and no account.
 
-Data leaves your Mac only in the cases below. Some happen with the default
-settings: the connectivity checks and the announcement to nearby copies of
-the app. The rest happen only after you configure them.
+Data leaves your Mac only in the cases below. The connectivity checks happen
+with the default settings. The announcement to nearby copies of the app is on
+by default in the direct download and off by default in the Mac App Store
+edition. The rest happen only after you configure them.
 
 ## What stays on your Mac
 
@@ -78,9 +79,11 @@ the outcome of any repair step, the Claude diagnosis if one was made, and the
 file path of the local report. The report path includes your macOS account
 name. Slack's or your email provider's privacy terms govern that delivery.
 
-## Nearby copies of the app (on by default)
+## Nearby copies of the app
 
-Peer discovery is on by default. The app announces itself on your local
+Peer discovery is on by default in the direct download and off by default in
+the Mac App Store edition, where you turn it on in Settings. When it is on, the
+app announces itself on your local
 network so other copies of Net-DNS-Monitor on the same network can compare
 results. The announcement stays on your local network and is not sent to the
 internet. It contains:
@@ -90,12 +93,12 @@ internet. It contains:
 - whether this Mac can currently reach the internet and resolve DNS.
 
 The app accepts these announcements only from addresses on the same local
-subnet, and it does not authenticate them. To stop announcing, turn peer
-discovery off in Settings and restart the app.
+subnet, and it does not authenticate them. To start or stop announcing,
+change peer discovery in Settings and restart the app.
 
 On macOS 15 and later, macOS asks for your permission before the app can reach
-your local network. If you decline, the app cannot announce itself or check
-whether your router is reachable, and those checks report failures.
+your local network. If you decline, the app cannot announce itself or hear
+other copies, and the peer comparison reports no peers.
 
 ## Children
 
