@@ -1085,6 +1085,18 @@
       "entry_symbols": []
     },
     {
+      "path": "scripts/rotate_workflow_logs.py",
+      "role": "tooling",
+      "importance": "low",
+      "purpose": "Moves old version sections of memory.md and prompts.md to docs/archive/ once a journal passes 200 KB; refuses while an editor swap file exists.",
+      "read_when": "A workflow journal is approaching 200 KB.",
+      "entry_symbols": [
+        "rotate",
+        "swap_files",
+        "main"
+      ]
+    },
+    {
       "path": "scripts/generate_static_dossier.py",
       "role": "tooling",
       "importance": "high",

@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2203 tests; the whole decision surface
+python3 -m pytest -q          # 2209 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2203 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2203 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2209 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -61,6 +61,8 @@ python3 -m pytest -q          # 2203 tests; the whole decision surface
 | `scripts/appstore/shoot_screenshots.py OUT_DIR` | run the store edition from source and render its windows to PNG (GUI session) | no |
 | `scripts/appstore/compose_screenshots.py IN_DIR OUT_DIR` | place those renders on 2880x1800 backgrounds for App Store Connect | no |
 | `sandbox_probe` inside an ad-hoc bundle | measure what works inside the App Sandbox | **yes** |
+| `scripts/check_docs.py --collect-tests` | doc paths and published test counts (CI) | no |
+| `scripts/rotate_workflow_logs.py [--dry-run]` | archive old `memory.md`/`prompts.md` sections past 200 KB; refuses under an open editor | no |
 
 The CLI is the interface for diagnostics, and `app.py` stays a rumps shell over the
 same tested modules. `scripts/` holds the launcher and installer (`start.sh`,
@@ -848,7 +850,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2203 passed
+python3 -m pytest -q            # 2209 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -931,7 +933,8 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 3 | `test_app_resolution_wiring.py` |
 | 2 | `test_app_report_storage_wiring.py` |
 | 7 | `test_check_docs.py` |
-| **2203** | **total** |
+| 6 | `test_rotate_workflow_logs.py` |
+| **2209** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

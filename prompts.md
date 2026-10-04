@@ -57,3 +57,11 @@ Delta: 1
 Prompt:
 
 > Do a code review of this repo and identify if there are any areas that thew new facts and research you just did would impact it. Then run the deep code optimizer on it and the repo-bootstrapper.
+
+## v8 - 2026-10-04 - Repo bootstrapper convergence pass
+
+Delta: 1
+
+Prompt:
+
+> Run the repo-boostrapper skill on this repo.

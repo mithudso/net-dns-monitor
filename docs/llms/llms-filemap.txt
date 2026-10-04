@@ -1,7 +1,7 @@
 # net-dns-monitor — complete source census with shallow cards
-> Source: /Users/mitch/dev/net-dns-monitor · remote URL omitted @ b8672f1 dirty
+> Source: /Users/mitch/dev/net-dns-monitor · remote URL omitted @ 1313b89 dirty
 > Generated: 2026-10-04 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 221 enumerated / 0 deep-read / 221 shallow · partial: census only; no deep cards or executable inventory
+> Census: 223 enumerated / 0 deep-read / 223 shallow · partial: census only; no deep cards or executable inventory
 
 - .editorconfig | source | ordinary | shallow. [src: .editorconfig#L1] Role and importance are retrieval hints. [asserted]
 - .env.example | source | ordinary | shallow. [src: .env.example#L1] Role and importance are retrieval hints. [asserted]
@@ -144,6 +144,7 @@
 - scripts/mcp_server.py | tooling | high | shallow. [src: scripts/mcp_server.py#L1] Role and importance are retrieval hints. [asserted]
 - scripts/net-dns-monitor-service | tooling | critical | shallow. [src: scripts/net-dns-monitor-service#L1] Role and importance are retrieval hints. [asserted]
 - scripts/query_index.py | tooling | high | shallow. [src: scripts/query_index.py#L1] Role and importance are retrieval hints. [asserted]
+- scripts/rotate_workflow_logs.py | tooling | low | shallow. [src: scripts/rotate_workflow_logs.py#L1] Role and importance are retrieval hints. [asserted]
 - scripts/semantic_indexer.py | tooling | high | shallow. [src: scripts/semantic_indexer.py#L1] Role and importance are retrieval hints. [asserted]
 - scripts/start.sh | tooling | critical | shallow. [src: scripts/start.sh#L1] Role and importance are retrieval hints. [asserted]
 - scripts/watch_and_index.py | tooling | high | shallow. [src: scripts/watch_and_index.py#L1] Role and importance are retrieval hints. [asserted]
@@ -209,6 +210,7 @@
 - tests/test_report_storage.py | test | ordinary | shallow. [src: tests/test_report_storage.py#L1] Role and importance are retrieval hints. [asserted]
 - tests/test_resolution_log.py | test | ordinary | shallow. [src: tests/test_resolution_log.py#L1] Role and importance are retrieval hints. [asserted]
 - tests/test_resolution_prober.py | test | ordinary | shallow. [src: tests/test_resolution_prober.py#L1] Role and importance are retrieval hints. [asserted]
+- tests/test_rotate_workflow_logs.py | test | ordinary | shallow. [src: tests/test_rotate_workflow_logs.py#L1] Role and importance are retrieval hints. [asserted]
 - tests/test_router.py | test | ordinary | shallow. [src: tests/test_router.py#L1] Role and importance are retrieval hints. [asserted]
 - tests/test_router_configs.py | test | ordinary | shallow. [src: tests/test_router_configs.py#L1] Role and importance are retrieval hints. [asserted]
 - tests/test_router_scripts.py | test | ordinary | shallow. [src: tests/test_router_scripts.py#L1] Role and importance are retrieval hints. [asserted]

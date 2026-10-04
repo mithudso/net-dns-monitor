@@ -1128,6 +1128,14 @@
     "provenance": "[src: scripts/query_index.py#L1]"
   },
   {
+    "path": "scripts/rotate_workflow_logs.py",
+    "role": "tooling",
+    "importance": "low",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/rotate_workflow_logs.py#L1]"
+  },
+  {
     "path": "scripts/semantic_indexer.py",
     "role": "tooling",
     "importance": "high",
@@ -1646,6 +1654,14 @@
     "read_depth": "shallow",
     "purpose": "Filename-based test retrieval entry. [asserted]",
     "provenance": "[src: tests/test_resolution_prober.py#L1]"
+  },
+  {
+    "path": "tests/test_rotate_workflow_logs.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_rotate_workflow_logs.py#L1]"
   },
   {
     "path": "tests/test_router.py",

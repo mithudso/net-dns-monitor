@@ -28,3 +28,31 @@ verify every prose claim, historical numeric call-site anchor, current App Store
 Connect state, or actual privilege/sandbox behavior. Read source and dated release
 records for those questions. The independent code review report tracks remaining
 runtime decisions and verified regressions.
+
+## Convergence re-audit — 2026-10-04 (TASK-405)
+
+A second repo-bootstrapper run checked the merged pass (1313b89) against the
+skill's audit checklist. The baseline gate was green: Ruff clean, 2203 tests,
+`check_docs.py --collect-tests` passing.
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| `.github/copilot-instructions.md` lacked the commands, architecture and conventions sections, the no-invention rule and the workflow-log rule | major | Added; commands match `.github/workflows/ci.yml`. |
+| `CLAUDE.md` lacked `Repository shape` and `Commands` sections | major | Added `Repository shape`; the verify-loop section is now headed `Commands — before you claim a change works`. |
+| No workflow-log rotation tool | medium | Added `scripts/rotate_workflow_logs.py` (stdlib, Python instead of the manifest's `.mjs`) with six offline tests. It refuses while a vim or emacs lock file exists. `memory.md` is about 15 KB, so no rotation is due. |
+
+These manifest items do not apply and stay absent: the operations registry,
+`docs/operations-registry.json` and `docs/tool-inventory.json` (Node server
+artifacts; KNOW-275), `.github/CODEOWNERS`, `.vscode/*`, `CODE_OF_CONDUCT.md`
+(single maintainer, no outside contributors), `.mcp.json` (the optional
+`scripts/mcp_server.py` needs a local Chroma index and Ollama; auto-registering
+it would start them in every session), `scripts/watch_and_index.sh`
+(`scripts/watch_and_index.py` fills that role) and `.tool-versions`
+(`.python-version` pins the interpreter).
+
+Not rerun: code-deep-optimizer and the full crawl. The v7 pass converged today
+and no application source changed since. The static dossier was regenerated.
+
+Residual (minor): `scripts/mcp_server.py` has no `--self-test` flag, so the
+checklist's MCP boot check cannot run without starting the server.
+`memory.md` lists v5 before v4; journals record history and are not reordered.

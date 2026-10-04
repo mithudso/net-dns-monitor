@@ -14,6 +14,23 @@ human what is wrong with their network. A report that misattributes a DNS failur
 network — or claims a repair worked when it silently did nothing — is worse than no
 report, because someone will act on it.
 
+## Repository shape
+
+- `netdnsmonitor/` — the app and the `netdns` CLI. `app.py` is the rumps shell and
+  builds the state machine; decision modules (`classifier`, `ladder`,
+  `state_machine`, `flap_gate`, `failover_policy`, `service_order`) stay free of
+  side effects.
+- `tests/` — the offline pytest suite; `tests/conftest.py` stubs the privilege
+  probe and the `log show` readers.
+- `scripts/` — start/install/service wrappers, `check_docs.py`,
+  `rotate_workflow_logs.py`, the optional local semantic indexer, and
+  `scripts/appstore/` for the Mac App Store build.
+- `router/`, `dnsmasq/`, `unbound/` — the separate router stack (see
+  Known-unverified areas; two resolver configs are symlinked into Homebrew).
+- `packaging/appstore/` — store build inputs. `docs/` — the documentation suite;
+  `docs/SCRIPTS.md` is the operator's manual.
+- `prompts.md`, `memory.md` — workflow journals (see Workflow records).
+
 ## Non-negotiables
 
 1. **Never claim a repair that did not happen.** `flush_dns_cache` returns `partial` when
@@ -74,10 +91,10 @@ report, because someone will act on it.
     silently measures the wrong path. `IP_BOUND_IF` is 25, `IPV6_BOUND_IF` is 125; both
     are in Darwin's headers and were confirmed against live interfaces.
 
-## Before you claim a change works
+## Commands — before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2203 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2209 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -114,7 +131,9 @@ it as verified, and never invoke it from a script or an agent expecting completi
 Before implementation, append the exact user request to `prompts.md` and record
 the active task, constraints, completed work, verification, and remaining steps
 in `memory.md`. Add the next `## vN - date` section and increment its `Delta`.
-Keep those records current so a stopped session can resume. Stage only this
+Keep those records current so a stopped session can resume. When either journal
+passes 200 KB, run `scripts/rotate_workflow_logs.py`; it moves older sections to
+`docs/archive/` and refuses while an editor swap file is open. Stage only this
 session's files, preserve unrelated changes, and commit the completed work.
 The journals' versions track work entries; they do not change the App Store
 product version or build number.

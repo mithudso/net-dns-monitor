@@ -128,3 +128,28 @@ Publication: green Dependabot Ruff PR29 merged as9a74be7; red Dependabot PR28 is
 Remaining follow-up choices: redesign GUI incident ordering, cancellable/bounded resolver workers, stalled-domain seeding/rotation and retention policy. TASK-335 now records implemented compaction and its remaining domain-cardinality bound. Actual GUI, NAT64-only, permission, privileged and alert-delivery acceptance remain unverified. The optional local Chroma dependency has reachability-qualified HTTP-server advisories; its transitive closure was not completely audited. Holdout graphs26cases is below empirical minimum30; no quality/benchmark gain or auto-promotion claimed.
 
 Snapshot and isolated verification env: /Users/mitch/.claude/skill-consolidation/backups/code-deep-optimizer-net-dns-monitor-20261004-165400. Source snapshots, .iter1/.iter2 and run-stub.jsonl preserve continuation. Requested code/doc work is complete; task/PR records hold final publication state.
+
+## v8 - 2026-10-04 - Repo bootstrapper convergence pass
+
+Delta: 1
+
+Active task: TASK-405. Re-audit after the v7 pass (PR #33, 1313b89) against the
+repo-bootstrapper checklist. Baseline gate green: ruff clean, 2203 tests pass,
+`check_docs.py --collect-tests` passes.
+
+Gaps found: `.github/copilot-instructions.md` lacks the checklist's commands,
+architecture and conventions sections and the no-invention and workflow-log
+rules; `CLAUDE.md` lacks `Repository shape` and `Commands`; no workflow-log
+rotation tool exists. Out of scope (KNOW-275, KNOW-380): operations registry,
+tool inventory, CODEOWNERS, editor workspace files, `.mcp.json`,
+CODE_OF_CONDUCT. No code-deep-optimizer or crawl rerun: v7 converged today and
+no source changed since.
+
+Remaining steps: add the sections, add `scripts/rotate_workflow_logs.py` with
+tests, update the ledger and test counts, run the gate, commit and push.
+
+Completed (v8): added the copilot-instructions and CLAUDE.md sections, the
+rotation script with six tests, test counts (2209), index/overview/SCRIPTS rows,
+a regenerated static dossier (223 cards) and the ledger re-audit section.
+Verification: Ruff lint/format clean, 2209 tests pass, `check_docs.py
+--collect-tests` passes, `git diff --check` clean. Remaining: commit and push.
