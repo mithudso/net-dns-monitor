@@ -56,6 +56,7 @@ GROUPS = [
         [
             ("ping_host_v6", "IPv6 host to ping first (blank = off)", "str"),
             ("ping_host", "Host to ping", "str"),
+            ("ping_fallback_host", "Fallback host to ping (blank = off)", "str"),
             ("ping_interval_seconds", "Ping every (seconds)", "int"),
             ("ping_timeout_seconds", "Ping timeout (seconds)", "float"),
             ("ping_failure_threshold", "Alert after N failed pings", "int"),

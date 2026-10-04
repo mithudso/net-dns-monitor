@@ -519,7 +519,7 @@ def test_a_background_job_does_not_hold_the_console_open(tmp_path):
     """A `&` job that outlives its shell must not keep the reader threads -- and
     the console line -- alive until the job ends on its own.
     """
-    before = threading.active_count()
+    before = set(threading.enumerate())
     started = time.monotonic()
     result = run_command("sh -c 'sleep 20' & echo started", cwd=str(tmp_path), timeout=20)
     elapsed = time.monotonic() - started
@@ -527,12 +527,13 @@ def test_a_background_job_does_not_hold_the_console_open(tmp_path):
     assert elapsed < 3
     # The reader threads wind down after run_command has returned, on the
     # scheduler's timing, not before it: a count taken on the very next line
-    # saw 3 for 2 once on the CI runner. The claim is that they do not live
+    # saw 3 for 2 once on the CI runner. Compare identities because unrelated
+    # threads can also finish during this test. The claim is that they do not live
     # the 20 s of the job, so give them a moment, not the job's lifetime.
     deadline = time.monotonic() + 2
-    while threading.active_count() != before and time.monotonic() < deadline:
+    while set(threading.enumerate()) - before and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert threading.active_count() == before
+    assert not (set(threading.enumerate()) - before)
 
 
 def test_a_flood_of_output_is_capped_without_buffering_all_of_it(tmp_path):

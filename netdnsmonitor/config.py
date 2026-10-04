@@ -62,6 +62,7 @@ DEFAULT_CONFIG = {
     # 8.8.8.8, so a filtered ICMP path behaves alike on both.
     "ping_host_v6": "2001:4860:4860::8888",
     "ping_host": "8.8.8.8",
+    "ping_fallback_host": "1.1.1.1",
     "ping_interval_seconds": 5,
     # Bounds the per-tick ping. A failed ping takes about this long, so keep it
     # comfortably under ping_interval_seconds.
@@ -540,6 +541,15 @@ def validate_config(config: dict) -> None:
         raise ConfigError(
             "ping_host",
             f"config key 'ping_host' must be a host name or address, got {config['ping_host']!r}",
+        )
+    if (
+        "ping_fallback_host" in config
+        and config["ping_fallback_host"] is not None
+        and not isinstance(config["ping_fallback_host"], str)
+    ):
+        raise ConfigError(
+            "ping_fallback_host",
+            f"config key 'ping_fallback_host' must be a host name or address, or blank to turn it off, got {config['ping_fallback_host']!r}",
         )
 
     # `reports_dir:` with nothing after it loads as None, and expanduser(None)

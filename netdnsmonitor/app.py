@@ -599,7 +599,11 @@ def build_resolution_job(config: dict) -> Callable[[], list[dict]]:
     return job
 
 
-def build_ping_job(config: dict) -> Callable[[], tuple[dict, Optional[tuple[int, int]]]]:
+def build_ping_job(
+    config: dict,
+    ping_fn: Optional[Callable[..., dict]] = None,
+    counters_fn: Optional[Callable[[], Optional[tuple[int, int]]]] = None,
+) -> Callable[[], tuple[dict, Optional[tuple[int, int]]]]:
     """One heartbeat's worth of work: ping, then read the interface counters.
 
     Both are subprocesses, which is why this runs on a worker thread rather
@@ -607,14 +611,25 @@ def build_ping_job(config: dict) -> Callable[[], tuple[dict, Optional[tuple[int,
     """
 
     def job() -> tuple[dict, Optional[tuple[int, int]]]:
-        return ping_heartbeat(config), read_interface_counters()
+        cfn = read_interface_counters if counters_fn is None else counters_fn
+        return ping_heartbeat(config, ping_fn=ping_fn), cfn()
 
     return job
 
 
 def heartbeat_hosts(config: dict) -> list[str]:
-    """ping_host_v6, then ping_host: the order the heartbeat tries them."""
-    return [host for host in (config.get("ping_host_v6"), config["ping_host"]) if host]
+    """IPv6, primary IPv4, then an optional independent fallback target."""
+    return list(
+        dict.fromkeys(
+            host
+            for host in (
+                config.get("ping_host_v6"),
+                config["ping_host"],
+                config.get("ping_fallback_host"),
+            )
+            if host
+        )
+    )
 
 
 def heartbeat_label(config: dict) -> str:
@@ -622,19 +637,21 @@ def heartbeat_label(config: dict) -> str:
     return " / ".join(heartbeat_hosts(config))
 
 
-def ping_heartbeat(config: dict) -> dict:
+def ping_heartbeat(config: dict, ping_fn: Optional[Callable[..., dict]] = None) -> dict:
     """One heartbeat reading: the first host in heartbeat_hosts that answers.
 
     IPv6 first, then IPv4. An IPv4-only network still reads as up from the
-    second host, and an IPv6-only one (App Review's NAT64 network) from the
+    primary IPv4 host, and an IPv6-only one (App Review's NAT64 network) from the
     first. Down only when every host failed, and the error then names each
-    host with its own reason, so the alert does not blame one path for both.
+    host with its own reason. An optional fallback target reduces alerts caused
+    by a single target dropping ICMP; a reply does not prove every path works.
     Looks `ping_once` up at call time, which is the seam the suite patches.
     """
     hosts = heartbeat_hosts(config)
     failures = []
+    fn = ping_once if ping_fn is None else ping_fn
     for host in hosts:
-        result = ping_once(host, timeout_seconds=config["ping_timeout_seconds"])
+        result = fn(host, timeout_seconds=config["ping_timeout_seconds"])
         if result["ok"]:
             return {**result, "host": host}
         failures.append(f"{host}: {result['error'] or 'no reply'}")

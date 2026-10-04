@@ -128,7 +128,7 @@ def test_a_failed_ping_fires_the_alert(tmp_path, monkeypatch):
     app = make_app(tmp_path, result=FAIL)
     run_heartbeat(app)
     assert len(alerts) == 1
-    assert alerts[0][0] == "2001:4860:4860::8888 / 8.8.8.8"
+    assert alerts[0][0] == "2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"
     assert "no reply" in alerts[0][1]
 
 
@@ -158,7 +158,7 @@ def test_recovery_cancels_the_bounce(tmp_path, monkeypatch):
     result["current"] = OK
     run_heartbeat(app)
 
-    assert recovered == ["2001:4860:4860::8888 / 8.8.8.8"]
+    assert recovered == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"]
     assert app.ping_stats["down"] is False
     assert "61ms" in app.title
 
@@ -279,7 +279,7 @@ def test_every_queued_result_is_recorded_so_a_failure_edge_cannot_be_missed(tmp_
 
     app._drain_ping_results()
 
-    assert alerts == ["2001:4860:4860::8888 / 8.8.8.8"]
+    assert alerts == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"]
     # The newest result is what gets drawn.
     assert "61ms" in app.title
     assert app.ping_stats["down"] is False
@@ -377,3 +377,51 @@ def test_a_blank_ipv6_host_turns_the_ipv6_ping_off(monkeypatch):
     config = {"ping_host_v6": "", "ping_host": "8.8.8.8", "ping_timeout_seconds": 2}
     app_module.ping_heartbeat(config)
     assert asked == ["8.8.8.8"]
+
+
+def test_build_ping_job_probes_fallback_when_primary_fails():
+    from netdnsmonitor.app import build_ping_job
+
+    calls = []
+
+    def fake_ping(host, timeout_seconds=2.0):
+        calls.append(host)
+        if host != "1.1.1.1":
+            return {"ok": False, "rtt_ms": None, "error": "no reply from 8.8.8.8"}
+        return {"ok": True, "rtt_ms": 14.5, "error": None}
+
+    config = {
+        "ping_host_v6": "2001:4860:4860::8888",
+        "ping_host": "8.8.8.8",
+        "ping_fallback_host": "1.1.1.1",
+        "ping_timeout_seconds": 2.0,
+    }
+    job = build_ping_job(config, ping_fn=fake_ping, counters_fn=lambda: (100, 200))
+    result, counters = job()
+
+    assert calls == ["2001:4860:4860::8888", "8.8.8.8", "1.1.1.1"]
+    assert result["ok"] is True
+    assert result["rtt_ms"] == 14.5
+    assert counters == (100, 200)
+
+
+def test_build_ping_job_reports_failure_when_both_fail():
+    from netdnsmonitor.app import build_ping_job
+
+    calls = []
+
+    def fake_ping(host, timeout_seconds=2.0):
+        calls.append(host)
+        return {"ok": False, "rtt_ms": None, "error": f"no reply from {host}"}
+
+    config = {
+        "ping_host": "8.8.8.8",
+        "ping_fallback_host": "1.1.1.1",
+        "ping_timeout_seconds": 2.0,
+    }
+    job = build_ping_job(config, ping_fn=fake_ping, counters_fn=lambda: (0, 0))
+    result, counters = job()
+
+    assert calls == ["8.8.8.8", "1.1.1.1"]
+    assert result["ok"] is False
+    assert result["error"] == ("8.8.8.8: no reply from 8.8.8.8; 1.1.1.1: no reply from 1.1.1.1")

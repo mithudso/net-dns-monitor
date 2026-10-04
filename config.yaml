@@ -83,6 +83,9 @@ resolution_max_workers: 10
 # runs an IPv6-only NAT64 network, where an IPv4 ping has no route.
 ping_host_v6: "2001:4860:4860::8888"
 ping_host: "8.8.8.8"
+# Secondary host probed immediately if ping_host fails to respond, preventing
+# false positive "network failed" alerts from single-host ICMP rate limiting.
+ping_fallback_host: "1.1.1.1"
 ping_interval_seconds: 5
 
 # Bounds each ping. A failed ping takes about this long to give up (measured
