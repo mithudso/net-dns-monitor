@@ -110,3 +110,5 @@ Delta: 1
 Committed the nine pending ICMP fallback changes before merging remote master. Preserved IPv6-first heartbeat behavior and integrated the additional fallback target into the shared heartbeat path. Kept all failed-target reasons in diagnostics. Blank or null disables the fallback. Preserved the newer App Store response and remote changes. Tracking: TASK-376; scope decision: KNOW-377.
 
 Validation: lint and format checks passed; all 2150 offline tests passed. Updated test counts. Publication and final CI status are recorded in TASK-376. Use a merge commit to retain both histories and allow master to fast-forward. No further product changes are required. No live GUI or network behavior has been verified in this session.
+
+CI found a pre-existing console test race (tests/test_console.py:535, assert 1 == 3). Track newly created thread identities instead of requiring a global count to stay equal. This keeps the no-leaked-reader check while allowing unrelated threads to finish.
