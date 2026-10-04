@@ -33,3 +33,11 @@ Delta: 1
 Prompt:
 
 > Get this repo ready for submitssion to the apple store and document everything necessary to submit
+
+## v5 - 2026-10-04 - macOS networking expertise
+
+Delta: 1
+
+Prompt:
+
+> become an expert in macos networking
