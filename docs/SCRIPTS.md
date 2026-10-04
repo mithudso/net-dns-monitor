@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2136 tests; the whole decision surface
+python3 -m pytest -q          # 2138 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2136 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2136 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2138 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -843,7 +843,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2136 passed
+python3 -m pytest -q            # 2138 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -899,7 +899,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 17 | `test_dock_icon.py` |
 | 17 | `test_stall_log.py` |
 | 17 | `test_alert.py` |
-| 16 | `test_app_ping_wiring.py` |
+| 18 | `test_app_ping_wiring.py` |
 | 16 | `test_indexer_scripts.py` |
 | 16 | `test_interface_probe.py` |
 | 16 | `test_resolution_prober.py` |
@@ -925,7 +925,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 6 | `test_classifier.py` |
 | 3 | `test_app_resolution_wiring.py` |
 | 2 | `test_app_report_storage_wiring.py` |
-| **2136** | **total** |
+| **2138** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

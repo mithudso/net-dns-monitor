@@ -55,6 +55,7 @@ GROUPS = [
         "Ping heartbeat",
         [
             ("ping_host", "Host to ping", "str"),
+            ("ping_fallback_host", "Fallback host to ping", "str"),
             ("ping_interval_seconds", "Ping every (seconds)", "int"),
             ("ping_timeout_seconds", "Ping timeout (seconds)", "float"),
             ("ping_failure_threshold", "Alert after N failed pings", "int"),

@@ -57,6 +57,7 @@ DEFAULT_CONFIG = {
     # ladder or escalation. See ping.py for why this uses ICMP while prober.py
     # deliberately does not.
     "ping_host": "8.8.8.8",
+    "ping_fallback_host": "1.1.1.1",
     "ping_interval_seconds": 5,
     # Bounds the per-tick ping. A failed ping takes about this long, so keep it
     # comfortably under ping_interval_seconds.
@@ -529,6 +530,15 @@ def validate_config(config: dict) -> None:
         raise ConfigError(
             "ping_host",
             f"config key 'ping_host' must be a host name or address, got {config['ping_host']!r}",
+        )
+    if (
+        "ping_fallback_host" in config
+        and config["ping_fallback_host"] is not None
+        and not _is_text(config["ping_fallback_host"])
+    ):
+        raise ConfigError(
+            "ping_fallback_host",
+            f"config key 'ping_fallback_host' must be a host name or address, got {config['ping_fallback_host']!r}",
         )
 
     # `reports_dir:` with nothing after it loads as None, and expanduser(None)

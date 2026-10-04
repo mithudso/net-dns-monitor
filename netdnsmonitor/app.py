@@ -599,19 +599,36 @@ def build_resolution_job(config: dict) -> Callable[[], list[dict]]:
     return job
 
 
-def build_ping_job(config: dict) -> Callable[[], tuple[dict, Optional[tuple[int, int]]]]:
+def build_ping_job(
+    config: dict,
+    ping_fn: Optional[Callable[..., dict]] = None,
+    counters_fn: Optional[Callable[[], Optional[tuple[int, int]]]] = None,
+) -> Callable[[], tuple[dict, Optional[tuple[int, int]]]]:
     """One heartbeat's worth of work: ping, then read the interface counters.
 
     Both are subprocesses, which is why this runs on a worker thread rather
     than inline on the run loop -- see NetDnsMonitorApp.ping_tick.
+
+    If the primary ping_host fails and ping_fallback_host is set, the fallback
+    host is probed immediately to corroborate whether the failure is an isolated
+    ICMP rate-limit/drop or a genuine network outage.
     """
 
     def job() -> tuple[dict, Optional[tuple[int, int]]]:
-        result = ping_once(
+        fn = ping_once if ping_fn is None else ping_fn
+        cfn = read_interface_counters if counters_fn is None else counters_fn
+        result = fn(
             config["ping_host"],
             timeout_seconds=config["ping_timeout_seconds"],
         )
-        return result, read_interface_counters()
+        if not result.get("ok") and config.get("ping_fallback_host"):
+            fallback_result = fn(
+                config["ping_fallback_host"],
+                timeout_seconds=config["ping_timeout_seconds"],
+            )
+            if fallback_result.get("ok"):
+                return fallback_result, cfn()
+        return result, cfn()
 
     return job
 
