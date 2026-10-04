@@ -69,6 +69,24 @@ Owner answers to the seven open questions, and what was done:
 
 Test count: 1878.
 
+## v5 - 2026-10-04 - macOS networking expertise
+
+Delta: 1
+
+What was done:
+- Loaded the macOS networking reference from `/Users/mitch/.claude/skills/devops-linux-admin/references/macos-networking.md` and the DNS reference from `/Users/mitch/.claude/skills/networking/references/dns-deep-dive.md`, after reading their migrated skill entrypoints.
+- Read `/Users/mitch/dev/net-dns-monitor/CLAUDE.md` and focused Stele recall on macOS, DNS, mDNSResponder and interface-bound probing. Tracking task: TASK-374. Scope decision: KNOW-375.
+- Checked Apple guidance on Local Network privacy and IPv6 DNS64/NAT64. Sources: https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy and https://developer.apple.com/support/ipv6/.
+- Prepared to distinguish system DNS from direct DNS queries, configured state from observed connectivity, IPv4 from IPv6 failures, VPN routing from physical-link faults, and permission failures from network outages.
+- Recorded the exact prompt. No runtime code or host network settings changed. Existing unrelated edits in the main checkout were preserved by using an isolated worktree.
+
+Continuation:
+- This was a learning request, not a live diagnosis. No particular network fault was supplied or reproduced.
+- For a later diagnosis, collect evidence from the affected process and actual destination. Treat version-sensitive reference claims as leads to verify, not live measurements.
+- Do not claim mastery or live validation from reading documentation. Existing project verification gaps remain as described in the project instructions.
+
+Remaining requested steps: none after committing and publishing these records.
+
 ## v4 - 2026-09-17 - App Store readiness pass
 
 Delta: 1
