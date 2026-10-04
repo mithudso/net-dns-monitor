@@ -1,6 +1,6 @@
 # Testing
 
-2136 tests, offline, in tens of seconds. `pytest.ini` sets
+2148 tests, offline, in tens of seconds. `pytest.ini` sets
 `testpaths = tests`, so a bare `python3 -m pytest` from the repo root is the whole
 suite.
 

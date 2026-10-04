@@ -28,6 +28,10 @@ def pinged(monkeypatch):
 
     def fake_ping_once(host, timeout_seconds):
         hosts.append(host)
+        # The IPv6 host fails so the heartbeat reaches ping_host, which is
+        # what these tests are about.
+        if ":" in host:
+            return {"ok": False, "rtt_ms": None, "error": "no route"}
         return {"ok": True, "rtt_ms": 1.0, "error": None}
 
     monkeypatch.setattr("netdnsmonitor.app.ping_once", fake_ping_once)
@@ -50,7 +54,7 @@ def test_a_saved_ping_host_is_what_the_running_heartbeat_pings(tmp_path, pinged)
     note = app._save_settings({"ping_host": "9.9.9.9"})
     app.ping_job()
 
-    assert pinged == ["9.9.9.9"]
+    assert pinged == ["2001:4860:4860::8888", "9.9.9.9"]
     assert app.config is live
     assert note.startswith("Saved. These take effect immediately.")
 
@@ -101,7 +105,7 @@ def test_reload_applies_the_file_in_place_and_keeps_restart_keys(tmp_path, pinge
     app.ping_job()
 
     assert app.config is live
-    assert pinged == ["1.0.0.1"]
+    assert pinged == ["2001:4860:4860::8888", "1.0.0.1"]
     assert app.config["failure_threshold"] == launch_threshold
 
 

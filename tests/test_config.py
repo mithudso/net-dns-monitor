@@ -652,3 +652,13 @@ def test_a_blank_log_window_is_refused_naming_the_key(tmp_path):
     with pytest.raises(ConfigError) as caught:
         load_config(str(config_path))
     assert caught.value.key == "log_view_backfill_window"
+
+
+def test_a_blank_ipv6_ping_host_is_allowed_and_turns_it_off(tmp_path):
+    assert load_config(_write(tmp_path, 'ping_host_v6: ""\n'))["ping_host_v6"] == ""
+
+
+def test_a_non_text_ipv6_ping_host_is_refused(tmp_path):
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write(tmp_path, "ping_host_v6: [1, 2]\n"))
+    assert caught.value.key == "ping_host_v6"

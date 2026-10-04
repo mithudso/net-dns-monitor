@@ -39,6 +39,11 @@ Flags, and what each one is load-bearing for:
 
 Exit codes are the success signal, measured on this machine: 0 with a reply,
 2 when nothing replied, 68 when the name will not resolve.
+
+**IPv6 literals go to `/sbin/ping6`.** `/sbin/ping` on macOS rejects `-6`, and
+`ping6` takes neither `-W` nor `-t`: measured against the unroutable
+2001:db8::1 it waits 11s before exiting 2. The subprocess timeout is therefore
+the only bound on an IPv6 ping, and it is set to the ping timeout itself.
 """
 
 import math
@@ -49,6 +54,7 @@ from typing import Callable, Optional
 RunFn = Callable[..., object]
 
 PING_BIN = "/sbin/ping"
+PING6_BIN = "/sbin/ping6"
 
 # `time<1 ms` is what a sub-millisecond LAN reply prints, so the separator has
 # to admit `<` as well as `=`; an `=`-only pattern silently drops those.
@@ -111,16 +117,25 @@ def ping_once(
         raise ValueError(
             f"ping_timeout_seconds must be a positive finite number, got {timeout_seconds!r}"
         ) from None
-    args = [
-        PING_BIN,
-        "-c",
-        "1",
-        "-W",
-        str(wait_ms),
-        "-t",
-        str(hard_timeout),
-        host,
-    ]
+    if ":" in host:
+        # An IPv6 literal (a host name never contains a colon). See the module
+        # docstring: ping6 has no timeout flag, so the subprocess timeout is it.
+        args = [PING6_BIN, "-c", "1", host]
+        run_timeout = timeout_seconds
+    else:
+        args = [
+            PING_BIN,
+            "-c",
+            "1",
+            "-W",
+            str(wait_ms),
+            "-t",
+            str(hard_timeout),
+            host,
+        ]
+        # -t already bounds ping itself; this only covers a ping that
+        # ignores it or wedges before it arms.
+        run_timeout = hard_timeout + 2
 
     try:
         result = run_fn(
@@ -129,10 +144,14 @@ def ping_once(
             text=True,
             encoding="utf-8",
             errors="replace",
-            # -t already bounds ping itself; this only covers a ping that
-            # ignores it or wedges before it arms.
-            timeout=hard_timeout + 2,
+            timeout=run_timeout,
         )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "rtt_ms": None,
+            "error": f"no reply from {host} within {timeout_seconds:g}s",
+        }
     except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
         return {"ok": False, "rtt_ms": None, "error": str(exc)}
 

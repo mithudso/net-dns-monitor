@@ -2,8 +2,9 @@
 
 - **Submission ID:** `4283c533-7a50-4d5d-91ff-af3f312417de`
 - **Rejected:** 2026-09-28 19:16, Guideline 2.1 — Information Needed (new developer account)
-- **Bundle ID:** confirm in App Store Connect before sending. The repo default
-  (`com.net-dns-monitor.app`, `scripts/appstore/build_appstore.py:586`) is a dev value.
+- **Bundle ID:** `com.mitchhudson.netdnsmonitor`, team `L9ELX85ZFD`, from the App Store profile
+  `/Users/mitch/Documents/NetDNSMonitor_AppStore.provisionprofile` (expires 2027-09-27). Pass it
+  as `--bundle-id` to `scripts/appstore/build_appstore.py`; the script's default is a dev value.
 - **Status of this document:** every claim below was checked against the code on
   2026-10-02 (TASK-367). Re-check any line you change.
 
@@ -14,8 +15,11 @@
    `launch_tick` opened the shell console because `auto_open_console` defaults on. The
    reviewer, and the video, would see it. Fixed on `master` 2026-10-02 (TASK-367). The
    version is in Rejected, not Waiting for Review, so a new build can go with the reply.
-1. **Record the video on this Mac (macOS 27.2) from the signed, sandboxed build 4.**
-   The GUI has never been launched sandboxed on 27.2, so the recording is also the
+1. **Record the video from the signed, sandboxed build 4 on a release macOS, and put
+   its exact version in the reply** (Apple menu → About This Mac). This Mac reports
+   macOS 27.2 build 26B5091g, which is a beta. Apple asks for "the latest operating
+   system", so record on the current public release if you can, and never call a beta a
+   release. The GUI has never been launched sandboxed on 27.x, so the recording is also the
    first real test. Use `scripts/appstore/record_demo.py` (section 3).
 2. **Watch for two things while recording.** If the prompt does not appear, quit the app
    and re-record. If the banner does not appear, leave that
@@ -33,7 +37,7 @@
    **Reply to App Review**, then **Resubmit to App Review**. After that, do not upload
    another build while the submission is waiting for review.
 
-## 1. Reply to App Review (2,678 characters — limit 4,000)
+## 1. Reply to App Review (2,811 characters — limit 4,000)
 
 ```text
 Hello,
@@ -41,7 +45,7 @@ Hello,
 Thank you for the review. Answers to each item follow; the setup, entitlement and privacy information is also in the App Review Information Notes.
 
 1. SCREEN RECORDING
-Attached: app-review-demo.mp4, recorded on a physical Mac running macOS 27.2. It starts at launch and shows: the menu bar status item and Dock latency badge; the menu; the dashboard; "Run full diagnosis"; the mini window; the Claude consent dialog (Allow, then Withdraw Claude permission); turning on LAN peer status and the Local Network permission prompt; and the Privacy Policy link.
+Attached: app-review-demo.mp4, recorded on a physical Mac running macOS [EXACT VERSION — fill in from About This Mac]. It starts at launch and shows: the menu bar status item and Dock latency badge; the menu; the dashboard; "Run full diagnosis"; the mini window; the Claude consent dialog (Allow, then Withdraw Claude permission); turning on LAN peer status and the Local Network permission prompt; and the Privacy Policy link.
 
 2. PURPOSE AND AUDIENCE
 Net-DNS-Monitor is a menu bar utility that tells a Mac user whether a connectivity problem is their Wi-Fi/Ethernet link, their router, or DNS. A browser only says "no internet". The app checks reachability every few seconds, runs a read-only troubleshooting ladder when something fails, and writes a local incident report the user can hand to IT. Audience: remote workers, developers, and IT/help-desk staff.
@@ -54,7 +58,7 @@ The app has no accounts, no login, no user-generated content, and no paid conten
 4) Optional: Menu > Credentials stores the user's own Anthropic API key, Slack webhook, or SMTP password in the macOS Keychain. Every core feature works without them.
 
 4. EXTERNAL SERVICES
-- Reachability: ICMP ping to 8.8.8.8; TCP connects to 1.1.1.1:443 and 8.8.8.8:443; a DNS query to 1.1.1.1:53 during diagnosis; a system DNS lookup of api.anthropic.com as a control name (name resolution only, no data sent). These carry no personal data.
+- Reachability: ICMP ping to 2001:4860:4860::8888, then 8.8.8.8 if IPv6 does not answer; TCP connects to 1.1.1.1:443 and 8.8.8.8:443; during diagnosis, a DNS query to 2606:4700:4700::1111 (Cloudflare), then 1.1.1.1:53; a system DNS lookup of api.anthropic.com as a control name (name resolution only, no data sent). These carry no personal data.
 - LAN peer status (off by default; the user turns it on in Settings): a UDP broadcast on the local subnet, port 45737, containing the Mac's hostname and health. Nothing leaves the LAN.
 - Anthropic Claude API (optional): only with the user's own API key AND explicit consent in an in-app dialog that lists the data sent. Consent is versioned and can be withdrawn from the menu.
 - Slack webhook / SMTP (optional): alerts to the user's own channel or mailbox.
@@ -141,7 +145,7 @@ it can go without them.
 
 | Risk | Where | Option |
 |---|---|---|
-| **Untested on App Review's IPv6-only NAT64 network (Guideline 2.5.5).** The ICMP heartbeat runs `/sbin/ping 8.8.8.8`, and the diagnosis DNS query opens an `AF_INET` socket to 1.1.1.1. Both are IPv4-only, and neither is expected to work without an IPv4 route. The reviewer could see a "network failed" alert and a ✕ on the Dock tile on first launch. The TCP probes use `socket.create_connection` on IPv4 literals, which macOS rewrites for NAT64, so they should pass. | `netdnsmonitor/ping.py:51`, `netdnsmonitor/dns_query.py:18`, `netdnsmonitor/config.py:58` | Before build 4: on a second Mac, hold Option and open System Settings → General → Sharing → Internet Sharing, tick **Create NAT64 Network**, join this Mac to it, and run the app. If the heartbeat fails, fall back to `ping6` or skip the ICMP verdict when there is no IPv4 route. https://developer.apple.com/support/ipv6 |
+| **Not yet run on an IPv6-only NAT64 network (Guideline 2.5.5).** Mitigated in build 4: the heartbeat pings `2001:4860:4860::8888` first and falls back to 8.8.8.8, and the diagnosis DNS query tries `2606:4700:4700::1111` before 1.1.1.1 with a socket family taken from `getaddrinfo`. Both paths were measured live on this Mac's dual-stack network on 2026-10-02, but never on NAT64. The TCP probes use `socket.create_connection` on IPv4 literals, which macOS rewrites for NAT64. | `netdnsmonitor/app.py` (`ping_heartbeat`), `netdnsmonitor/ping.py`, `netdnsmonitor/dns_query.py` | On a second Mac, hold Option and open System Settings → General → Sharing → Internet Sharing, tick **Create NAT64 Network**, join this Mac to it, and run build 4. The heartbeat should stay green. https://developer.apple.com/support/ipv6 |
 | Alert banners rely on deprecated `NSUserNotificationCenter`; the store build has no fallback if it fails. | `netdnsmonitor/alert.py` | Move to `UNUserNotificationCenter`. |
 | Gated modules (shell console, router, failover) still ship in the store bundle. | `netdnsmonitor/distribution.py` | Exclude them from the store bundle at build time. |
 | The `api.anthropic.com` control lookup runs before AI consent. | `netdnsmonitor/config.py:180` | Use a neutral control domain in the store build. |

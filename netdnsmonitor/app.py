@@ -607,13 +607,38 @@ def build_ping_job(config: dict) -> Callable[[], tuple[dict, Optional[tuple[int,
     """
 
     def job() -> tuple[dict, Optional[tuple[int, int]]]:
-        result = ping_once(
-            config["ping_host"],
-            timeout_seconds=config["ping_timeout_seconds"],
-        )
-        return result, read_interface_counters()
+        return ping_heartbeat(config), read_interface_counters()
 
     return job
+
+
+def heartbeat_hosts(config: dict) -> list[str]:
+    """ping_host_v6, then ping_host: the order the heartbeat tries them."""
+    return [host for host in (config.get("ping_host_v6"), config["ping_host"]) if host]
+
+
+def heartbeat_label(config: dict) -> str:
+    """What an alert or forensic line names as the pinged target."""
+    return " / ".join(heartbeat_hosts(config))
+
+
+def ping_heartbeat(config: dict) -> dict:
+    """One heartbeat reading: the first host in heartbeat_hosts that answers.
+
+    IPv6 first, then IPv4. An IPv4-only network still reads as up from the
+    second host, and an IPv6-only one (App Review's NAT64 network) from the
+    first. Down only when every host failed, and the error then names each
+    host with its own reason, so the alert does not blame one path for both.
+    Looks `ping_once` up at call time, which is the seam the suite patches.
+    """
+    hosts = heartbeat_hosts(config)
+    failures = []
+    for host in hosts:
+        result = ping_once(host, timeout_seconds=config["ping_timeout_seconds"])
+        if result["ok"]:
+            return {**result, "host": host}
+        failures.append(f"{host}: {result['error'] or 'no reply'}")
+    return {"ok": False, "rtt_ms": None, "error": "; ".join(failures), "host": None}
 
 
 def config_error_text(exc: BaseException) -> str:
@@ -1326,7 +1351,7 @@ class NetDnsMonitorApp(rumps.App):
                 "up_bps": up_bps,
                 "down": snapshot["down"],
             }
-            host = self.config["ping_host"]
+            host = heartbeat_label(self.config)
             if snapshot["down"]:
                 self._ping_failures_this_episode = snapshot["consecutive_failures"]
             self.history.record(
@@ -2325,13 +2350,10 @@ class NetDnsMonitorApp(rumps.App):
         events: list[dict] = []
         try:
             if action_id == "ping_now":
-                result = ping_once(
-                    self.config["ping_host"],
-                    timeout_seconds=self.config["ping_timeout_seconds"],
-                )
+                result = ping_heartbeat(self.config)
                 rtt = result["rtt_ms"]
                 lines.append(
-                    f"ping {self.config['ping_host']}: "
+                    f"ping {result['host'] or heartbeat_label(self.config)}: "
                     + (f"reply in {rtt:.1f}ms" if result["ok"] and rtt is not None else "")
                     + ("" if result["ok"] else f"FAILED -- {result['error']}")
                 )
@@ -2972,7 +2994,7 @@ class NetDnsMonitorApp(rumps.App):
         observe from the inside. This makes that answerable in one click instead
         of by waiting for a real outage.
         """
-        alert.network_failed(self.config["ping_host"], error="test alert, not a real outage")
+        alert.network_failed(heartbeat_label(self.config), error="test alert, not a real outage")
 
     # --- router ------------------------------------------------------------
 
