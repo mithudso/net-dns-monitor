@@ -1687,3 +1687,44 @@ def test_failover_refuses_to_be_built_without_a_store_or_a_prober():
         NetworkFailover(preferred_service="AX88179B", interface_prober=lambda dev: True)
     with pytest.raises(ValueError):
         NetworkFailover(preferred_service="AX88179B", store=FailoverStore("/dev/null/nope"))
+
+
+def test_failed_persistence_is_logged_without_error_contents(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from netdnsmonitor import failover as module
+
+    def fail(*args):
+        raise OSError("private state secret")
+
+    store = FailoverStore(str(tmp_path / "failover.json"))
+    monkeypatch.setattr(module, "_atomic_write", fail)
+    with caplog.at_level(logging.WARNING):
+        store.save()
+    assert "failover state was not saved" in caplog.text
+    assert "OSError" in caplog.text
+    assert "private state secret" not in caplog.text
+
+
+def test_failback_refuses_disabled_preferred_and_preserves_restore(store):
+    runner = failed_over(store)
+    runner.disabled.add("AX88179B")
+    before = list(store.original_order)
+    applied_before = list(runner.applied_orders)
+    outcome = build(store, runner).switch_now("preferred")
+    assert outcome.startswith("failed:")
+    assert "disabled" in outcome
+    assert runner.applied_orders == applied_before
+    assert store.original_order == before
+
+
+def test_exact_failback_restore_reports_third_head_honestly(store):
+    runner = failed_over(store)
+    recorded = ["Thunderbolt Bridge"] + [name for name in ORDER if name != "Thunderbolt Bridge"]
+    store.original_order = recorded
+    outcome = build(store, runner).switch_now("preferred")
+    assert outcome.startswith("ok:")
+    assert runner.order == recorded
+    assert "restored the original service order" in outcome
+    assert "failed back to preferred 'AX88179B'" not in outcome
+    assert "Thunderbolt Bridge" in outcome

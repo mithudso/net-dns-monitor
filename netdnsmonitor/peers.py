@@ -127,15 +127,11 @@ class PeerRegistry:
                     "last_seen_via": sanitise(via, 32),
                 }
             )
-            # Tri-state and only overwritten when the peer actually said
-            # something. A peer running an older build sends neither, and "didn't
-            # say" must stay distinguishable from "said no" -- localize.py treats
-            # them completely differently.
+            # Liveness and health have different meanings. A new message that
+            # omits health cannot refresh a prior healthy reading: that would
+            # make historical state look current to fault localization.
             for field, value in (("external_reachable", external_reachable), ("dns_ok", dns_ok)):
-                if value is not None:
-                    entry[field] = bool(value)
-                else:
-                    entry.setdefault(field, None)
+                entry[field] = None if value is None else bool(value)
             entry["missed_healthchecks"] = 0
 
             if is_new:
@@ -358,7 +354,7 @@ def _as_tristate(value):
 def _as_int(value) -> int:
     try:
         return max(0, int(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

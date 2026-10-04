@@ -112,7 +112,8 @@ def make_slack_notifier(
             return {"channel": "slack", "delivered": True}
         return {
             "channel": "slack",
-            "error": f"Slack webhook returned status {status} body {body.strip()[:80]!r}",
+            # Response text is untrusted and can echo the webhook credential.
+            "error": f"Slack webhook rejected the message (status {status})",
         }
 
     return notify

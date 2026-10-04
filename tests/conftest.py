@@ -136,6 +136,10 @@ def no_real_keychain_or_distribution(monkeypatch):
     )
     monkeypatch.delenv("APP_SANDBOX_CONTAINER_ID", raising=False)
     monkeypatch.delenv("NETDNS_DISTRIBUTION", raising=False)
+    # Synthetic incidents must never use credentials inherited from the shell.
+    # Credential tests set their own values after this fixture runs.
+    for name in ("SLACK_WEBHOOK_URL", "ANTHROPIC_API_KEY", "SMTP_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _empty_log_reader(window: str = "1m", errors_only: bool = True) -> dict:

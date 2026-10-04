@@ -49,3 +49,11 @@ Delta: 1
 Prompt:
 
 > merge commit push pr
+
+## v7 - 2026-10-04 - Networking review, code optimizer and repo bootstrapper
+
+Delta: 1
+
+Prompt:
+
+> Do a code review of this repo and identify if there are any areas that thew new facts and research you just did would impact it. Then run the deep code optimizer on it and the repo-bootstrapper.

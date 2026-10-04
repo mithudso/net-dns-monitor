@@ -112,3 +112,19 @@ Committed the nine pending ICMP fallback changes before merging remote master. P
 Validation: lint and format checks passed; all 2150 offline tests passed. Updated test counts. Publication and final CI status are recorded in TASK-376. Use a merge commit to retain both histories and allow master to fast-forward. No further product changes are required. No live GUI or network behavior has been verified in this session.
 
 CI found a pre-existing console test race (tests/test_console.py:535, assert 1 == 3). Track newly created thread identities instead of requiring a global count to stay equal. This keeps the no-leaked-reader check while allowing unrelated threads to finish.
+
+## v7 - 2026-10-04 - Networking review, code optimizer and repo bootstrapper
+
+Delta: 2
+
+Completed the five audit groups, 18 active passes with disclosed partial coverage, two remediation iterations, desktop bootstrap implementation and two fresh-context reviews. Tracking: TASK-379; substeps TASK-389 through TASK-393. Baseline b8672f1, branch fix/macos-networking-audit. The report docs/macos-networking-audit.md records 28 fixed findings, scopes, primary sources, capped diffs, regression red gates and three existing architectural residuals. docs/repo-bootstrap-audit-2026-10-04.md records the desktop manifest pass.
+
+Fixed DNS answer validation and both-family route evidence, bound address-family selection, fresh peer unknown state, DHCP reserved ranges, Slack response secrecy, resolver worker exceptions, daemon override persistence, save observability, GUI queue/class lifetime, router save/start ordering, compaction NaN semantics, probe budgets/cache races and failback honesty. Isolated inherited test credentials and released orphan test workers. Corrected native/direct DNS, NAT64, console and dated-release guidance. Added static path/census/output/count checks in CI, 106 high-signal paths and a 221-path shallow dossier with 10 outputs. Deep content cards remain partial; no semantic index/Ollama activity occurred.
+
+Verification: baseline2150pass; final2203pass in26.56s using a clean Python3.13.12 environment and constrained runtime/dev/build packages. Ruff0.16.9 lint/format, bash syntax, git diff --check and check_docs --collect-tests pass. Second independent review:498focusedtests pass and no new Medium+ regression. Existing .venv was left intact (Python3.14.7 / Ruff0.16.1 differed from repo pins). The clean environment exposed missing httpx2/httpcore2/truststore constraints and the Objective-C class bug; both were fixed. Deterministic final failover comparison reported STABLE-REWRITE (ratio0.0138); final optimizer status CONVERGED with3blockedintentrows, not CLEAN.
+
+Publication: green Dependabot Ruff PR29 merged as9a74be7; red Dependabot PR28 is excluded by the green-bot sweep limit and its independent pydantic-core pin conflicts with the paired pydantic constraint. Commit/push/CI/merge/sync completion is recorded in TASK-393 and the resulting PR receipt. No force push or host network mutation is authorized by these changes.
+
+Remaining follow-up choices: redesign GUI incident ordering, cancellable/bounded resolver workers, stalled-domain seeding/rotation and retention policy. TASK-335 now records implemented compaction and its remaining domain-cardinality bound. Actual GUI, NAT64-only, permission, privileged and alert-delivery acceptance remain unverified. The optional local Chroma dependency has reachability-qualified HTTP-server advisories; its transitive closure was not completely audited. Holdout graphs26cases is below empirical minimum30; no quality/benchmark gain or auto-promotion claimed.
+
+Snapshot and isolated verification env: /Users/mitch/.claude/skill-consolidation/backups/code-deep-optimizer-net-dns-monitor-20261004-165400. Source snapshots, .iter1/.iter2 and run-stub.jsonl preserve continuation. Requested code/doc work is complete; task/PR records hold final publication state.

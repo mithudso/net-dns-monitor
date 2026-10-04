@@ -52,19 +52,18 @@ DEFAULT_CONFIG = {
     "resolution_timeout_seconds": 2.0,
     "resolution_max_workers": 10,
     # Fast liveness heartbeat, separate from the incident poll above. One ICMP
-    # echo request to a single host every few seconds; it drives the menu bar
+    # echo requests to ordered targets every few seconds; it drives the menu bar
     # stats, the Dock tile, and the network-failed alert, and never the repair
     # ladder or escalation. See ping.py for why this uses ICMP while prober.py
     # deliberately does not.
-    # Pinged before ping_host; blank or null turns it off. IPv6 first because
-    # App Review runs an IPv6-only NAT64 network, where an IPv4 ping has no
-    # route and the heartbeat would report the network down. Same operator as
-    # 8.8.8.8, so a filtered ICMP path behaves alike on both.
+    # Pinged before ping_host; blank or null turns it off. A native IPv6 reply
+    # supports IPv6-only links, but NAT64-only test networks may not route a
+    # native IPv6 literal. ICMP failure is not proof of a network outage.
     "ping_host_v6": "2001:4860:4860::8888",
     "ping_host": "8.8.8.8",
     "ping_fallback_host": "1.1.1.1",
     "ping_interval_seconds": 5,
-    # Bounds the per-tick ping. A failed ping takes about this long, so keep it
+    # Bounds the entire heartbeat across all targets, so keep it
     # comfortably under ping_interval_seconds.
     "ping_timeout_seconds": 2.0,
     # Consecutive failed pings before the alert fires.

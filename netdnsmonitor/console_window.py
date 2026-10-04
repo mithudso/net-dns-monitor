@@ -43,6 +43,9 @@ BUSY_MESSAGE = "(a command is still running -- wait for it, or close the window)
 # starts paying for it on every redraw.
 MAX_TRANSCRIPT_CHARS = 2_000_000
 
+# Objective-C class names are process-global, even across Python controllers.
+_CONSOLE_TARGET_CLASS = None
+
 
 def _make_target(controller):
     """An ObjC object to receive the text field's action.
@@ -51,6 +54,10 @@ def _make_target(controller):
     callable. Built lazily inside a function so that importing this module never
     requires a GUI session -- which is what lets the offline suite import it.
     """
+    global _CONSOLE_TARGET_CLASS
+    if _CONSOLE_TARGET_CLASS is not None:
+        return _CONSOLE_TARGET_CLASS.alloc().initWithController_(controller)
+
     import objc
     from Foundation import NSObject
 
@@ -73,6 +80,7 @@ def _make_target(controller):
             except Exception:  # noqa: BLE001 - an ObjC action must not raise
                 traceback.print_exc()
 
+    _CONSOLE_TARGET_CLASS = _ConsoleTarget
     return _ConsoleTarget.alloc().initWithController_(controller)
 
 
@@ -143,7 +151,8 @@ class ConsoleWindowController:
             if self.text_view is None:
                 fn()
             else:
-                traceback.print_exc()
+                # run_line owns the busy flag and must know no hop was queued.
+                raise
 
     # --- actions ---------------------------------------------------------
 

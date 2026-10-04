@@ -57,11 +57,20 @@ def resolve_all(
     if not domains:
         return {}
     results: dict[str, bool] = {}
+    errors: list[Exception] = []
+    lock = threading.Lock()
     workers = []
     for domain in domains:
 
         def lookup(domain=domain) -> None:
-            results[domain] = bool(resolve_fn(domain, timeout))
+            try:
+                result = bool(resolve_fn(domain, timeout))
+            except Exception as exc:  # noqa: BLE001 - propagate on the caller thread
+                with lock:
+                    errors.append(exc)
+            else:
+                with lock:
+                    results[domain] = result
 
         worker = threading.Thread(target=lookup, daemon=True)
         workers.append(worker)
@@ -70,7 +79,12 @@ def resolve_all(
     deadline = time.monotonic() + timeout
     for worker in workers:
         worker.join(max(0.0, deadline - time.monotonic()))
-    return {domain: results.get(domain, False) for domain in domains}
+    with lock:
+        # A programming or encoding error is not evidence of a DNS outage.
+        # The app's tick guard records the failure without classifying it.
+        if errors:
+            raise errors[0]
+        return {domain: results.get(domain, False) for domain in domains}
 
 
 class _ConnectRace:

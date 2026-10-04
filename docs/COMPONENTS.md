@@ -122,7 +122,7 @@ The ordered troubleshooting steps per classification (`NETWORK_LADDER`, `DNS_LAD
 
 ### `netdnsmonitor/dns_query.py`
 
-`query_public_dns(domain)` sends one A query to a public resolver (default `1.1.1.1:53`) and validates the reply header. Returns `True`, `False`, or `None` when no reply arrived.
+`query_public_dns(domain)` sends one A query to a public resolver (default `1.1.1.1:53`). A matching, complete reply with a usable A answer, including a CNAME chain, returns `True`. A valid negative or NODATA reply returns `False`. A malformed, mismatched, truncated or missing reply returns `None`. Unsupported input names return `False`. This direct-server result does not establish native scoped resolver behavior.
 
 - **Used by:** `repair_executor` (`query_public_dns`).
 - **Imports:** package: none; stdlib with effects: `socket`.
@@ -189,7 +189,7 @@ The ordered troubleshooting steps per classification (`NETWORK_LADDER`, `DNS_LAD
 
 - **Used by:** `app` (`append_resolution_findings`).
 - **Imports:** package: none.
-- **Side effects:** File append. No seam; tests pass a path.
+- **Side effects:** File append and, above 50,000 lines, per-domain compaction retaining maximum finite elapsed time and newest completed lookup. No seam; tests pass a path.
 - **Tests:** `tests/test_resolution_log.py`.
 
 ### `netdnsmonitor/stall_log.py`
@@ -223,7 +223,7 @@ Reads the network parts of the unified log for the dashboard pane: `make_log_rea
 
 ### `netdnsmonitor/query_log.py`
 
-`make_query_log_reader` returns the raw DNS query lines from `log show`; `extract_top_domains` counts the most-queried names. Used by the dashboard's prewarm action.
+`make_query_log_reader` returns raw DNS query lines from `log show`, `[]` for a successful empty read, or `None` when the log could not be read; `extract_top_domains` counts the most-queried names. Used by the dashboard's prewarm action.
 
 - **Used by:** `app` (`extract_top_domains`, `make_query_log_reader`).
 - **Imports:** package: none; stdlib with effects: `subprocess`.
@@ -518,4 +518,3 @@ The `netdns console` REPL. `handle` is a pure function of line and state; `run_c
 - **Imports:** package: none.
 - **Side effects:** Pure data.
 - **Tests:** `tests/test_cli_console.py`.
-

@@ -70,19 +70,18 @@ the wrong fault.
 
 ### Console
 
-`netdns console` (or "Open console…" in the menu bar) is a REPL over the same
-catalogue: a usage guide, a numbered list of diagnostic commands, the live
-interface table, and service-order editing (`priority`, `promote <name>`).
+`python3 -m netdnsmonitor.cli console` is a terminal REPL over the diagnostic
+catalogue: a usage guide, a numbered command list, the live interface table, and
+service-order editing (`priority`, `promote <name>`). A catalogue command marked
+`!`, a network switch, or a promotion shows its command and waits for `yes`.
+A command with a placeholder asks for its value before running.
 
-Anything that changes system state — a catalogue command marked `!`, switching
-networks, or promoting a service — shows you the exact command and waits for
-`yes`. Nothing that rewrites configuration happens on a single keypress. A
-command with a placeholder (`ifconfig {device}`) asks for the value rather than
-shelling out with a literal `{device}` in it.
-
-In the terminal console a number **runs** the command (after confirming, if it
-mutates); in the menu bar window the dropdown **inserts** it into the input box
-so you can read it first.
+**Open console… in the menu bar opens a separate arbitrary-shell window.** It
+runs submitted commands as your user through `/bin/sh`; pressing Return executes
+the line immediately, with no mutation confirmation. Its `:help` and `:status`
+built-ins describe the window and the monitor. The shell console is unavailable
+in the Mac App Store edition. See `netdnsmonitor/console.py` and
+`netdnsmonitor/console_window.py`; the terminal REPL is `cli_console.py`.
 
 ## Automatic network failover
 

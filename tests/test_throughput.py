@@ -5,6 +5,7 @@ interface returned None rather than 0.0.
 
 import errno
 import socket
+import threading
 import time
 
 import pytest
@@ -123,7 +124,9 @@ def test_meter_resolves_once_and_shares_every_family_across_interfaces():
         seen.append(kw["address"])
         return 1.0
 
-    meter = make_throughput_meter(host="h", timeout=4.0, measure_fn=capture, resolve_fn=resolve)
+    meter = make_throughput_meter(
+        host="h", timeout=4.0, measure_fn=capture, resolve_fn=resolve, clock=FakeClock()
+    )
     meter("en0")
     meter("en12")
     assert lookups == [("h", 4.0)]
@@ -141,6 +144,98 @@ def test_a_failed_lookup_lets_the_measurement_retry_inside_its_own_budget():
     )
     meter("en0")
     assert seen == [None]
+
+
+def test_meter_deducts_resolution_time_from_measurement_budget():
+    clock = FakeClock()
+    seen = []
+
+    def resolve(host, timeout):
+        clock.now += 4.0
+        return [V4]
+
+    meter = make_throughput_meter(
+        timeout=5.0,
+        resolve_fn=resolve,
+        measure_fn=lambda device, **kw: seen.append(kw["timeout"]) or 1.0,
+        clock=clock,
+    )
+    assert meter("en0") == 1.0
+    assert seen == [1.0]
+
+
+def test_an_exhausted_lookup_budget_does_not_start_a_measurement():
+    clock = FakeClock()
+    measured = []
+
+    def resolve(host, timeout):
+        clock.now += timeout
+        return []
+
+    meter = make_throughput_meter(
+        timeout=5.0,
+        resolve_fn=resolve,
+        measure_fn=lambda device, **kw: measured.append(device) or 1.0,
+        clock=clock,
+    )
+    assert meter("en0") is None
+    assert measured == []
+
+
+def test_concurrent_meters_share_one_successful_lookup():
+    entered = threading.Event()
+    duplicate = threading.Event()
+    release = threading.Event()
+    lookups = []
+    results = []
+
+    def resolve(host, timeout):
+        lookups.append(host)
+        if len(lookups) > 1:
+            duplicate.set()
+        entered.set()
+        assert release.wait(timeout=2)
+        return [V4]
+
+    meter = make_throughput_meter(resolve_fn=resolve, measure_fn=lambda device, **kw: 1.0)
+    workers = [threading.Thread(target=lambda: results.append(meter("en0"))) for _ in range(2)]
+    try:
+        workers[0].start()
+        assert entered.wait(timeout=2)
+        workers[1].start()
+        assert not duplicate.wait(timeout=0.1)
+    finally:
+        release.set()
+        for worker in workers:
+            if worker.ident is not None:
+                worker.join(timeout=2)
+                assert not worker.is_alive()
+    assert lookups == ["speed.cloudflare.com"]
+    assert results == [1.0, 1.0]
+
+
+def test_a_failed_shared_lookup_is_retried_on_the_next_measurement():
+    answers = iter([[], [V4]])
+    seen = []
+    meter = make_throughput_meter(
+        resolve_fn=lambda host, timeout: next(answers),
+        measure_fn=lambda device, **kw: seen.append(kw["address"]) or 1.0,
+    )
+    assert meter("en0") == 1.0
+    assert meter("en1") == 1.0
+    assert seen == [None, [V4]]
+
+
+def test_a_measurement_type_error_is_not_retried_or_raised():
+    calls = []
+
+    def broken(device, **kw):
+        calls.append(device)
+        raise TypeError("measurement failed internally")
+
+    meter = make_throughput_meter(resolve_fn=no_lookup, measure_fn=broken)
+    assert meter("en0") is None
+    assert calls == ["en0"]
 
 
 # --- resolution -------------------------------------------------------------
@@ -517,14 +612,24 @@ def test_measure_all_shares_one_deadline_across_interfaces():
 
 
 def test_measure_all_reports_a_slow_interface_as_unmeasured_not_a_wait():
+    release = threading.Event()
+    workers = []
+
     def never(device):
-        time.sleep(30)
+        workers.append(threading.current_thread())
+        assert release.wait(timeout=5)
         return 1.0
 
-    started = time.monotonic()
-    results = measure_all(["stuck"], never, timeout=0.2, grace=0)
-    assert results == {"stuck": None}
-    assert time.monotonic() - started < 1.0, "grace=0 must not add the default 1s"
+    try:
+        started = time.monotonic()
+        results = measure_all(["stuck"], never, timeout=0.2, grace=0)
+        assert results == {"stuck": None}
+        assert time.monotonic() - started < 1.0, "grace=0 must not add the default 1s"
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=5)
+            assert not worker.is_alive()
 
 
 def test_measure_all_with_no_devices_is_empty():

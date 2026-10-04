@@ -15,6 +15,7 @@ pins the socket to an interface index.
 """
 
 import functools
+import ipaddress
 import socket
 import time
 from typing import Callable, Optional
@@ -58,31 +59,43 @@ def default_bound_connect(
     index = index_fn(device)
     if index is None:
         return False
-    # The bind option is family-specific. The ordinary prober uses
-    # socket.create_connection, which is family-agnostic, so an IPv6 external
-    # target is a perfectly valid thing to find in the config -- forcing every
-    # probe through AF_INET would report such a target as unreachable rather
-    # than unprobed, and a preferred link that had recovered over IPv6 would
-    # never be failed back to.
-    if ":" in host:
-        family, level, option = socket.AF_INET6, socket.IPPROTO_IPV6, IPV6_BOUND_IF
-    else:
-        family, level, option = socket.AF_INET, socket.IPPROTO_IP, IP_BOUND_IF
-    sock = socket.socket(family, socket.SOCK_STREAM)
     try:
-        sock.setsockopt(level, option, index)
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-        return True
+        # The config accepts literals only: a hostname lookup here could block
+        # outside the socket deadline and mistake a DNS fault for a dead link.
+        ipaddress.ip_address(host)
+        deadline = time.monotonic() + timeout
+        # Select from the addresses the OS supplies rather than guessing from
+        # the input string. Darwin may supply a synthesized IPv6 destination for
+        # an IPv4 literal on NAT64; flags=0 does not promise that synthesis on
+        # every OS/network. Actual NAT64 acceptance still requires live testing.
+        candidates = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
     except (OSError, OverflowError, TypeError, ValueError):
-        # A down interface fails here immediately with ENETUNREACH rather than
-        # blocking, so this path costs nothing on the common case. The other
-        # three are what connect() raises for a port that came out of YAML as
-        # 70000 or as the string "53": a config fault, but one that must read
-        # as "did not answer" rather than escape into the failover policy.
         return False
-    finally:
-        sock.close()
+    candidates = [c for c in candidates if c[0] in (socket.AF_INET, socket.AF_INET6)]
+    for i, (family, kind, _proto, _canon, address) in enumerate(candidates):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        level, option = (
+            (socket.IPPROTO_IPV6, IPV6_BOUND_IF)
+            if family == socket.AF_INET6
+            else (socket.IPPROTO_IP, IP_BOUND_IF)
+        )
+        sock = None
+        try:
+            sock = socket.socket(family, kind)
+            sock.setsockopt(level, option, index)
+            # An unreachable candidate must not starve a working address of
+            # the same target, just as one target must not starve the next.
+            sock.settimeout(remaining / (len(candidates) - i))
+            sock.connect(address)
+            return True
+        except (OSError, OverflowError, TypeError, ValueError):
+            continue
+        finally:
+            if sock is not None:
+                sock.close()
+    return False
 
 
 def make_interface_prober(

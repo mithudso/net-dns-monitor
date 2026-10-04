@@ -79,17 +79,18 @@ resolution_max_workers: 10
 # only degrades the display and can raise a spurious alert, it cannot trigger a
 # repair. If your network filters ICMP to 8.8.8.8, point this somewhere that
 # answers.
-# Pinged before ping_host; blank turns it off. IPv6 first because App Review
-# runs an IPv6-only NAT64 network, where an IPv4 ping has no route.
+# Pinged before ping_host; blank turns it off. Native IPv6 supports IPv6-only
+# links, but a NAT64-only test network may not route a native IPv6 literal.
 ping_host_v6: "2001:4860:4860::8888"
 ping_host: "8.8.8.8"
 # Secondary host probed immediately if ping_host fails to respond, preventing
-# false positive "network failed" alerts from single-host ICMP rate limiting.
+# reducing alerts caused by single-host ICMP rate limiting. A reply proves
+# only that this target answered on this path.
 ping_fallback_host: "1.1.1.1"
 ping_interval_seconds: 5
 
-# Bounds each ping. A failed ping takes about this long to give up (measured
-# 3.08s at 3.0), so keep it comfortably under ping_interval_seconds.
+# Bounds the entire heartbeat, shared and sliced across all targets.
+# Keep it comfortably under ping_interval_seconds.
 ping_timeout_seconds: 2.0
 
 # Consecutive failed pings before the alert fires.

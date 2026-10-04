@@ -99,22 +99,25 @@ def render_usage_guide() -> str:
 NET/DNS CONSOLE -- what to do when the network breaks
 
   1. Is anything reachable at all?        run `nwi`, then `ping`
-     Nothing reachable            -> a network-layer fault. Go to 3.
-     Reachable but names fail     -> a DNS fault. Go to 2.
+     No reply                     -> inspect routes and filtering. Go to 3.
+     TCP works but names fail     -> compare resolver paths. Go to 2.
 
   2. DNS faults
      `dns`         what resolvers the system is using
      `resolvers`   split-DNS overrides that quietly beat that list
-     `dig` vs `dig-direct`  if direct works and the normal one does not,
-                   the local resolver is at fault, not the network.
+     `resolve-native`      lookup through native macOS cache/resolution calls
+     `dig` / `dig-direct`   direct DNS-server queries, not native scoped routing
+                   Differences can reflect split DNS, VPNs or filtering.
+                   Compare the same name and expected DNS view before attributing a fault.
      `flush-dns`   drops the cache (only half a flush -- the rest needs sudo)
 
   3. Network-layer faults
      `order`       the service priority list. A service marked (*) is
                    DISABLED and is skipped no matter where it sits.
-     `routes`      which interface the default route actually points at
+     `routes` / `routes6`   compare IPv4 and IPv6 routing tables
      `iface`       is the link up on the interface you expect
-     `ping-gw`     if the gateway answers, the fault is upstream of you
+     `ping-gw`     tests ICMP to the gateway; a reply does not clear local
+                   routes, firewall rules, VPNs or Local Network permissions
 
   4. Moving to another network
      `i`           every service with live reachability

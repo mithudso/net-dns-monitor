@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2150 tests; the whole decision surface
+python3 -m pytest -q          # 2203 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2150 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2150 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2203 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -482,9 +482,11 @@ name latches a permanent incident by a second route.
 
 ### `query_public_dns` — bypass the system resolver
 
-**Purpose.** Hand-rolled UDP query against a chosen resolver. `getaddrinfo` cannot do
-this: it always goes through whatever the OS is configured to use, so it cannot tell
-"your resolver is broken" from "DNS is broken everywhere" — the captive-portal case.
+**Purpose.** Send a UDP A query to a chosen DNS server. A usable matching answer
+reports success. A valid negative reply reports failure; malformed or truncated
+replies remain unknown. Compare this direct-server path with native resolution.
+Different results can reflect split DNS, VPN routing, server views or filtering,
+so they do not locate a fault by themselves.
 
 ```bash
 python3 -c "
@@ -494,17 +496,17 @@ print('8.8.8.8 ->', query_public_dns('api.anthropic.com', server='8.8.8.8'))
 "
 ```
 
-**When *not* to use it.** As a resolver. It parses no answer records — there is no
-address in the result. It returns one of three values:
+**When *not* to use it.** As an address-returning resolver. It validates the
+matching question and answer records, but returns only one of three values:
 
 | Result | Meaning |
 |---|---|
-| `True` | the resolver replied to this query with `rcode` 0 |
-| `False` | a reply arrived with any other `rcode`, was malformed or did not match the query, or the name has no DNS wire form |
-| `None` | no reply arrived (timeout, no route, UDP port 53 blocked): the name was never tested |
+| `True` | a matching, complete reply provides a usable A answer, directly or through a CNAME chain |
+| `False` | a valid reply has a negative response code or no usable A answer, or the input name has no supported DNS wire form |
+| `None` | transport failed, or the reply was malformed, mismatched or truncated; no trustworthy resolution result |
 
-The ladder step reports `None` as "could not reach the public resolver", never as a
-failed lookup.
+The ladder reports `None` as "could not obtain a usable public resolver result",
+so an incomplete reply does not imply that the resolver was unreachable.
 
 ### `format_notification` — see the alert without sending it
 
@@ -724,8 +726,11 @@ run that change inside the App Sandbox without an Apple account. `release` only 
 produce a package for upload.
 
 **When *not* to use it.** To run the direct-download build; that is `scripts/start.sh`.
-Each run deletes `build/appstore/<mode>/` first. `release` has never run with real
-certificates.
+Each run deletes `build/appstore/<mode>/` first. The earlier 2026-09-17 audit
+had not exercised real-certificate signing. The real-certificate release on
+2026-09-27 is recorded in
+`docs/APP_STORE_CHECKLIST.md`. Check current identities/profile before another
+release, and use `docs/APP_STORE_REVIEW_RESPONSE.md` for the later review history.
 
 | Mode | Signs with | Output | Needs |
 |---|---|---|---|
@@ -843,7 +848,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2150 passed
+python3 -m pytest -q            # 2203 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -857,7 +862,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | Tests | File |
 |---|---|
 | 244 | `test_config.py` |
-| 109 | `test_failover.py` |
+| 112 | `test_failover.py` |
 | 101 | `test_settings_window.py` |
 | 75 | `test_privileges.py` |
 | 61 | `test_status.py` |
@@ -868,22 +873,22 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 53 | `test_app_dashboard_wiring.py` |
 | 52 | `test_peer_net.py` |
 | 51 | `test_system_log.py` |
-| 47 | `test_peers.py` |
+| 49 | `test_peers.py` |
 | 42 | `test_cli.py` |
 | 41 | `test_app_failover_wiring.py` |
 | 41 | `test_domain_learner.py` |
-| 40 | `test_repair_executor.py` |
-| 40 | `test_router.py` |
+| 42 | `test_repair_executor.py` |
+| 46 | `test_router.py` |
 | 37 | `test_localize.py` |
-| 37 | `test_router_window.py` |
+| 39 | `test_router_window.py` |
 | 35 | `test_app_log_wiring.py` |
 | 33 | `test_appstore_build.py` |
-| 33 | `test_throughput.py` |
+| 38 | `test_throughput.py` |
 | 31 | `test_forensic_log.py` |
 | 29 | `test_failover_policy.py` |
 | 26 | `test_graphs.py` |
 | 26 | `test_net_stats.py` |
-| 26 | `test_notifications.py` |
+| 27 | `test_notifications.py` |
 | 25 | `test_app_router_wiring.py` |
 | 25 | `test_history.py` |
 | 26 | `test_ping.py` |
@@ -899,33 +904,34 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 17 | `test_dock_icon.py` |
 | 17 | `test_stall_log.py` |
 | 17 | `test_alert.py` |
-| 22 | `test_app_ping_wiring.py` |
+| 25 | `test_app_ping_wiring.py` |
 | 16 | `test_indexer_scripts.py` |
-| 16 | `test_interface_probe.py` |
+| 19 | `test_interface_probe.py` |
 | 16 | `test_resolution_prober.py` |
-| 15 | `test_console_window.py` |
+| 17 | `test_console_window.py` |
 | 15 | `test_escalation.py` |
-| 15 | `test_router_scripts.py` |
+| 16 | `test_router_scripts.py` |
 | 14 | `test_app_notification_wiring.py` |
 | 16 | `test_credentials.py` |
 | 13 | `test_app_console_wiring.py` |
 | 13 | `test_log_watcher.py` |
-| 13 | `test_prober.py` |
+| 14 | `test_prober.py` |
 | 12 | `test_flap_gate.py` |
 | 12 | `test_query_log.py` |
-| 14 | `test_dns_query.py` |
+| 28 | `test_dns_query.py` |
 | 10 | `test_ai_consent.py` |
 | 10 | `test_distribution.py` |
 | 10 | `test_ladder.py` |
 | 10 | `test_report.py` |
 | 9 | `test_app_status_wiring.py` |
 | 8 | `test_report_storage.py` |
-| 7 | `test_resolution_log.py` |
+| 8 | `test_resolution_log.py` |
 | 7 | `test_router_configs.py` |
 | 6 | `test_classifier.py` |
 | 3 | `test_app_resolution_wiring.py` |
 | 2 | `test_app_report_storage_wiring.py` |
-| **2150** | **total** |
+| 7 | `test_check_docs.py` |
+| **2203** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

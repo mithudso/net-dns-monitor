@@ -22,6 +22,7 @@ dropped -- the reader ignores them, and they are not a check.
 """
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -110,5 +111,6 @@ def _elapsed(record: dict) -> float:
     value = record.get("elapsed_seconds")
     # bool is an int subclass; the reader refuses it, so it must not win here.
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
+        elapsed = float(value)
+        return -1.0 if math.isnan(elapsed) else elapsed
     return -1.0

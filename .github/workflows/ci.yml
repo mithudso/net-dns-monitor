@@ -94,3 +94,8 @@ jobs:
       # loopback.
       - name: pytest
         run: python -m pytest -q
+
+      # Static paths/counts only. Never open the semantic collection or contact
+      # Ollama in CI; a missing local index is not an application failure.
+      - name: Documentation paths and test counts
+        run: python scripts/check_docs.py --collect-tests

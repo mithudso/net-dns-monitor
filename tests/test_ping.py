@@ -69,9 +69,8 @@ def test_sends_exactly_one_echo_request_and_bounds_the_run():
     ping_once("8.8.8.8", timeout_seconds=3.0, run_fn=run_fn)
     args, kwargs = calls[0]
     assert args == [PING_BIN, "-c", "1", "-W", "3000", "-t", "3", "8.8.8.8"]
-    # The subprocess timeout is the last line of defence for a ping that
-    # ignores -t; it has to sit just above -t, not be unset.
-    assert kwargs["timeout"] == 5
+    # The subprocess also bounds fractional slices in the heartbeat's budget.
+    assert kwargs["timeout"] == 3.0
 
 
 def test_sub_second_timeout_still_gets_at_least_one_second_of_t():
@@ -83,7 +82,7 @@ def test_sub_second_timeout_still_gets_at_least_one_second_of_t():
     args, kwargs = calls[0]
     assert args[args.index("-t") + 1] == "1"
     assert args[args.index("-W") + 1] == "400"
-    assert kwargs["timeout"] == 3
+    assert kwargs["timeout"] == 0.4
 
 
 @pytest.mark.parametrize("host", ["-f", "", "8.8.8.8 -f", "8.8.8.8\x00", 8])

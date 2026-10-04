@@ -85,12 +85,13 @@ and proves nothing about the world.
 - **No live Slack or SMTP delivery has been confirmed.** Both channels are
   covered with injected transports. Neither has been observed delivering a real
   message.
-- **The Mac App Store release path has never run with real certificates.** This
-  Mac has no Apple Distribution or Mac Installer Distribution certificate, so
-  `build_appstore.py release` (release signing, provisioning-profile embedding,
-  `productbuild` signing) has not run. `adhoc` mode ran end to end. The GUI app
-  has not been launched sandboxed; only `sandbox_probe` has. See
-  `docs/APP_STORE_SUBMISSION.md` §2.
+- **Current App Store review and live GUI behavior need verification.**
+  Release signing ran with real certificates on 2026-09-27, and the checklist
+  records processed/submitted build 1.0 (3). The review-response document records
+  its 2026-09-28 rejection and a later build-4 plan. These records supersede the
+  earlier certificate-absence claim. They do not verify today's approval,
+  certificates, installed build, or sandboxed GUI operation. See
+  `docs/APP_STORE_CHECKLIST.md` steps 6–7 and `docs/APP_STORE_REVIEW_RESPONSE.md`.
 - **The app's router mode is covered only as text.** `b07eee5` rewrote
   `router.py`. `tests/test_router.py` asserts on the generated root script as a
   string and never runs it. UNVERIFIED: whether the rewritten start and stop
@@ -144,9 +145,10 @@ Measured, reproducible, and currently unfixed.
 
 - **`external_targets: []` gives a permanent `unclassified` state.** With no
   external target, the prober reports `external_reachable: None`, so every tick
-  classifies as `unclassified`. The anti-flap gate counts that as failing (see
-  the blocked item below), so the app latches an incident with its alert and
-  escalation. `load_config` accepts the empty list; nothing validates it.
+  classifies as `unclassified`. If DNS is positively healthy, the state machine
+  skips the anti-flap gate; with no positive field, the result counts as failing
+  and can latch an incident. `load_config` accepts the empty list. Neither case
+  establishes external internet reachability.
 
 - **Notifications use the deprecated `NSUserNotificationCenter`.**
   `rumps.notification` in `rumps` 0.4.0 posts through `NSUserNotificationCenter`,
@@ -174,15 +176,10 @@ Measured, reproducible, and currently unfixed.
   from a copy of this app, so a host on the LAN can report false peer state and
   move the `localize.py` verdict. Authentication (for example a shared HMAC key)
   waits for the owner.
-- **`resolution_log` and `stall_log` grow without bound.**
-  `resolution_log.append_resolution_findings` appends to a JSONL file on every
-  batch, and `stall_log.select_stalled_domains` reads the whole file each cycle.
-  Compaction would break the promise in `resolution_log.py` that the file can be
-  tailed and grepped like any other log.
-- **Unclassified ticks feed the anti-flap gate.** `StateMachine.tick()` counts
-  every classification other than `healthy` as a failure. A run of `unclassified`
-  ticks therefore declares an incident, with its alert and escalation, and runs no
-  ladder. `tests/test_state_machine.py::test_unclassified_probe_result_escalates_without_a_ladder`
+- **Unclassified ticks with no positive probe feed the anti-flap gate.**
+  `StateMachine.tick()` skips an unclassified result when either probe is positively
+  healthy. With no positive field, a run of unclassified results can declare an
+  incident, with alert and escalation and no ladder. `tests/test_state_machine.py::test_unclassified_probe_result_escalates_without_a_ladder`
   pins this. `load_config` rejects one trigger (empty `domains` with no
   `control_domain`); an empty `external_targets` is another (see above).
 - **`LOCAL_NETWORK` verdict when a peer answers without reporting state.** If a
@@ -233,18 +230,11 @@ Owner decisions that are now implemented, with what they leave open.
 
 ## Gaps
 
-- **Nothing machine-checks doc drift.** There is no `scripts/check_docs.py`,
-  despite what earlier revisions of `CLAUDE.md` claimed. The test total appears by
-  hand in `docs/SCRIPTS.md` (the gate command, the quick reference, the Tests
-  section and its per-file table), `docs/TESTING.md` and `CLAUDE.md`. This command
-  lists the places that match the current total:
-
-  ```bash
-  grep -rn "$(python3 -m pytest -q --collect-only | grep -c '::')" docs/ CLAUDE.md
-  ```
-
-  Stale counts have shipped three times for exactly this reason, which is the
-  argument for a checker rather than a more careful habit.
+- **Documentation checking has a bounded scope.** `scripts/check_docs.py`
+  validates retrieval-index paths, the partial dossier's filemap/manifest parity,
+  and published test totals/per-file counts against collection. CI runs it after
+  pytest. It does not validate arbitrary prose, current network state, or App
+  Store Connect status; those still need source review or a dated live check.
 - **`prober.default_resolve` and `prober.default_connect` are never exercised
   against a real socket.** Every prober test injects `resolve_fn` or
   `connect_fn`. That keeps the suite offline and fast. It also means only the
@@ -252,6 +242,13 @@ Owner decisions that are now implemented, with what they leave open.
   path.
 
 ## No longer issues
+
+- `resolution_log` was described as growing without bound. The writer now
+  compacts after the `COMPACT_AT_LINES` trigger (50,000) to one completed aggregate per
+  domain, preserving the slowest elapsed value and newest completed check.
+  The selector still streams the retained file. Compaction removes detailed
+  historical rows; the missing-history seeding and stalled-worker limitations
+  described in `stall_log.py` and `resolution_prober.py` remain.
 
 Earlier revisions of this file listed these. They no longer apply.
 
@@ -298,3 +295,7 @@ Each was re-checked against the code on 2026-09-14.
   and the read-back. Whether one-shot switches should require `--yes` waits for
   the owner; `docs/runbooks/manual-failover.md` documents the commands as they
   are.
+
+Resolution compaction retains one record per historical domain. It is not a hard
+line or byte bound; a strict retention policy still needs an owner decision about
+preserving ever-stalled evidence. See `docs/caching-and-optimization.md`.

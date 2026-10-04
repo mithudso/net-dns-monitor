@@ -1,11 +1,11 @@
 {
-  "generated_from": "a6aab33",
+  "generated_from": "b8672f1 dirty; static map refreshed 2026-10-04",
   "files": [
     {
       "path": ".github/workflows/ci.yml",
       "role": "infra",
       "importance": "critical",
-      "purpose": "The CI gate: ruff check and ruff format --check on ubuntu-latest; pytest on macos-latest after pip install -r requirements-dev.txt -c constraints.txt; Python 3.13.",
+      "purpose": "CI: pinned Ruff on Ubuntu; offline pytest and static documentation checks on macOS; Python 3.13.",
       "read_when": "A CI run fails, a tool or Python version changes, or a gate is added.",
       "entry_symbols": [
         "lint:",
@@ -1018,6 +1018,142 @@
       "importance": "high",
       "purpose": "Ordered Mac App Store submission checklist: what is verified in the repo, the owner-only steps with this Mac's Team ID and identity names filled in, the release command, metadata sections, and open items that do not block.",
       "read_when": "Preparing or repeating a store submission, or asked what is left before the app can be submitted.",
+      "entry_symbols": []
+    },
+    {
+      "path": "requirements-index.txt",
+      "role": "config",
+      "importance": "high",
+      "purpose": "Pinned optional developer-only Chroma, FastMCP and watchdog dependencies.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "config.example.yaml",
+      "role": "config",
+      "importance": "high",
+      "purpose": "Screenshot/demo fixture; runtime defaults come from config.yaml and DEFAULT_CONFIG.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/semantic_indexer.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Optional Chroma source indexer with local Ollama embeddings.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/watch_and_index.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Optional source-change watcher invoking the semantic indexer.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/query_index.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Optional semantic query CLI; query embeddings contact Ollama.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/mcp_server.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Local stdio MCP server exposing search_codebase.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/install_indexer_daemon.sh",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Installs and starts a per-user semantic watcher LaunchAgent.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/check_docs.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Static retrieval-path, dossier-parity and published-test-count guard.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/generate_static_dossier.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Static source census with shallow cards; no source execution.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/appstore/appkit_draw.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Drawing helpers for App Store assets.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/appstore/compose_screenshots.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Composes App Store screenshot assets.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/appstore/shoot_screenshots.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Captures app windows using the screenshot fixture.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "scripts/appstore/record_demo.py",
+      "role": "tooling",
+      "importance": "high",
+      "purpose": "Records an App Review demonstration.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/MCP.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Optional developer retrieval architecture and actual MCP tool contract.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/caching-and-optimization.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Local caching, bounded-work and compaction contracts.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/APP_STORE_REVIEW_RESPONSE.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Dated review response and subsequent build planning.",
+      "read_when": "Working on this component or its documented contract.",
+      "entry_symbols": []
+    },
+    {
+      "path": "docs/repo-bootstrap-audit-2026-10-04.md",
+      "role": "docs",
+      "importance": "high",
+      "purpose": "Desktop-scoped bootstrap findings and partial dossier coverage.",
+      "read_when": "Working on this component or its documented contract.",
       "entry_symbols": []
     }
   ]

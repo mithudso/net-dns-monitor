@@ -560,3 +560,25 @@ def test_the_legacy_config_keyword_still_constructs(tmp_path):
     assert ctrl.config_path == str(tmp_path / "c.yaml")
     assert ctrl._default("lan_interface") == "en7"
     assert ctrl._default("wan_interface") == "en3"
+
+
+def test_failed_save_leaves_live_router_unchanged_and_refuses_start(tmp_path):
+    router = FakeRouter()
+    router.lan_ip = "192.168.10.2"
+    ctrl, lines = controller(router=router)
+    ctrl.on_start(VALUES)
+    assert router.started == 0
+    assert router.lan_ip == "192.168.10.2"
+    assert "not saved: no config file path" in lines
+
+
+def test_disk_save_failure_refuses_router_start(tmp_path):
+    blocker = tmp_path / "blocked"
+    blocker.write_text("not a directory")
+    router = FakeRouter()
+    router.lan_ip = "192.168.10.2"
+    ctrl, _ = controller(router=router)
+    ctrl.config_path = str(blocker / "config.yaml")
+    ctrl.on_start(VALUES)
+    assert router.started == 0
+    assert router.lan_ip == "192.168.10.2"

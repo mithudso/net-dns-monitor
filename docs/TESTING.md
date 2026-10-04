@@ -1,6 +1,6 @@
 # Testing
 
-2150 tests, offline, in tens of seconds. `pytest.ini` sets
+2203 tests, offline, in tens of seconds. `pytest.ini` sets
 `testpaths = tests`, so a bare `python3 -m pytest` from the repo root is the whole
 suite.
 
@@ -27,16 +27,18 @@ on Python 3.13:
 | `lint` | `ubuntu-latest` | `ruff check .` |
 | `lint` | `ubuntu-latest` | `ruff format --check .` |
 | `test` | `macos-latest` | `python -m pytest -q`, after `pip install -r requirements-dev.txt -c constraints.txt` |
+| `test` | `macos-latest` | `python scripts/check_docs.py --collect-tests`: retrieval paths, dossier parity, and published test counts |
 
 The test job needs macOS because the suite imports AppKit and builds real
 windows and images. The lint job installs only the `ruff` version pinned in
 `requirements-dev.txt`. `.pre-commit-config.yaml` runs the same two `ruff`
 checks before a commit; it does not run the tests.
 
-The local verify loop is the same three commands:
+The local verify loop includes the static documentation check:
 
 ```bash
 ruff check . && ruff format --check . && python -m pytest -q
+python scripts/check_docs.py --collect-tests
 ```
 
 ## The rule the suite is built on
@@ -154,8 +156,9 @@ invocations in `docs/SCRIPTS.md` or a manual check.
 - **`prober.default_resolve` and `prober.default_connect` against a real
   socket.** Always injected, which is what keeps the suite offline.
 - **Anything privileged or delivered.** The network-order write, the sudoers
-  grant, the router scripts, live Slack and SMTP delivery, and App Store release
-  signing. See `docs/known-issues.md` → Unproven.
+  grant, router scripts, and live Slack and SMTP delivery are not verified by
+  this suite. Release signing ran separately on 2026-09-27; the dated checklist
+  records that evidence, not the offline tests. See `docs/known-issues.md`.
 - **Anything about the real OS's answers.** Three live findings came from exactly
   this gap: macOS masks hostnames in the unified log, the log's own subsystem
   label parsed as a domain, and source-address binding does not pin an interface.

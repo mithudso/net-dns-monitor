@@ -222,3 +222,7 @@ def test_the_fresh_install_domains_warning_matches_the_shipped_config():
     assert "'domains'" in warning
     assert "control_domain" in warning
     assert "unnoticed" in warning
+
+
+def test_forced_install_preserves_override_for_scheduled_helper():
+    assert _daemon_plist()["EnvironmentVariables"]["NDM_ROUTER_FORCE"] == "1"

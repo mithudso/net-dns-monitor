@@ -284,3 +284,102 @@ def test_no_budget_at_all_is_none_not_false():
     )
     assert probe("en0") is None
     assert calls == []
+
+
+def test_a_numeric_ipv4_target_uses_the_family_returned_by_the_os(monkeypatch):
+    import socket
+
+    from netdnsmonitor.interface_probe import default_bound_connect
+
+    seen = []
+
+    def resolve(host, port, family, kind):
+        assert host == "1.1.1.1" and family == socket.AF_UNSPEC
+        return [(socket.AF_INET6, kind, 6, "", ("64:ff9b::101:101", port, 0, 0))]
+
+    class Socket:
+        def setsockopt(self, level, option, index):
+            seen.append((level, option, index))
+
+        def settimeout(self, timeout):
+            assert 0 < timeout <= 1
+
+        def connect(self, address):
+            seen.append(address)
+
+        def close(self):
+            seen.append("closed")
+
+    def open_socket(family, kind):
+        seen.append(family)
+        return Socket()
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(socket, "socket", open_socket)
+    assert default_bound_connect("en0", "1.1.1.1", 443, 1, index_fn=lambda d: 15) is True
+    assert seen == [
+        socket.AF_INET6,
+        (socket.IPPROTO_IPV6, 125, 15),
+        ("64:ff9b::101:101", 443, 0, 0),
+        "closed",
+    ]
+
+
+def test_bound_candidate_fallback_closes_sockets_and_shares_one_budget(monkeypatch):
+    import socket
+
+    from netdnsmonitor import interface_probe
+
+    now = [10.0]
+    budgets = []
+    closed = []
+    addresses = [("2001:db8::1", 443, 0, 0), ("192.0.2.1", 443)]
+    monkeypatch.setattr(interface_probe.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args: [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", addresses[0]),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", addresses[1]),
+        ],
+    )
+
+    class Socket:
+        def __init__(self, family, kind):
+            self.family = family
+
+        def setsockopt(self, *args):
+            pass
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+            budgets.append(timeout)
+
+        def connect(self, address):
+            if self.family == socket.AF_INET6:
+                now[0] += self.timeout
+                raise TimeoutError
+            assert address == addresses[1]
+
+        def close(self):
+            closed.append(self.family)
+
+    monkeypatch.setattr(socket, "socket", Socket)
+    assert (
+        interface_probe.default_bound_connect("en0", "192.0.2.1", 443, 2, index_fn=lambda d: 1)
+        is True
+    )
+    assert budgets == [1.0, 1.0]
+    assert closed == [socket.AF_INET6, socket.AF_INET]
+
+
+def test_bound_probes_refuse_hostname_lookup_before_resolving(monkeypatch):
+    import socket
+
+    from netdnsmonitor.interface_probe import default_bound_connect
+
+    def unexpected_lookup(*args):
+        raise AssertionError("hostname resolution has no socket deadline")
+
+    monkeypatch.setattr(socket, "getaddrinfo", unexpected_lookup)
+    assert default_bound_connect("en0", "example.com", 443, 1, index_fn=lambda d: 1) is False

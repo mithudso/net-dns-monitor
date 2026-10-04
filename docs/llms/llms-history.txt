@@ -1,0 +1,7 @@
+# net-dns-monitor — dated history retrieval map
+> Source: /Users/mitch/dev/net-dns-monitor · remote URL omitted @ b8672f1 dirty
+> Generated: 2026-10-04 by crawl-repo-to-llms v1.2.0 (partial static adapter)
+> Census: 221 enumerated / 0 deep-read / 221 shallow · partial: census only; no deep cards or executable inventory
+
+Prompts and work records are versioned in the repository journals. [src: prompts.md#L1] [src: memory.md#L1]
+Release and review history must be read by date. [src: docs/APP_STORE_CHECKLIST.md#L1] [src: docs/APP_STORE_REVIEW_RESPONSE.md#L1]

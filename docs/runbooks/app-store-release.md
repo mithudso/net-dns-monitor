@@ -17,9 +17,10 @@ Every upload of a new build to App Store Connect.
 - The privacy policy is hosted at an `https` URL with no placeholder left in it.
   The release build refuses otherwise
   ([§4.2](../APP_STORE_SUBMISSION.md#42-release-build)).
-- **UNVERIFIED:** release mode has never run on this Mac, which has no Apple
-  Distribution or Mac Installer Distribution certificate
-  ([§2](../APP_STORE_SUBMISSION.md#2-what-is-already-done-in-this-repo)).
+- Release signing ran with real certificates on 2026-09-27; see
+  [the dated checklist](../APP_STORE_CHECKLIST.md#step-6-build-for-release).
+  Confirm the currently available identities/profile before a new release.
+  Historical build success does not verify today's certificate or review state.
 
 ## Checklist
 

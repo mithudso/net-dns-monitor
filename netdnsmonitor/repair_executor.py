@@ -213,7 +213,19 @@ def make_repair_executor(
         return report_command([SCUTIL, "--nwi"])
 
     def check_default_route() -> str:
-        return report_command([NETSTAT, "-rn", "-f", "inet"])
+        findings = [
+            (label, report_command([NETSTAT, "-rn", "-f", family]))
+            for label, family in (("IPv4", "inet"), ("IPv6", "inet6"))
+        ]
+        failures = sum(result.startswith("failed:") for _, result in findings)
+        prefix = (
+            "failed: could not read either route table\n"
+            if failures == 2
+            else "partial: could not read one route table\n"
+            if failures
+            else ""
+        )
+        return prefix + "\n\n".join(f"{label} routes:\n{result}" for label, result in findings)
 
     def check_configured_dns_servers() -> str:
         return report_command([SCUTIL, "--dns"])
@@ -240,8 +252,9 @@ def make_repair_executor(
             # No reply is not a negative answer. Saying "did NOT resolve" here
             # would tell someone DNS is broken everywhere when nothing was learned.
             return (
-                f"could not reach the public resolver to test {probe_domain} "
-                "(no reply: timed out, no route, or UDP port 53 blocked); this "
+                f"could not obtain a usable public resolver result for {probe_domain} "
+                "(no usable reply: timed out, no route, UDP port 53 blocked, "
+                "or an invalid or truncated reply); this "
                 "says nothing about the name"
             )
         if answered:
