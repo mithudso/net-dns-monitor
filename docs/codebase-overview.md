@@ -104,7 +104,7 @@ a real default.
 ## `tests/`
 
 Plain pytest functions with injected fakes. The suite runs offline;
-`docs/TESTING.md` has the commands and the count (`2138`).
+`docs/TESTING.md` has the commands and the count (`2150`).
 
 `tests/conftest.py` (high) holds four autouse fixtures. Each one keeps every
 test away from something real:

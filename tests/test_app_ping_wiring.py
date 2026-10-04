@@ -10,6 +10,7 @@ run loop.
 import threading
 import time
 
+from netdnsmonitor import app as app_module
 from netdnsmonitor.app import NetDnsMonitorApp
 from netdnsmonitor.ping_monitor import PingMonitor
 from netdnsmonitor.status import PING_DOWN_TEXT
@@ -127,7 +128,7 @@ def test_a_failed_ping_fires_the_alert(tmp_path, monkeypatch):
     app = make_app(tmp_path, result=FAIL)
     run_heartbeat(app)
     assert len(alerts) == 1
-    assert alerts[0][0] == "8.8.8.8"
+    assert alerts[0][0] == "2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"
     assert "no reply" in alerts[0][1]
 
 
@@ -157,7 +158,7 @@ def test_recovery_cancels_the_bounce(tmp_path, monkeypatch):
     result["current"] = OK
     run_heartbeat(app)
 
-    assert recovered == ["8.8.8.8"]
+    assert recovered == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"]
     assert app.ping_stats["down"] is False
     assert "61ms" in app.title
 
@@ -278,7 +279,7 @@ def test_every_queued_result_is_recorded_so_a_failure_edge_cannot_be_missed(tmp_
 
     app._drain_ping_results()
 
-    assert alerts == ["8.8.8.8"]
+    assert alerts == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"]
     # The newest result is what gets drawn.
     assert "61ms" in app.title
     assert app.ping_stats["down"] is False
@@ -307,6 +308,77 @@ def test_ping_failure_and_a_resolution_failure_can_both_show_at_once(tmp_path, m
     assert "1/1 resolution fails" in app.title
 
 
+# --- IPv6 first ---------------------------------------------------------------
+
+
+def _scripted_ping(monkeypatch, answers):
+    asked = []
+
+    def fake_ping_once(host, timeout_seconds):
+        asked.append(host)
+        return answers[host]
+
+    monkeypatch.setattr("netdnsmonitor.app.ping_once", fake_ping_once)
+    return asked
+
+
+def test_the_heartbeat_pings_ipv6_first_and_stops_on_a_reply(monkeypatch):
+    asked = _scripted_ping(
+        monkeypatch, {"2001:4860:4860::8888": {"ok": True, "rtt_ms": 9.0, "error": None}}
+    )
+    config = {
+        "ping_host_v6": "2001:4860:4860::8888",
+        "ping_host": "8.8.8.8",
+        "ping_timeout_seconds": 2,
+    }
+    result = app_module.ping_heartbeat(config)
+    assert asked == ["2001:4860:4860::8888"]
+    assert result["ok"] is True and result["host"] == "2001:4860:4860::8888"
+
+
+def test_the_heartbeat_falls_back_to_ipv4_when_ipv6_fails(monkeypatch):
+    asked = _scripted_ping(
+        monkeypatch,
+        {
+            "2001:4860:4860::8888": {"ok": False, "rtt_ms": None, "error": "No route to host"},
+            "8.8.8.8": {"ok": True, "rtt_ms": 20.0, "error": None},
+        },
+    )
+    config = {
+        "ping_host_v6": "2001:4860:4860::8888",
+        "ping_host": "8.8.8.8",
+        "ping_timeout_seconds": 2,
+    }
+    result = app_module.ping_heartbeat(config)
+    assert asked == ["2001:4860:4860::8888", "8.8.8.8"]
+    assert result["ok"] is True and result["host"] == "8.8.8.8"
+
+
+def test_a_down_heartbeat_names_each_host_with_its_own_reason(monkeypatch):
+    _scripted_ping(
+        monkeypatch,
+        {
+            "2001:4860:4860::8888": {"ok": False, "rtt_ms": None, "error": "No route to host"},
+            "8.8.8.8": {"ok": False, "rtt_ms": None, "error": None},
+        },
+    )
+    config = {
+        "ping_host_v6": "2001:4860:4860::8888",
+        "ping_host": "8.8.8.8",
+        "ping_timeout_seconds": 2,
+    }
+    result = app_module.ping_heartbeat(config)
+    assert result["ok"] is False
+    assert result["error"] == "2001:4860:4860::8888: No route to host; 8.8.8.8: no reply"
+
+
+def test_a_blank_ipv6_host_turns_the_ipv6_ping_off(monkeypatch):
+    asked = _scripted_ping(monkeypatch, {"8.8.8.8": {"ok": True, "rtt_ms": 20.0, "error": None}})
+    config = {"ping_host_v6": "", "ping_host": "8.8.8.8", "ping_timeout_seconds": 2}
+    app_module.ping_heartbeat(config)
+    assert asked == ["8.8.8.8"]
+
+
 def test_build_ping_job_probes_fallback_when_primary_fails():
     from netdnsmonitor.app import build_ping_job
 
@@ -314,11 +386,12 @@ def test_build_ping_job_probes_fallback_when_primary_fails():
 
     def fake_ping(host, timeout_seconds=2.0):
         calls.append(host)
-        if host == "8.8.8.8":
+        if host != "1.1.1.1":
             return {"ok": False, "rtt_ms": None, "error": "no reply from 8.8.8.8"}
         return {"ok": True, "rtt_ms": 14.5, "error": None}
 
     config = {
+        "ping_host_v6": "2001:4860:4860::8888",
         "ping_host": "8.8.8.8",
         "ping_fallback_host": "1.1.1.1",
         "ping_timeout_seconds": 2.0,
@@ -326,7 +399,7 @@ def test_build_ping_job_probes_fallback_when_primary_fails():
     job = build_ping_job(config, ping_fn=fake_ping, counters_fn=lambda: (100, 200))
     result, counters = job()
 
-    assert calls == ["8.8.8.8", "1.1.1.1"]
+    assert calls == ["2001:4860:4860::8888", "8.8.8.8", "1.1.1.1"]
     assert result["ok"] is True
     assert result["rtt_ms"] == 14.5
     assert counters == (100, 200)
@@ -351,4 +424,4 @@ def test_build_ping_job_reports_failure_when_both_fail():
 
     assert calls == ["8.8.8.8", "1.1.1.1"]
     assert result["ok"] is False
-    assert result["error"] == "no reply from 8.8.8.8"
+    assert result["error"] == ("8.8.8.8: no reply from 8.8.8.8; 1.1.1.1: no reply from 1.1.1.1")

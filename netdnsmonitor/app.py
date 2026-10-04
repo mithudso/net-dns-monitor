@@ -608,29 +608,54 @@ def build_ping_job(
 
     Both are subprocesses, which is why this runs on a worker thread rather
     than inline on the run loop -- see NetDnsMonitorApp.ping_tick.
-
-    If the primary ping_host fails and ping_fallback_host is set, the fallback
-    host is probed immediately to corroborate whether the failure is an isolated
-    ICMP rate-limit/drop or a genuine network outage.
     """
 
     def job() -> tuple[dict, Optional[tuple[int, int]]]:
-        fn = ping_once if ping_fn is None else ping_fn
         cfn = read_interface_counters if counters_fn is None else counters_fn
-        result = fn(
-            config["ping_host"],
-            timeout_seconds=config["ping_timeout_seconds"],
-        )
-        if not result.get("ok") and config.get("ping_fallback_host"):
-            fallback_result = fn(
-                config["ping_fallback_host"],
-                timeout_seconds=config["ping_timeout_seconds"],
-            )
-            if fallback_result.get("ok"):
-                return fallback_result, cfn()
-        return result, cfn()
+        return ping_heartbeat(config, ping_fn=ping_fn), cfn()
 
     return job
+
+
+def heartbeat_hosts(config: dict) -> list[str]:
+    """IPv6, primary IPv4, then an optional independent fallback target."""
+    return list(
+        dict.fromkeys(
+            host
+            for host in (
+                config.get("ping_host_v6"),
+                config["ping_host"],
+                config.get("ping_fallback_host"),
+            )
+            if host
+        )
+    )
+
+
+def heartbeat_label(config: dict) -> str:
+    """What an alert or forensic line names as the pinged target."""
+    return " / ".join(heartbeat_hosts(config))
+
+
+def ping_heartbeat(config: dict, ping_fn: Optional[Callable[..., dict]] = None) -> dict:
+    """One heartbeat reading: the first host in heartbeat_hosts that answers.
+
+    IPv6 first, then IPv4. An IPv4-only network still reads as up from the
+    primary IPv4 host, and an IPv6-only one (App Review's NAT64 network) from the
+    first. Down only when every host failed, and the error then names each
+    host with its own reason. An optional fallback target reduces alerts caused
+    by a single target dropping ICMP; a reply does not prove every path works.
+    Looks `ping_once` up at call time, which is the seam the suite patches.
+    """
+    hosts = heartbeat_hosts(config)
+    failures = []
+    fn = ping_once if ping_fn is None else ping_fn
+    for host in hosts:
+        result = fn(host, timeout_seconds=config["ping_timeout_seconds"])
+        if result["ok"]:
+            return {**result, "host": host}
+        failures.append(f"{host}: {result['error'] or 'no reply'}")
+    return {"ok": False, "rtt_ms": None, "error": "; ".join(failures), "host": None}
 
 
 def config_error_text(exc: BaseException) -> str:
@@ -1343,7 +1368,7 @@ class NetDnsMonitorApp(rumps.App):
                 "up_bps": up_bps,
                 "down": snapshot["down"],
             }
-            host = self.config["ping_host"]
+            host = heartbeat_label(self.config)
             if snapshot["down"]:
                 self._ping_failures_this_episode = snapshot["consecutive_failures"]
             self.history.record(
@@ -2342,13 +2367,10 @@ class NetDnsMonitorApp(rumps.App):
         events: list[dict] = []
         try:
             if action_id == "ping_now":
-                result = ping_once(
-                    self.config["ping_host"],
-                    timeout_seconds=self.config["ping_timeout_seconds"],
-                )
+                result = ping_heartbeat(self.config)
                 rtt = result["rtt_ms"]
                 lines.append(
-                    f"ping {self.config['ping_host']}: "
+                    f"ping {result['host'] or heartbeat_label(self.config)}: "
                     + (f"reply in {rtt:.1f}ms" if result["ok"] and rtt is not None else "")
                     + ("" if result["ok"] else f"FAILED -- {result['error']}")
                 )
@@ -2989,7 +3011,7 @@ class NetDnsMonitorApp(rumps.App):
         observe from the inside. This makes that answerable in one click instead
         of by waiting for a real outage.
         """
-        alert.network_failed(self.config["ping_host"], error="test alert, not a real outage")
+        alert.network_failed(heartbeat_label(self.config), error="test alert, not a real outage")
 
     # --- router ------------------------------------------------------------
 

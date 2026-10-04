@@ -56,6 +56,11 @@ DEFAULT_CONFIG = {
     # stats, the Dock tile, and the network-failed alert, and never the repair
     # ladder or escalation. See ping.py for why this uses ICMP while prober.py
     # deliberately does not.
+    # Pinged before ping_host; blank or null turns it off. IPv6 first because
+    # App Review runs an IPv6-only NAT64 network, where an IPv4 ping has no
+    # route and the heartbeat would report the network down. Same operator as
+    # 8.8.8.8, so a filtered ICMP path behaves alike on both.
+    "ping_host_v6": "2001:4860:4860::8888",
     "ping_host": "8.8.8.8",
     "ping_fallback_host": "1.1.1.1",
     "ping_interval_seconds": 5,
@@ -526,6 +531,12 @@ def validate_config(config: dict) -> None:
 
     # Blank is not "don't ping": `ping ""` cannot resolve the host and exits 68,
     # so every heartbeat is a lost ping and the alert fires on a healthy network.
+    v6 = config.get("ping_host_v6")
+    if v6 is not None and not isinstance(v6, str):
+        raise ConfigError(
+            "ping_host_v6",
+            f"config key 'ping_host_v6' must be an IPv6 address, or blank to turn it off, got {v6!r}",
+        )
     if "ping_host" in config and not _is_text(config["ping_host"]):
         raise ConfigError(
             "ping_host",
@@ -534,11 +545,11 @@ def validate_config(config: dict) -> None:
     if (
         "ping_fallback_host" in config
         and config["ping_fallback_host"] is not None
-        and not _is_text(config["ping_fallback_host"])
+        and not isinstance(config["ping_fallback_host"], str)
     ):
         raise ConfigError(
             "ping_fallback_host",
-            f"config key 'ping_fallback_host' must be a host name or address, got {config['ping_fallback_host']!r}",
+            f"config key 'ping_fallback_host' must be a host name or address, or blank to turn it off, got {config['ping_fallback_host']!r}",
         )
 
     # `reports_dir:` with nothing after it loads as None, and expanduser(None)
