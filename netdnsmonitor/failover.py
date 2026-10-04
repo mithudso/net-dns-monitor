@@ -23,6 +23,7 @@ Three properties this module is built around:
 """
 
 import json
+import logging
 import math
 import os
 import subprocess
@@ -278,13 +279,16 @@ class FailoverStore:
             # next refresh() would reload this file over the newer in-memory
             # record.
             self._file_signature = self._stat_signature()
-        except OSError:
+        except OSError as exc:
             # A failed save must never take down the tick. The in-memory record
             # still drives failback for this session. After a restart it is
             # gone, the failback gate stays shut, and automatic failback never
             # runs -- only a manual switch to preferred, which then promotes the
             # preferred link instead of restoring the exact order.
-            pass
+            logging.getLogger(__name__).warning(
+                "failover state was not saved (%s); restore state remains in memory only",
+                type(exc).__name__,
+            )
 
     def record_attempt(self, at: float) -> None:
         """Arms the cooldown without spending hourly budget.
@@ -958,6 +962,15 @@ class NetworkFailover:
         return f"{outcome} (failed over to backup '{target}'{speed}){note}{note_unverified}"
 
     def _do_failback(self, services) -> str:
+        preferred = find_service(services, self.preferred_service)
+        if preferred is None:
+            return f"failed: preferred service '{self.preferred_service}' disappeared mid-check"
+        if not preferred.enabled:
+            # Reordering a disabled service routes nothing. Keep the restore
+            # record so a refused attempt does not erase the way back.
+            return (
+                f"failed: preferred service '{self.preferred_service}' is disabled; not switching"
+            )
         current_names = {s.name for s in services}
         recorded = self.store.original_order
         matches = (
@@ -997,7 +1010,12 @@ class NetworkFailover:
         # automatic failback must not pick up where the user's attempt failed.
         self.store.failback_paused = False
         self.store.save()
-        return f"{outcome} (failed back to preferred '{self.preferred_service}'{undone}){note}"
+        if new_order[0] == self.preferred_service:
+            return f"{outcome} (failed back to preferred '{self.preferred_service}'{undone}){note}"
+        return (
+            f"{outcome} (restored the original service order headed by '{new_order[0]}'; "
+            f"preferred '{self.preferred_service}' was not promoted{undone}){note}"
+        )
 
     def _end_stale_pause(self, services) -> None:
         """End the manual-switch pause once the live order starts with the

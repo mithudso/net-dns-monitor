@@ -643,3 +643,19 @@ def test_buckets_hand_out_copies_not_the_live_entries():
     reg.observe("peer-a", host="mac-a")
     reg.buckets()[CURRENT][0]["host"] = "changed"
     assert reg.peers["peer-a"]["host"] == "mac-a"
+
+
+def test_a_fresh_unknown_peer_reading_clears_historical_health():
+    registry = make_registry()
+    registry.observe("peer", address="192.168.1.2", external_reachable=True, dns_ok=True)
+    registry.observe("peer", address="192.168.1.2", external_reachable=None, dns_ok=None)
+    peer = registry.localization_view()[0]
+    assert peer["answered"] is True
+    assert peer["external_reachable"] is None
+    assert peer["dns_ok"] is None
+
+
+def test_an_infinite_missed_healthcheck_count_does_not_break_record_load():
+    registry = make_registry()
+    registry.load({"peers": {"current": [{"id": "peer", "missed_healthchecks": float("inf")}]}})
+    assert registry.peers["peer"]["missed_healthchecks"] == 0

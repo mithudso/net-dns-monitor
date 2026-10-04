@@ -143,3 +143,17 @@ def test_one_checked_at_is_shared_by_every_record_in_a_batch(tmp_path):
     append_resolution_findings(_findings(), str(path))
     stamps = {json.loads(line)["checked_at"] for line in path.read_text().splitlines()}
     assert len(stamps) == 1
+
+
+def test_compaction_preserves_stall_after_invalid_nan_record(tmp_path):
+    from netdnsmonitor.resolution_log import _compact
+
+    path = tmp_path / "resolution.jsonl"
+    findings = [
+        {"domain": "a.example", "outcome": "completed", "elapsed_seconds": float("nan")},
+        {"domain": "a.example", "outcome": "completed", "elapsed_seconds": 5.0},
+    ]
+    append_resolution_findings(findings, str(path))
+    before = select_stalled_domains(str(path), stall_seconds=1.0)
+    _compact(str(path))
+    assert select_stalled_domains(str(path), stall_seconds=1.0) == before == ["a.example"]

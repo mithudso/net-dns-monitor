@@ -77,7 +77,7 @@ report, because someone will act on it.
 ## Before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2150 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2203 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -86,12 +86,17 @@ That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
 start. `test_privileges`, `test_system_log` and `test_log_watcher` are exempt, because
 they test those functions and inject their own runners.
 
-There is **no `scripts/check_docs.py`** in this repo, despite what earlier revisions of
-this file claimed. Nothing machine-checks doc drift. Whenever tests are added, regenerate
-every test count by hand from `python3 -m pytest -q --collect-only | grep -c '::'`. The
-counts live in `docs/SCRIPTS.md` (the quick-start comment, the entry-point table, the
-Tests section, and the per-file table with its total row), in `docs/TESTING.md`, and in
-this file. Stale counts have shipped twice for exactly this reason.
+`scripts/check_docs.py --collect-tests` checks retrieval-index paths and the
+published test totals and per-file table against pytest collection. It runs no
+semantic queries and starts no indexing service. Run it after tests change:
+
+```bash
+.venv/bin/python scripts/check_docs.py --collect-tests
+```
+
+The counts live in `docs/SCRIPTS.md`, `docs/TESTING.md`,
+`docs/codebase-overview.md`, and this file. Update those counts from collection;
+do not guess. The same check runs in CI after pytest.
 
 Then exercise the paths the suite cannot, using the one-shot invocations in
 `docs/SCRIPTS.md` — the prober, the ladder's read-only checks, the log watcher, the
@@ -103,6 +108,16 @@ binding does not pin an interface.
 **Loading the menu bar app cannot be automated.** `rumps.App().run()` never returns and
 needs a GUI session, so `python3 -m netdnsmonitor.app` is a manual check. Do not claim
 it as verified, and never invoke it from a script or an agent expecting completion.
+
+## Workflow records
+
+Before implementation, append the exact user request to `prompts.md` and record
+the active task, constraints, completed work, verification, and remaining steps
+in `memory.md`. Add the next `## vN - date` section and increment its `Delta`.
+Keep those records current so a stopped session can resume. Stage only this
+session's files, preserve unrelated changes, and commit the completed work.
+The journals' versions track work entries; they do not change the App Store
+product version or build number.
 
 ## House style
 
@@ -191,8 +206,11 @@ comment that is wrong about why is as expensive as code that is wrong.
   `/Library/PrivilegedHelperTools/net-dns-monitor/enable_nat.sh` and points the daemon
   there. Until the owner re-runs that installer as root, any process running as the
   checkout's owner can edit the script and have it run as root.
-- **The Mac App Store build is a reduced edition, and its release mode has never been
-  run.** `netdnsmonitor/distribution.py` detects the App Sandbox from the environment
+- **The Mac App Store build is a reduced edition.** Release signing first ran
+  with real certificates on 2026-09-27. `docs/APP_STORE_CHECKLIST.md` records
+  submitted build 1.0 (3) from `395c14e`; `docs/APP_STORE_REVIEW_RESPONSE.md`
+  records its 2026-09-28 rejection and the later build-4 plan. Those dated records
+  do not establish today's review status or live GUI behavior. `netdnsmonitor/distribution.py` detects the App Sandbox from the environment
   and names the features the sandbox or App Review forbid: the failover switch, the
   privileged repairs, the unified log, the router, the shell console and the
   LaunchAgent login item. Each must report itself unavailable, never fail in a way that

@@ -76,10 +76,15 @@ notarization (§10). Both can coexist.
   512x512@2x elements (`ic09`, `ic10`) that ITMS-90236 requires.
 
 **Not verified here:**
-- **Release mode was never run.** This Mac has no Apple Distribution or Mac Installer Distribution certificate (checked again 2026-09-17: `security find-identity -v` lists one *Apple Development* identity, which cannot sign a store upload), so release signing, provisioning-profile embedding and `productbuild` signing have not been run. Ad-hoc mode was run end to end on 2026-09-14 and again on 2026-09-17.
+- **Current release and review state needs a live check.** Release signing first ran with real certificates on 2026-09-27, as recorded in `docs/APP_STORE_CHECKLIST.md` step 6. That checklist records processed/submitted build 1.0 (3) from `395c14e`; `docs/APP_STORE_REVIEW_RESPONSE.md` records its 2026-09-28 rejection and the subsequent build-4 plan. These are dated records, not a live check of certificates, App Store Connect, or the installed app.
 - **The Local Network permission prompt has not been observed.** The probe cannot see a GUI prompt. Launch the ad-hoc app once and confirm the prompt shows the `NSLocalNetworkUsageDescription` text. Then deny it once: the app has no way to learn that the denial, not the router, is why the gateway probe fails (see `docs/known-issues.md`), so check what the dashboard says in that state before a reviewer does.
 - **The GUI app itself was not launched sandboxed.** Launching it cannot be automated (see CLAUDE.md). Only the probe executable was run.
-- **Two helpers still shell out in the store build.** "Open forensic logs folder" runs `/usr/bin/open`, and the alert's notification fallback runs `osascript`. Neither has run sandboxed. Reports themselves now open through NSWorkspace. Click both once in the ad-hoc build.
+- **Store file opening and notification display need a manual check.** The app
+  opens HTTP(S) URLs through NSWorkspace. Files and folders still use
+  `/usr/bin/open`; that path is not verified in the sandbox. The alert
+  returns after a failed `rumps.notification` instead of invoking `osascript`
+  there. Neither a successful API return nor offline tests establish that macOS
+  displayed a banner or opened the requested folder.
 - **Pasting into the credentials dialog needs a manual check.** The app now installs a standard Edit menu, so ⌘V should paste into Credentials → Set Anthropic API key…. No automated test can send a real keystroke. Try it once in the ad-hoc build before submitting.
 
 ## 3. One-time Apple setup
@@ -450,7 +455,7 @@ you can reply without a new build when a note is enough.
 | 2.5.2: bundled interpreter treated as executing code | Unverified; no Apple text either way | Review notes state all code ships in the bundle and nothing is downloaded |
 | 5.1.2(i): third-party AI without permission | Mitigated | Versioned consent gate, disclosure dialog, revoke menu |
 | 5.1.1(i): privacy policy link inside the app | Mitigated | The store build's Privacy Policy menu item opens the bundled `NDMPrivacyPolicyURL`; release builds refuse to run without `--privacy-policy-url` |
-| 2.4.5(viii): deprecated technologies | Risk | `rumps` posts notifications with `NSUserNotificationCenter`, deprecated since macOS 11; `alert.py` falls back to `osascript`. Neither has been tested sandboxed. If review objects, move to `UNUserNotificationCenter`, which needs a new dependency (`pyobjc-framework-UserNotifications`). |
+| 2.4.5(viii): deprecated technologies | Risk | `rumps` posts notifications with `NSUserNotificationCenter`, deprecated since macOS 11; `alert.py` falls back to `osascript` only in direct builds. Notification banner delivery remains unverified in the sandbox. If review objects, move to `UNUserNotificationCenter`, which needs a new dependency (`pyobjc-framework-UserNotifications`). |
 | 4.2: minimum functionality | Low | Native menu bar utility with a real window |
 | Icon quality | Done (2026-09-27) | `make_icon.py` draws the designed icon; review `make_icon.py preview.png` after any change to it |
 | ITMS-90236 (icon sizes) | Mitigated | ICNS includes 512 and 512@2x; `--icon` checks a designed icon for the same |

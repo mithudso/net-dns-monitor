@@ -1,0 +1,1770 @@
+[
+  {
+    "path": ".editorconfig",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: .editorconfig#L1]"
+  },
+  {
+    "path": ".env.example",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: .env.example#L1]"
+  },
+  {
+    "path": ".gitattributes",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: .gitattributes#L1]"
+  },
+  {
+    "path": ".github/FUNDING.yml",
+    "role": "infra",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/FUNDING.yml#L1]"
+  },
+  {
+    "path": ".github/ISSUE_TEMPLATE/bug_report.md",
+    "role": "infra",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/ISSUE_TEMPLATE/bug_report.md#L1]"
+  },
+  {
+    "path": ".github/ISSUE_TEMPLATE/feature_request.md",
+    "role": "infra",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/ISSUE_TEMPLATE/feature_request.md#L1]"
+  },
+  {
+    "path": ".github/PULL_REQUEST_TEMPLATE.md",
+    "role": "infra",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/PULL_REQUEST_TEMPLATE.md#L1]"
+  },
+  {
+    "path": ".github/SECURITY.md",
+    "role": "infra",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/SECURITY.md#L1]"
+  },
+  {
+    "path": ".github/copilot-instructions.md",
+    "role": "infra",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/copilot-instructions.md#L1]"
+  },
+  {
+    "path": ".github/dependabot.yml",
+    "role": "infra",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/dependabot.yml#L1]"
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "role": "infra",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based infra retrieval entry. [asserted]",
+    "provenance": "[src: .github/workflows/ci.yml#L1]"
+  },
+  {
+    "path": ".gitignore",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: .gitignore#L1]"
+  },
+  {
+    "path": ".pre-commit-config.yaml",
+    "role": "config",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: .pre-commit-config.yaml#L1]"
+  },
+  {
+    "path": ".python-version",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: .python-version#L1]"
+  },
+  {
+    "path": ".stele/project.json",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: .stele/project.json#L1]"
+  },
+  {
+    "path": "AGENTS.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: AGENTS.md#L1]"
+  },
+  {
+    "path": "CLAUDE.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: CLAUDE.md#L1]"
+  },
+  {
+    "path": "CONTRIBUTING.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: CONTRIBUTING.md#L1]"
+  },
+  {
+    "path": "GEMINI.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: GEMINI.md#L1]"
+  },
+  {
+    "path": "HOWTO.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: HOWTO.md#L1]"
+  },
+  {
+    "path": "LICENSE",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: LICENSE#L1]"
+  },
+  {
+    "path": "README.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: README.md#L1]"
+  },
+  {
+    "path": "bootstrap_repo.sh",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: bootstrap_repo.sh#L1]"
+  },
+  {
+    "path": "config.example.yaml",
+    "role": "config",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: config.example.yaml#L1]"
+  },
+  {
+    "path": "config.yaml",
+    "role": "config",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: config.yaml#L1]"
+  },
+  {
+    "path": "constraints.txt",
+    "role": "docs",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: constraints.txt#L1]"
+  },
+  {
+    "path": "dnsmasq/dnsmasq.conf",
+    "role": "config",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: dnsmasq/dnsmasq.conf#L1]"
+  },
+  {
+    "path": "docs/APP_STORE_CHECKLIST.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/APP_STORE_CHECKLIST.md#L1]"
+  },
+  {
+    "path": "docs/APP_STORE_REVIEW_RESPONSE.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/APP_STORE_REVIEW_RESPONSE.md#L1]"
+  },
+  {
+    "path": "docs/APP_STORE_SUBMISSION.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/APP_STORE_SUBMISSION.md#L1]"
+  },
+  {
+    "path": "docs/ARCHITECTURE.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/ARCHITECTURE.md#L1]"
+  },
+  {
+    "path": "docs/COMPONENTS.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/COMPONENTS.md#L1]"
+  },
+  {
+    "path": "docs/DEVELOPMENT.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/DEVELOPMENT.md#L1]"
+  },
+  {
+    "path": "docs/INSTALLATION.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/INSTALLATION.md#L1]"
+  },
+  {
+    "path": "docs/MCP.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/MCP.md#L1]"
+  },
+  {
+    "path": "docs/PRIVACY_POLICY.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/PRIVACY_POLICY.md#L1]"
+  },
+  {
+    "path": "docs/SCRIPTS.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/SCRIPTS.md#L1]"
+  },
+  {
+    "path": "docs/SECURITY.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/SECURITY.md#L1]"
+  },
+  {
+    "path": "docs/TESTING.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/TESTING.md#L1]"
+  },
+  {
+    "path": "docs/caching-and-optimization.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/caching-and-optimization.md#L1]"
+  },
+  {
+    "path": "docs/codebase-overview.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/codebase-overview.md#L1]"
+  },
+  {
+    "path": "docs/external-calls.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/external-calls.md#L1]"
+  },
+  {
+    "path": "docs/high_signal_file_index.json",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: docs/high_signal_file_index.json#L1]"
+  },
+  {
+    "path": "docs/integrations-and-assumptions.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/integrations-and-assumptions.md#L1]"
+  },
+  {
+    "path": "docs/known-issues.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/known-issues.md#L1]"
+  },
+  {
+    "path": "docs/logging.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/logging.md#L1]"
+  },
+  {
+    "path": "docs/macos-networking-audit.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/macos-networking-audit.md#L1]"
+  },
+  {
+    "path": "docs/onboarding.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/onboarding.md#L1]"
+  },
+  {
+    "path": "docs/repo-bootstrap-audit-2026-10-04.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/repo-bootstrap-audit-2026-10-04.md#L1]"
+  },
+  {
+    "path": "docs/requirements.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/requirements.md#L1]"
+  },
+  {
+    "path": "docs/runbooks/app-store-release.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/runbooks/app-store-release.md#L1]"
+  },
+  {
+    "path": "docs/runbooks/manual-failover.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/runbooks/manual-failover.md#L1]"
+  },
+  {
+    "path": "docs/runbooks/router-nat-recovery.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/runbooks/router-nat-recovery.md#L1]"
+  },
+  {
+    "path": "docs/runbooks/sudoers-grant.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/runbooks/sudoers-grant.md#L1]"
+  },
+  {
+    "path": "llms-facts.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: llms-facts.txt#L1]"
+  },
+  {
+    "path": "llms-full.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: llms-full.txt#L1]"
+  },
+  {
+    "path": "llms-small.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: llms-small.txt#L1]"
+  },
+  {
+    "path": "llms.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: llms.txt#L1]"
+  },
+  {
+    "path": "memory.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: memory.md#L1]"
+  },
+  {
+    "path": "netdnsmonitor/__init__.py",
+    "role": "source",
+    "importance": "peripheral",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: git]"
+  },
+  {
+    "path": "netdnsmonitor/ai_consent.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/ai_consent.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/alert.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/alert.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/anthropic_escalator.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/anthropic_escalator.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/app.py",
+    "role": "source",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/app.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/classifier.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/classifier.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/cli.py",
+    "role": "source",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/cli.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/cli_console.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/cli_console.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/commands.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/commands.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/config.py",
+    "role": "source",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/config.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/console.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/console.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/console_window.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/console_window.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/credentials.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/credentials.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/credentials_prompt.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/credentials_prompt.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/dashboard.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/dashboard.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/distribution.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/distribution.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/dns_query.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/dns_query.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/dock_icon.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/dock_icon.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/domain_learner.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/domain_learner.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/escalation.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/escalation.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/failover.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/failover.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/failover_policy.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/failover_policy.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/flap_gate.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/flap_gate.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/forensic_log.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/forensic_log.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/graphs.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/graphs.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/history.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/history.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/interface_probe.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/interface_probe.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/ladder.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/ladder.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/localize.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/localize.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/log_watcher.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/log_watcher.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/mini_window.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/mini_window.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/net_stats.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/net_stats.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/notifications.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/notifications.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/peer_net.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/peer_net.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/peers.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/peers.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/ping.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/ping.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/ping_monitor.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/ping_monitor.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/privileges.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/privileges.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/prober.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/prober.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/query_log.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/query_log.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/repair_executor.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/repair_executor.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/report.py",
+    "role": "source",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/report.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/report_storage.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/report_storage.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/resolution_log.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/resolution_log.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/resolution_prober.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/resolution_prober.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/router.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/router.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/router_window.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/router_window.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/service_order.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/service_order.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/settings_window.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/settings_window.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/stall_log.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/stall_log.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/state_machine.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/state_machine.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/status.py",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/status.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/system_log.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/system_log.py#L1]"
+  },
+  {
+    "path": "netdnsmonitor/throughput.py",
+    "role": "source",
+    "importance": "normal",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: netdnsmonitor/throughput.py#L1]"
+  },
+  {
+    "path": "packaging/appstore/entitlements-helper.plist",
+    "role": "config",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: packaging/appstore/entitlements-helper.plist#L1]"
+  },
+  {
+    "path": "packaging/appstore/entitlements.plist",
+    "role": "config",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: packaging/appstore/entitlements.plist#L1]"
+  },
+  {
+    "path": "prompts.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: prompts.md#L1]"
+  },
+  {
+    "path": "pytest.ini",
+    "role": "config",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: pytest.ini#L1]"
+  },
+  {
+    "path": "requirements-dev.txt",
+    "role": "source",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: requirements-dev.txt#L1]"
+  },
+  {
+    "path": "requirements-index.txt",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: requirements-index.txt#L1]"
+  },
+  {
+    "path": "requirements.txt",
+    "role": "source",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: requirements.txt#L1]"
+  },
+  {
+    "path": "router/docs/ROUTER.md",
+    "role": "docs",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: router/docs/ROUTER.md#L1]"
+  },
+  {
+    "path": "router/scripts/enable_nat.sh",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: router/scripts/enable_nat.sh#L1]"
+  },
+  {
+    "path": "router/scripts/install_persistent_nat.sh",
+    "role": "source",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: router/scripts/install_persistent_nat.sh#L1]"
+  },
+  {
+    "path": "router/scripts/test_router.sh",
+    "role": "source",
+    "importance": "medium",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: router/scripts/test_router.sh#L1]"
+  },
+  {
+    "path": "router/tests/test_configs.py",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: router/tests/test_configs.py#L1]"
+  },
+  {
+    "path": "ruff.toml",
+    "role": "config",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: ruff.toml#L1]"
+  },
+  {
+    "path": "scripts/appstore/appkit_draw.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/appstore/appkit_draw.py#L1]"
+  },
+  {
+    "path": "scripts/appstore/build_appstore.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/appstore/build_appstore.py#L1]"
+  },
+  {
+    "path": "scripts/appstore/compose_screenshots.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/appstore/compose_screenshots.py#L1]"
+  },
+  {
+    "path": "scripts/appstore/make_icon.py",
+    "role": "tooling",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/appstore/make_icon.py#L1]"
+  },
+  {
+    "path": "scripts/appstore/record_demo.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/appstore/record_demo.py#L1]"
+  },
+  {
+    "path": "scripts/appstore/sandbox_probe.py",
+    "role": "tooling",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/appstore/sandbox_probe.py#L1]"
+  },
+  {
+    "path": "scripts/appstore/shoot_screenshots.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/appstore/shoot_screenshots.py#L1]"
+  },
+  {
+    "path": "scripts/check_docs.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/check_docs.py#L1]"
+  },
+  {
+    "path": "scripts/com.mitchhudson.net-dns-monitor.plist",
+    "role": "tooling",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/com.mitchhudson.net-dns-monitor.plist#L1]"
+  },
+  {
+    "path": "scripts/generate_static_dossier.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/generate_static_dossier.py#L1]"
+  },
+  {
+    "path": "scripts/install.sh",
+    "role": "tooling",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/install.sh#L1]"
+  },
+  {
+    "path": "scripts/install_indexer_daemon.sh",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/install_indexer_daemon.sh#L1]"
+  },
+  {
+    "path": "scripts/mcp_server.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/mcp_server.py#L1]"
+  },
+  {
+    "path": "scripts/net-dns-monitor-service",
+    "role": "tooling",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/net-dns-monitor-service#L1]"
+  },
+  {
+    "path": "scripts/query_index.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/query_index.py#L1]"
+  },
+  {
+    "path": "scripts/semantic_indexer.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/semantic_indexer.py#L1]"
+  },
+  {
+    "path": "scripts/start.sh",
+    "role": "tooling",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/start.sh#L1]"
+  },
+  {
+    "path": "scripts/watch_and_index.py",
+    "role": "tooling",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: scripts/watch_and_index.py#L1]"
+  },
+  {
+    "path": "setup.py",
+    "role": "source",
+    "importance": "critical",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: setup.py#L1]"
+  },
+  {
+    "path": "tests/__init__.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: git]"
+  },
+  {
+    "path": "tests/conftest.py",
+    "role": "test",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/conftest.py#L1]"
+  },
+  {
+    "path": "tests/test_ai_consent.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_ai_consent.py#L1]"
+  },
+  {
+    "path": "tests/test_alert.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_alert.py#L1]"
+  },
+  {
+    "path": "tests/test_anthropic_escalator.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_anthropic_escalator.py#L1]"
+  },
+  {
+    "path": "tests/test_app_appstore_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_appstore_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_console_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_console_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_dashboard_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_dashboard_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_failover_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_failover_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_log_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_log_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_notification_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_notification_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_peer_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_peer_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_ping_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_ping_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_privilege_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_privilege_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_report_storage_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_report_storage_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_resolution_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_resolution_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_router_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_router_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_settings_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_settings_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_app_status_wiring.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_app_status_wiring.py#L1]"
+  },
+  {
+    "path": "tests/test_appstore_build.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_appstore_build.py#L1]"
+  },
+  {
+    "path": "tests/test_appstore_screenshots.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_appstore_screenshots.py#L1]"
+  },
+  {
+    "path": "tests/test_check_docs.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_check_docs.py#L1]"
+  },
+  {
+    "path": "tests/test_classifier.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_classifier.py#L1]"
+  },
+  {
+    "path": "tests/test_cli.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_cli.py#L1]"
+  },
+  {
+    "path": "tests/test_cli_console.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_cli_console.py#L1]"
+  },
+  {
+    "path": "tests/test_config.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_config.py#L1]"
+  },
+  {
+    "path": "tests/test_console.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_console.py#L1]"
+  },
+  {
+    "path": "tests/test_console_window.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_console_window.py#L1]"
+  },
+  {
+    "path": "tests/test_credentials.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_credentials.py#L1]"
+  },
+  {
+    "path": "tests/test_dashboard.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_dashboard.py#L1]"
+  },
+  {
+    "path": "tests/test_distribution.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_distribution.py#L1]"
+  },
+  {
+    "path": "tests/test_dns_query.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_dns_query.py#L1]"
+  },
+  {
+    "path": "tests/test_dock_icon.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_dock_icon.py#L1]"
+  },
+  {
+    "path": "tests/test_domain_learner.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_domain_learner.py#L1]"
+  },
+  {
+    "path": "tests/test_escalation.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_escalation.py#L1]"
+  },
+  {
+    "path": "tests/test_failover.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_failover.py#L1]"
+  },
+  {
+    "path": "tests/test_failover_policy.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_failover_policy.py#L1]"
+  },
+  {
+    "path": "tests/test_flap_gate.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_flap_gate.py#L1]"
+  },
+  {
+    "path": "tests/test_forensic_log.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_forensic_log.py#L1]"
+  },
+  {
+    "path": "tests/test_graphs.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_graphs.py#L1]"
+  },
+  {
+    "path": "tests/test_history.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_history.py#L1]"
+  },
+  {
+    "path": "tests/test_indexer_scripts.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_indexer_scripts.py#L1]"
+  },
+  {
+    "path": "tests/test_interface_probe.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_interface_probe.py#L1]"
+  },
+  {
+    "path": "tests/test_ladder.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_ladder.py#L1]"
+  },
+  {
+    "path": "tests/test_localize.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_localize.py#L1]"
+  },
+  {
+    "path": "tests/test_log_watcher.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_log_watcher.py#L1]"
+  },
+  {
+    "path": "tests/test_mini_window.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_mini_window.py#L1]"
+  },
+  {
+    "path": "tests/test_net_stats.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_net_stats.py#L1]"
+  },
+  {
+    "path": "tests/test_notifications.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_notifications.py#L1]"
+  },
+  {
+    "path": "tests/test_peer_net.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_peer_net.py#L1]"
+  },
+  {
+    "path": "tests/test_peers.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_peers.py#L1]"
+  },
+  {
+    "path": "tests/test_ping.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_ping.py#L1]"
+  },
+  {
+    "path": "tests/test_ping_monitor.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_ping_monitor.py#L1]"
+  },
+  {
+    "path": "tests/test_privileges.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_privileges.py#L1]"
+  },
+  {
+    "path": "tests/test_prober.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_prober.py#L1]"
+  },
+  {
+    "path": "tests/test_query_log.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_query_log.py#L1]"
+  },
+  {
+    "path": "tests/test_repair_executor.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_repair_executor.py#L1]"
+  },
+  {
+    "path": "tests/test_report.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_report.py#L1]"
+  },
+  {
+    "path": "tests/test_report_storage.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_report_storage.py#L1]"
+  },
+  {
+    "path": "tests/test_resolution_log.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_resolution_log.py#L1]"
+  },
+  {
+    "path": "tests/test_resolution_prober.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_resolution_prober.py#L1]"
+  },
+  {
+    "path": "tests/test_router.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_router.py#L1]"
+  },
+  {
+    "path": "tests/test_router_configs.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_router_configs.py#L1]"
+  },
+  {
+    "path": "tests/test_router_scripts.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_router_scripts.py#L1]"
+  },
+  {
+    "path": "tests/test_router_window.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_router_window.py#L1]"
+  },
+  {
+    "path": "tests/test_service_order.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_service_order.py#L1]"
+  },
+  {
+    "path": "tests/test_settings_window.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_settings_window.py#L1]"
+  },
+  {
+    "path": "tests/test_stall_log.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_stall_log.py#L1]"
+  },
+  {
+    "path": "tests/test_state_machine.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_state_machine.py#L1]"
+  },
+  {
+    "path": "tests/test_status.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_status.py#L1]"
+  },
+  {
+    "path": "tests/test_system_log.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_system_log.py#L1]"
+  },
+  {
+    "path": "tests/test_throughput.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: tests/test_throughput.py#L1]"
+  },
+  {
+    "path": "unbound/MAINTENANCE.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: unbound/MAINTENANCE.md#L1]"
+  },
+  {
+    "path": "unbound/install.sh",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: unbound/install.sh#L1]"
+  },
+  {
+    "path": "unbound/pf_unbound.conf",
+    "role": "config",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: unbound/pf_unbound.conf#L1]"
+  },
+  {
+    "path": "unbound/unbound.conf",
+    "role": "config",
+    "importance": "high",
+    "read_depth": "shallow",
+    "purpose": "Filename-based config retrieval entry. [asserted]",
+    "provenance": "[src: unbound/unbound.conf#L1]"
+  }
+]

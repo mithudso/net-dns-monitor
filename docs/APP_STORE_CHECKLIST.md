@@ -29,8 +29,11 @@ ship the full build outside the store instead (§10). Both can coexist.
 | Team ID | `L9ELX85ZFD`, from the OU field of the Apple Development certificate in the login keychain |
 
 Not verified, because it cannot be from a script: the sandboxed GUI app was
-not launched, so the manual checks in step 5 are still open. Release signing
-has never run: this Mac has no distribution certificates (step 2).
+not launched in that measurement, so the manual checks in step 5 were still
+open. Release signing subsequently ran with real certificates on 2026-09-27
+(step 6). Build 1.0 (3) was submitted (step 7), then rejected for information
+on 2026-09-28; `APP_STORE_REVIEW_RESPONSE.md` records the later build-4 plan.
+Check App Store Connect for the current review state.
 
 ## 2. Steps, in order
 

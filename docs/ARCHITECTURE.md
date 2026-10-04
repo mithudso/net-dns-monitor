@@ -70,9 +70,11 @@ imports `interface_probe.py`.
 3. `classifier.classify()` turns that into `healthy`, `network`, `dns` or
    `unclassified`. A `None` in either load-bearing field gives `unclassified`.
 4. `flap_gate.FlapGate` debounces. It declares an incident only after
-   `failure_threshold` consecutive non-healthy ticks. It clears the incident only
-   after `success_threshold` consecutive healthy ticks. An `unclassified` tick
-   counts as non-healthy.
+   `failure_threshold` consecutive failing ticks. It clears the incident only
+   after `success_threshold` consecutive healthy ticks. `StateMachine.tick()`
+   leaves the gate unchanged for an unclassified result when either reachability
+   or DNS is positively healthy. With no positive field, an unclassified result
+   still counts as failing; see `docs/known-issues.md`.
 5. On the `healthy -> incident` edge, `state_machine` takes `StateMachine.lock`.
    It runs `ladder.ladder_for(classification, failover_classifications)` through
    the injected `repair_executor`. `unclassified` has no ladder.

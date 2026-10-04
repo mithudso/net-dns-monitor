@@ -16,7 +16,7 @@
 # file.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.1
+    rev: v0.16.9
     hooks:
       # Lint before format, and with --fix: a fix can leave code the formatter
       # would then reflow, so the reverse order can need two runs to settle.

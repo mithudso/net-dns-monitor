@@ -258,3 +258,13 @@ def test_a_connect_fn_that_raises_is_not_reported_as_unreachable():
     )
     with pytest.raises(RuntimeError):
         prober()
+
+
+def test_resolution_worker_error_is_not_a_dns_failure():
+    from netdnsmonitor.prober import resolve_all
+
+    def bad_lookup(domain, timeout):
+        raise UnicodeError("invalid DNS label")
+
+    with pytest.raises(UnicodeError, match="invalid DNS label"):
+        resolve_all(["bad.example"], 0.1, bad_lookup)

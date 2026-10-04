@@ -400,7 +400,7 @@ def test_check_default_route_shells_out_to_netstat():
     executor = make_repair_executor(run_fn=run_fn)
     outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
     assert "default 192.0.2.1" in outcome
-    assert calls == [[NETSTAT, "-rn", "-f", "inet"]]
+    assert calls == [[NETSTAT, "-rn", "-f", "inet"], [NETSTAT, "-rn", "-f", "inet6"]]
 
 
 def test_a_failed_check_command_is_reported_as_failed():
@@ -501,7 +501,7 @@ def test_an_unreachable_public_resolver_is_not_reported_as_a_failed_name():
     )
     assert "did NOT resolve" not in outcome
     assert "resolved via" not in outcome
-    assert outcome.startswith("could not reach the public resolver")
+    assert outcome.startswith("could not obtain a usable public resolver result")
     assert "example.com" in outcome
 
 
@@ -615,3 +615,34 @@ def test_a_failover_that_raises_is_reported_as_failed_not_raised():
     outcome = executor(FAILOVER, "network")
     assert outcome.startswith("failed")
     assert "UnicodeDecodeError" in outcome
+
+
+def test_default_route_check_includes_ipv6_and_keeps_each_family_result():
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="route via utun4", stderr="")
+
+    executor = make_repair_executor(run_fn=run)
+    outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
+    assert calls == [
+        ["/usr/sbin/netstat", "-rn", "-f", "inet"],
+        ["/usr/sbin/netstat", "-rn", "-f", "inet6"],
+    ]
+    assert "IPv4" in outcome and "IPv6" in outcome
+
+
+def test_one_unreadable_route_family_is_partial_not_missing_routes():
+    def run(args, **kwargs):
+        return SimpleNamespace(
+            returncode=1 if args[-1] == "inet" else 0,
+            stdout="" if args[-1] == "inet" else "default fe80::1 en0",
+            stderr="permission denied" if args[-1] == "inet" else "",
+        )
+
+    executor = make_repair_executor(run_fn=run)
+    outcome = executor(LadderStep("check_default_route", "check", needs_privilege=False))
+    assert outcome.startswith("partial:")
+    assert "IPv4 routes:\nfailed:" in outcome
+    assert "IPv6 routes:\ndefault fe80::1 en0" in outcome

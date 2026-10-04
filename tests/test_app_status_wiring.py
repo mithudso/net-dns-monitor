@@ -144,24 +144,33 @@ def test_resolution_tick_does_not_block_the_run_loop(tmp_path):
     """The incident tick is the app's primary job and shares the run loop with
     resolution_tick. A slow batch must not hold it up.
     """
+    import threading
     import time
 
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
     app.state_machine = FakeStateMachine("healthy")
 
+    release = threading.Event()
+
     def slow_job():
-        time.sleep(10)
+        assert release.wait(timeout=5)
         return []
 
     app.resolution_job = slow_job
 
-    started = time.monotonic()
-    app.resolution_tick()
-    assert time.monotonic() - started < 1.0
+    try:
+        started = time.monotonic()
+        app.resolution_tick()
+        assert time.monotonic() - started < 1.0
 
-    # The incident tick still runs while the batch is in flight.
-    app.tick()
-    assert "healthy" in app.title.lower()
+        # The incident tick still runs while the batch is in flight.
+        app.tick()
+        assert "healthy" in app.title.lower()
+    finally:
+        release.set()
+        if app._resolution_thread is not None:
+            app._resolution_thread.join(timeout=5)
+            assert not app._resolution_thread.is_alive()
 
 
 def test_overlapping_resolution_cycle_is_skipped_not_stacked(tmp_path):

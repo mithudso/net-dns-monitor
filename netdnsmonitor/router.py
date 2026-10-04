@@ -108,11 +108,18 @@ def validate(wan_if, lan_if, lan_ip, lan_netmask, dhcp_start, dhcp_end) -> Route
     except ValueError:
         raise ValueError(f"lan_netmask {lan_netmask!r} is not a netmask") from None
     network = interface.network
+    reserved = {network.network_address, network.broadcast_address}
+    if addresses["lan_ip"] in reserved:
+        raise ValueError("lan_ip is a network or broadcast address")
     for field in ("dhcp_start", "dhcp_end"):
         if addresses[field] not in network:
             raise ValueError(f"{field} {addresses[field]} is outside {network}")
+        if addresses[field] in reserved:
+            raise ValueError(f"{field} is a network or broadcast address")
     if addresses["dhcp_start"] > addresses["dhcp_end"]:
         raise ValueError("dhcp_start is after dhcp_end")
+    if addresses["dhcp_start"] <= addresses["lan_ip"] <= addresses["dhcp_end"]:
+        raise ValueError("DHCP pool includes lan_ip")
     return RouterSettings(
         wan_if=wan_if,
         lan_if=lan_if,

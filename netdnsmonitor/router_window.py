@@ -536,12 +536,6 @@ class RouterWindowController:
             return False
         updates = router_updates(values)
 
-        router = getattr(self.app, "router", None)
-        if router is not None:
-            for key, attr in _ROUTER_ATTRS.items():
-                if key in updates:
-                    setattr(router, attr, updates[key])
-
         if not self.config_path:
             self.append_log("not saved: no config file path")
             return False
@@ -552,6 +546,12 @@ class RouterWindowController:
         except (OSError, ValueError, yaml.YAMLError) as exc:
             self.append_log(f"Error saving config: {type(exc).__name__}")
             return False
+        # A rejected save must not change the settings a privileged start uses.
+        router = getattr(self.app, "router", None)
+        if router is not None:
+            for key, attr in _ROUTER_ATTRS.items():
+                if key in updates:
+                    setattr(router, attr, updates[key])
         current = self._config()
         if isinstance(current, dict):
             current.update(updates)
@@ -617,7 +617,8 @@ class RouterWindowController:
         if router is None:
             self.append_log("Router module not loaded.")
             return
-        self.on_save_config(values)
+        if not self.on_save_config(values):
+            return
         self._router_action("Start router", router.start)
 
     def on_stop(self):

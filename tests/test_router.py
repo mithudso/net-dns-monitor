@@ -373,3 +373,19 @@ def test_a_raising_runner_does_not_strand_the_lock():
         router.start()
     router.run_fn = Recorder()
     assert router.start().startswith("ok:")
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"lan_ip": "192.168.10.0"},
+        {"lan_ip": "192.168.10.255"},
+        {"dhcp_start": "192.168.10.0"},
+        {"dhcp_end": "192.168.10.255"},
+        {"dhcp_start": "192.168.10.1"},
+        {"lan_ip": "192.168.10.150"},
+    ],
+)
+def test_reserved_or_router_addresses_cannot_be_leased(updates):
+    with pytest.raises(ValueError):
+        validate(**{**GOOD, **updates})

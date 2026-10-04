@@ -288,6 +288,8 @@ def make_throughput_meter(
     max_bytes: int = DEFAULT_MAX_BYTES,
     measure_fn: MeasureFn = default_measure,
     resolve_fn: ResolveFn = resolve_addresses,
+    *,
+    clock: Callable[[], float] = time.monotonic,
 ):
     """Returns meter(device) -> Optional[float] in Mbps.
 
@@ -302,35 +304,42 @@ def make_throughput_meter(
     # during the outage this feature serves, and remembering it would switch
     # benchmarking off for the rest of the session.
     cache: dict = {}
+    lookup_lock = threading.Lock()
 
     def meter(device: Optional[str]) -> Optional[float]:
         if not device or not host:
             return None
-        if "address" not in cache:
-            cache["address"] = resolve_fn(host, timeout)
-        # A failed lookup is passed on as None, not as "no addresses", so the
-        # measurement retries the lookup inside its own budget.
-        address = cache["address"] or None
+        deadline = clock() + timeout
         try:
+            # measure_all calls this concurrently. Waiting for the shared
+            # lookup costs the same budget as doing it ourselves.
+            remaining = deadline - clock()
+            if remaining <= 0 or not lookup_lock.acquire(timeout=remaining):
+                return None
+            try:
+                address = cache.get("address")
+                if not address:
+                    remaining = deadline - clock()
+                    if remaining <= 0:
+                        return None
+                    address = resolve_fn(host, remaining)
+                    if address:
+                        cache["address"] = address
+            finally:
+                lookup_lock.release()
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return None
+            # A failed lookup is not cached. The measurement can retry with
+            # only the unused budget, and a later round asks the resolver again.
             return measure_fn(
                 device,
                 host=host,
                 path=path,
                 port=port,
-                timeout=timeout,
+                timeout=remaining,
                 max_bytes=max_bytes,
-                address=address,
-            )
-        except TypeError:
-            # An injected fake that predates the `address` argument.
-            return measure_fn(
-                device,
-                host=host,
-                path=path,
-                port=port,
-                timeout=timeout,
-                max_bytes=max_bytes,
-                address=address,
+                address=address or None,
             )
         except Exception:  # noqa: BLE001 - a benchmark must never take down a caller
             return None

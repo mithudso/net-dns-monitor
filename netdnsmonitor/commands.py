@@ -54,7 +54,12 @@ CATALOG: list[DiagnosticCommand] = [
     DiagnosticCommand(
         "routes",
         [NETSTAT, "-rn", "-f", "inet"],
-        "the routing table -- which interface the default route points at",
+        "the IPv4 routing table -- which interface the default route points at",
+    ),
+    DiagnosticCommand(
+        "routes6",
+        [NETSTAT, "-rn", "-f", "inet6"],
+        "the IPv6 routing table -- compare with the IPv4 routes",
     ),
     DiagnosticCommand(
         "ifconfig",
@@ -84,17 +89,25 @@ CATALOG: list[DiagnosticCommand] = [
         "split-DNS overrides that beat the normal resolver order",
     ),
     DiagnosticCommand(
+        "resolve-native",
+        [DSCACHEUTIL, "-q", "host", "-a", "name", "{domain}"],
+        "look up one host through native macOS cache and resolution calls",
+        placeholder="domain",
+        notes="Compare with direct DNS queries; cached results can differ.",
+    ),
+    DiagnosticCommand(
         "dig",
         ["dig", "+short", "{domain}"],
-        "resolve one name through the system resolver",
+        "query a DNS server selected from /etc/resolv.conf",
         placeholder="domain",
+        notes="dig does not follow native macOS scoped DNS routing.",
     ),
     DiagnosticCommand(
         "dig-direct",
         ["dig", "+short", "@1.1.1.1", "{domain}"],
         "resolve one name bypassing the system resolver entirely",
         placeholder="domain",
-        notes="Differing from `dig` means the local resolver is the problem, not the network.",
+        notes="Different answers can reflect split DNS, VPN routing, server views or filtering.",
     ),
     # --- reachability ---
     DiagnosticCommand(
@@ -107,7 +120,7 @@ CATALOG: list[DiagnosticCommand] = [
     DiagnosticCommand(
         "ping-gw",
         ["ping", "-c", "3", "{gateway}"],
-        "whether the local gateway answers -- separates LAN from uplink faults",
+        "whether the local gateway answers ICMP on the selected route",
         placeholder="gateway",
         timeout=15.0,
     ),

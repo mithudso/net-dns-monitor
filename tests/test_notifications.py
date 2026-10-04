@@ -394,3 +394,12 @@ def test_email_notifier_closes_the_socket_when_quit_itself_fails():
     )
     assert notify("text")["delivered"] is True
     assert created[0].closed is True
+
+
+def test_slack_rejection_cannot_echo_webhook_credential():
+    secret = "https://hooks.example.test/services/private/token"
+    notify = make_slack_notifier(secret, post_fn=lambda *args: (200, "error " + secret))
+    result = notify("synthetic incident")
+    assert "error" in result
+    assert secret not in str(result)
+    assert "private/token" not in str(result)

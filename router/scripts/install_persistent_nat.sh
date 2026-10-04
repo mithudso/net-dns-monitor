@@ -58,6 +58,12 @@ cat <<EOF > "$TMP_PLIST"
     <array>
         <string>${HELPER_PATH}</string>
     </array>
+    <!-- This installer only runs after the operator explicitly overrides retirement. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NDM_ROUTER_FORCE</key>
+        <string>1</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>StartInterval</key>

@@ -181,21 +181,29 @@ def test_the_ping_never_runs_on_the_run_loop(tmp_path):
     UI and both other timers for most of every cycle throughout an outage.
     """
 
+    release = threading.Event()
+
     def slow_job():
-        time.sleep(10)
+        assert release.wait(timeout=5)
         return OK, (0, 0)
 
     app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
     app.state_machine = FakeStateMachine()
     app.ping_job = slow_job
 
-    started = time.monotonic()
-    app.ping_tick()
-    assert time.monotonic() - started < 1.0
+    try:
+        started = time.monotonic()
+        app.ping_tick()
+        assert time.monotonic() - started < 1.0
 
-    # The incident tick still runs while the ping is in flight.
-    app.tick()
-    assert "healthy" in app.title.lower()
+        # The incident tick still runs while the ping is in flight.
+        app.tick()
+        assert "healthy" in app.title.lower()
+    finally:
+        release.set()
+        if app._ping_thread is not None:
+            app._ping_thread.join(timeout=5)
+            assert not app._ping_thread.is_alive()
 
 
 def test_an_overlapping_heartbeat_is_skipped_not_stacked(tmp_path):
@@ -425,3 +433,56 @@ def test_build_ping_job_reports_failure_when_both_fail():
     assert calls == ["8.8.8.8", "1.1.1.1"]
     assert result["ok"] is False
     assert result["error"] == ("8.8.8.8: no reply from 8.8.8.8; 1.1.1.1: no reply from 1.1.1.1")
+
+
+def test_heartbeat_shares_one_budget_and_tries_every_fallback():
+    now = [0.0]
+    calls = []
+
+    def ping(host, timeout_seconds):
+        calls.append((host, timeout_seconds))
+        now[0] += timeout_seconds
+        return {"ok": False, "rtt_ms": None, "error": "no reply"}
+
+    config = {
+        "ping_host_v6": "::1",
+        "ping_host": "192.0.2.1",
+        "ping_fallback_host": "192.0.2.2",
+        "ping_timeout_seconds": 3.0,
+    }
+    result = app_module.ping_heartbeat(config, ping_fn=ping, clock=lambda: now[0])
+    assert calls == [("::1", 1.0), ("192.0.2.1", 1.0), ("192.0.2.2", 1.0)]
+    assert now[0] == 3.0
+    assert result["error"] == "::1: no reply; 192.0.2.1: no reply; 192.0.2.2: no reply"
+
+
+def test_a_fast_ping_failure_leaves_more_budget_for_the_fallback():
+    now = [0.0]
+    calls = []
+
+    def ping(host, timeout_seconds):
+        calls.append((host, timeout_seconds))
+        now[0] += 0.5 if host == "::1" else timeout_seconds
+        return {"ok": False, "rtt_ms": None, "error": "no reply"}
+
+    config = {"ping_host_v6": "::1", "ping_host": "192.0.2.1", "ping_timeout_seconds": 3.0}
+    app_module.ping_heartbeat(config, ping_fn=ping, clock=lambda: now[0])
+    assert calls == [("::1", 1.5), ("192.0.2.1", 2.5)]
+    assert now[0] == 3.0
+
+
+def test_an_exhausted_heartbeat_budget_names_the_unattempted_host():
+    now = [0.0]
+    asked = []
+
+    def ping(host, timeout_seconds):
+        asked.append(host)
+        now[0] += 4.0
+        return {"ok": False, "rtt_ms": None, "error": "no reply"}
+
+    config = {"ping_host_v6": "::1", "ping_host": "192.0.2.1", "ping_timeout_seconds": 3.0}
+    result = app_module.ping_heartbeat(config, ping_fn=ping, clock=lambda: now[0])
+    assert asked == ["::1"]
+    assert result["error"] == (
+        "::1: no reply; 192.0.2.1: not attempted; heartbeat deadline exceeded"
+    )

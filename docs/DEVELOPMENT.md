@@ -46,8 +46,10 @@ commit. The test suite is not a hook. The hook's `rev` must match the `ruff` pin
 
 `config.yaml` in the repo root is the **shipped default**, not a sample — two
 tests enforce that every key `load_config` reads appears in it with its real
-value, and that every key has a field in the settings window. There is no
-`config.example.yaml`; it was removed so the two could not drift apart.
+value, and that every key has a field in the settings window.
+`config.example.yaml` is a separate screenshot/demo fixture used by
+`scripts/appstore/shoot_screenshots.py`. It is not the source of runtime defaults;
+change `config.yaml` and `netdnsmonitor/config.py` together.
 
 Optional credentials, none of which belong in `config.yaml`:
 

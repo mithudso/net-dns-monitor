@@ -33,9 +33,9 @@ Flags, and what each one is load-bearing for:
            streamed; without it ping never returns and the worker thread leaks.
   -W <ms>  how long to wait for the reply, in milliseconds on BSD ping.
   -t <s>   ceiling on the whole run, in seconds. This is the flag that
-           actually bounds the call -- measured 3.08s against an unroutable
-           address with `-t 3` -- which is what keeps a failed ping inside its
-           own 5s cadence.
+           bounds the binary itself -- measured 3.08s against an unroutable
+           address with `-t 3`. The subprocess timeout enforces the exact
+           fractional budget shared by the heartbeat's fallback targets.
 
 Exit codes are the success signal, measured on this machine: 0 with a reply,
 2 when nothing replied, 68 when the name will not resolve.
@@ -133,9 +133,9 @@ def ping_once(
             str(hard_timeout),
             host,
         ]
-        # -t already bounds ping itself; this only covers a ping that
-        # ignores it or wedges before it arms.
-        run_timeout = hard_timeout + 2
+        # -t is rounded to whole seconds. Adding grace here would multiply
+        # the heartbeat's shared deadline across each fallback target.
+        run_timeout = timeout_seconds
 
     try:
         result = run_fn(

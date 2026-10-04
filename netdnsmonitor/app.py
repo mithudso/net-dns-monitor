@@ -637,12 +637,18 @@ def heartbeat_label(config: dict) -> str:
     return " / ".join(heartbeat_hosts(config))
 
 
-def ping_heartbeat(config: dict, ping_fn: Optional[Callable[..., dict]] = None) -> dict:
+def ping_heartbeat(
+    config: dict,
+    ping_fn: Optional[Callable[..., dict]] = None,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict:
     """One heartbeat reading: the first host in heartbeat_hosts that answers.
 
     IPv6 first, then IPv4. An IPv4-only network still reads as up from the
-    primary IPv4 host, and an IPv6-only one (App Review's NAT64 network) from the
-    first. Down only when every host failed, and the error then names each
+    primary IPv4 host. A native IPv6 reply can keep an IPv6-only link green,
+    but a NAT64-only test network may not route native IPv6 literals. Down
+    when no target replies within the budget; the error then names each
     host with its own reason. An optional fallback target reduces alerts caused
     by a single target dropping ICMP; a reply does not prove every path works.
     Looks `ping_once` up at call time, which is the seam the suite patches.
@@ -650,8 +656,15 @@ def ping_heartbeat(config: dict, ping_fn: Optional[Callable[..., dict]] = None) 
     hosts = heartbeat_hosts(config)
     failures = []
     fn = ping_once if ping_fn is None else ping_fn
-    for host in hosts:
-        result = fn(host, timeout_seconds=config["ping_timeout_seconds"])
+    deadline = clock() + config["ping_timeout_seconds"]
+    for i, host in enumerate(hosts):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            failures.append(f"{host}: not attempted; heartbeat deadline exceeded")
+            continue
+        # A blackholing first target must leave time to ask the others. Fast
+        # failures return their unused slice to the remaining targets.
+        result = fn(host, timeout_seconds=remaining / (len(hosts) - i))
         if result["ok"]:
             return {**result, "host": host}
         failures.append(f"{host}: {result['error'] or 'no reply'}")

@@ -1,9 +1,7 @@
 """Query a specific public DNS resolver directly, bypassing the system
-resolver configuration. This is the ladder's "resolve against a known-good
-public resolver" check: it isolates "your configured resolver is broken"
-from "DNS is broken everywhere" (e.g. a captive portal intercepting all
-DNS), which `socket.getaddrinfo` can't do since it always goes through
-whatever resolver the OS is currently configured to use.
+resolver configuration. The ladder compares a public DNS-server answer with
+native resolution. Different results are evidence of different resolver paths,
+not proof of where a fault lies: split DNS, VPNs and filtering can differ.
 """
 
 import secrets
@@ -15,15 +13,15 @@ SendRecvFn = Callable[[bytes, str, int, float], bytes]
 
 
 # Tried in order by query_public_dns_any: Cloudflare over IPv6, then over IPv4.
-# IPv6 first because App Review tests on an IPv6-only NAT64 network, where a
-# hard-coded AF_INET socket has no route and every query reads as "no reply".
+# Native IPv6 first, then IPv4. NAT64-only test networks do not necessarily
+# route a native IPv6 literal; retain the other family as a separate attempt.
 PUBLIC_RESOLVERS = ("2606:4700:4700::1111", "1.1.1.1")
 
 
 def _default_send_recv(packet: bytes, server: str, port: int, timeout: float) -> bytes:
     # The family comes from getaddrinfo rather than being fixed: an IPv6
-    # literal needs AF_INET6, and on a NAT64 network macOS answers an IPv4
-    # literal with a synthesized IPv6 address that only AF_INET6 can reach.
+    # literal needs AF_INET6. This can also use a synthesized candidate if the
+    # resolver supplies one; flags=0 is not a guarantee of NAT64 synthesis.
     family, socktype, proto, _canon, address = socket.getaddrinfo(
         server, port, 0, socket.SOCK_DGRAM
     )[0]
@@ -55,7 +53,109 @@ def _encode_query(domain: str, transaction_id: int) -> bytes:
             raise ValueError(f"DNS label must be 1-63 bytes, got {len(encoded)}")
         question += struct.pack("B", len(encoded)) + encoded
     question += b"\x00" + struct.pack(">HH", 1, 1)  # QTYPE=A, QCLASS=IN
+    if len(question) - 4 > 255:
+        raise ValueError("DNS name exceeds 255 wire bytes")
     return header + question
+
+
+def _decode_name(packet: bytes, offset: int) -> tuple[tuple[bytes, ...], int]:
+    """Read a bounded DNS name, including compression, without trusting offsets."""
+    labels = []
+    end = None
+    seen = set()
+    wire_length = 1
+    while True:
+        if offset >= len(packet) or offset in seen:
+            raise ValueError("invalid DNS name offset")
+        seen.add(offset)
+        length = packet[offset]
+        if length & 0xC0 == 0xC0:
+            if offset + 1 >= len(packet):
+                raise ValueError("incomplete DNS pointer")
+            target = ((length & 0x3F) << 8) | packet[offset + 1]
+            # RFC 1035 compression points to a prior occurrence. This also
+            # refuses pointer loops without recursive parsing.
+            if target >= offset:
+                raise ValueError("invalid DNS pointer")
+            if end is None:
+                end = offset + 2
+            offset = target
+            continue
+        if length & 0xC0:
+            raise ValueError("invalid DNS label")
+        offset += 1
+        if length == 0:
+            return tuple(labels), offset if end is None else end
+        if offset + length > len(packet):
+            raise ValueError("incomplete DNS label")
+        wire_length += length + 1
+        if wire_length > 255:
+            raise ValueError("DNS name exceeds 255 wire bytes")
+        labels.append(packet[offset : offset + length].lower())
+        offset += length
+
+
+def _answer_result(response: bytes, packet: bytes) -> Optional[bool]:
+    """True requires an A answer for this question or its bounded CNAME chain.
+
+    A valid negative answer is False. An incomplete, mismatched or malformed
+    message provides no trustworthy name-resolution result and stays unknown.
+    """
+    try:
+        transaction, flags, questions, answers, authority, additional = struct.unpack(
+            ">HHHHHH", response[:12]
+        )
+        if transaction != int.from_bytes(packet[:2], "big"):
+            return None
+        if not flags & 0x8000 or flags & 0x7800 or flags & 0x0200 or questions != 1:
+            return None
+        expected_name, _ = _decode_name(packet, 12)
+        question_name, offset = _decode_name(response, 12)
+        qtype, qclass = struct.unpack_from(">HH", response, offset)
+        if question_name != expected_name or (qtype, qclass) != (1, 1):
+            return None
+        offset += 4
+        aliases = {}
+        addresses = set()
+        for index in range(answers + authority + additional):
+            owner, offset = _decode_name(response, offset)
+            kind, record_class, _ttl, size = struct.unpack_from(">HHIH", response, offset)
+            offset += 10
+            end = offset + size
+            if end > len(response):
+                return None
+            if kind == 1 and record_class == 1:
+                if size != 4:
+                    return None
+                if index < answers:
+                    addresses.add(owner)
+            elif kind == 5 and record_class == 1:
+                alias, alias_end = _decode_name(response, offset)
+                if alias_end != end:
+                    return None
+                if index < answers:
+                    if owner in aliases and aliases[owner] != alias:
+                        return None
+                    aliases[owner] = alias
+            offset = end
+        if offset != len(response):
+            return None
+        if flags & 0x000F:
+            return False
+        name = expected_name
+        visited = set()
+        # At most one traversal per answer record. CNAME loops or conflicting
+        # CNAME/address data are not evidence that the name resolved.
+        while name not in visited:
+            visited.add(name)
+            if name in addresses:
+                return None if name in aliases else True
+            if name not in aliases:
+                return False
+            name = aliases[name]
+        return None
+    except (IndexError, TypeError, ValueError, struct.error):
+        return None
 
 
 def query_public_dns(
@@ -65,11 +165,10 @@ def query_public_dns(
     timeout: float = 2.0,
     send_recv_fn: Optional[SendRecvFn] = None,
 ) -> Optional[bool]:
-    """True if the resolver answered with RCODE 0, False for any other answer.
+    """True for a usable A answer, False for a valid reply without one.
 
-    None if no reply arrived (timeout, no route, UDP port 53 blocked): the
-    name was never tested, and reporting that as False would present an
-    unknown as a failed lookup.
+    None for transport failures and untrustworthy or truncated replies. An
+    unknown reply must not be presented as a tested, failed name.
     """
     send_recv_fn = send_recv_fn or _default_send_recv
     # The transaction id is the only thing standing between this check and a
@@ -90,21 +189,7 @@ def query_public_dns(
     except OSError:
         return None
 
-    # Validate the datagram is actually a reply to the query we just sent.
-    # Without this, any stray or spoofed packet -- including an all-zero
-    # 12-byte header, which has RCODE 0 -- reads as "the public resolver
-    # answered fine", destroying the exact resolver-vs-everywhere distinction
-    # this module exists to draw. A full header is 12 bytes; the old 4-byte
-    # floor accepted runts.
-    if len(response) < 12:
-        return False
-    if ((response[0] << 8) | response[1]) != transaction_id:
-        return False
-    if not response[2] & 0x80:  # QR bit clear: this is a query, not a response
-        return False
-
-    rcode = response[3] & 0x0F
-    return rcode == 0
+    return _answer_result(response, packet)
 
 
 def query_public_dns_any(

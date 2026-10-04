@@ -1,6 +1,132 @@
 import struct
 
+import pytest
+
 from netdnsmonitor.dns_query import PUBLIC_RESOLVERS, query_public_dns, query_public_dns_any
+
+
+def _wire_reply(packet, *, flags=0x8180, answers=b"", answer_count=0, question=None):
+    return (
+        struct.pack(">HHHHHH", int.from_bytes(packet[:2], "big"), flags, 1, answer_count, 0, 0)
+        + (packet[12:] if question is None else question)
+        + answers
+    )
+
+
+def _rr(owner, kind, data):
+    return owner + struct.pack(">HHIH", kind, 1, 60, len(data)) + data
+
+
+def test_noerror_without_an_address_is_not_successful_resolution():
+    assert query_public_dns("example.com", send_recv_fn=lambda p, *a: _wire_reply(p)) is False
+
+
+@pytest.mark.parametrize("flags", [0x8380, 0x8980])
+def test_truncated_or_wrong_opcode_reply_is_unknown(flags):
+    assert (
+        query_public_dns("example.com", send_recv_fn=lambda p, *a: _wire_reply(p, flags=flags))
+        is None
+    )
+
+
+def test_a_reply_for_another_question_is_unknown():
+    question = b"\x05other\x03com\x00\x00\x01\x00\x01"
+    assert (
+        query_public_dns(
+            "example.com", send_recv_fn=lambda p, *a: _wire_reply(p, question=question)
+        )
+        is None
+    )
+
+
+def test_an_advertised_answer_missing_from_the_packet_is_unknown():
+    assert (
+        query_public_dns("example.com", send_recv_fn=lambda p, *a: _wire_reply(p, answer_count=1))
+        is None
+    )
+
+
+def test_an_unrelated_a_answer_is_not_successful_resolution():
+    answer = _rr(b"\x05other\x03com\x00", 1, b"\x01\x02\x03\x04")
+    assert (
+        query_public_dns(
+            "example.com", send_recv_fn=lambda p, *a: _wire_reply(p, answers=answer, answer_count=1)
+        )
+        is False
+    )
+
+
+def test_a_compressed_cname_chain_to_an_a_answer_resolves():
+    alias = b"\x05alias\x03com\x00"
+    answers = _rr(b"\xc0\x0c", 5, alias) + _rr(alias, 1, b"\x01\x02\x03\x04")
+    assert (
+        query_public_dns(
+            "example.com",
+            send_recv_fn=lambda p, *a: _wire_reply(p, answers=answers, answer_count=2),
+        )
+        is True
+    )
+
+
+def test_a_compression_pointer_loop_is_unknown():
+    def reply(packet, *args):
+        offset = len(packet)
+        answer = _rr(struct.pack(">H", 0xC000 | offset), 1, b"\x01\x02\x03\x04")
+        return _wire_reply(packet, answers=answer, answer_count=1)
+
+    assert query_public_dns("example.com", send_recv_fn=reply) is None
+
+
+def test_a_cname_cycle_is_unknown():
+    alias = b"\x05alias\x03com\x00"
+    answers = _rr(b"\xc0\x0c", 5, alias) + _rr(alias, 5, b"\xc0\x0c")
+    assert (
+        query_public_dns(
+            "example.com",
+            send_recv_fn=lambda p, *a: _wire_reply(p, answers=answers, answer_count=2),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("size", [3, 5])
+def test_an_a_record_with_an_invalid_address_length_is_unknown(size):
+    answer = _rr(b"\xc0\x0c", 1, b"\x01" * size)
+    assert (
+        query_public_dns(
+            "example.com", send_recv_fn=lambda p, *a: _wire_reply(p, answers=answer, answer_count=1)
+        )
+        is None
+    )
+
+
+def test_question_name_case_does_not_change_a_valid_answer():
+    def reply(packet, *args):
+        question = packet[12:].replace(b"example", b"EXAMPLE")
+        answer = _rr(b"\xc0\x0c", 1, b"\x01\x02\x03\x04")
+        return _wire_reply(packet, answers=answer, answer_count=1, question=question)
+
+    assert query_public_dns("example.com", send_recv_fn=reply) is True
+
+
+def test_unusable_reply_from_one_public_resolver_allows_the_next():
+    asked = []
+
+    def reply(packet, server, *args):
+        asked.append(server)
+        if len(asked) == 1:
+            return _wire_reply(packet, flags=0x8380)
+        return _response(packet, 0)
+
+    assert query_public_dns_any("example.com", send_recv_fn=reply) is True
+    assert asked == list(PUBLIC_RESOLVERS)
+
+
+def test_an_overlong_whole_dns_name_is_not_sent():
+    sends = []
+    domain = ".".join(["x" * 63] * 4)
+    assert query_public_dns(domain, send_recv_fn=lambda p, *a: sends.append(p) or b"") is False
+    assert sends == []
 
 
 def _response(packet: bytes, rcode: int) -> bytes:
@@ -12,12 +138,10 @@ def _response(packet: bytes, rcode: int) -> bytes:
     literally any stray packet and the suite stayed green. A fake that models
     an impossible state hides exactly the bug it should catch.
     """
-    header = bytearray(12)
-    header[0] = packet[0]  # echo the query's transaction ID
-    header[1] = packet[1]
-    header[2] = 0x80  # QR=1: this is a response
-    header[3] = rcode & 0x0F
-    return bytes(header)
+    # A NOERROR header alone is not evidence that the name resolved. Include
+    # the matching question and an A answer, as a successful lookup requires.
+    answer = _rr(b"\xc0\x0c", 1, b"\x01\x02\x03\x04") if rcode == 0 else b""
+    return _wire_reply(packet, flags=0x8180 | rcode, answers=answer, answer_count=int(rcode == 0))
 
 
 def test_returns_true_when_rcode_is_zero():
@@ -91,7 +215,7 @@ def test_reply_for_a_different_query_is_rejected():
         reply[0] ^= 0xFF  # some other query's ID
         return bytes(reply)
 
-    assert query_public_dns("example.com", send_recv_fn=wrong_id) is False
+    assert query_public_dns("example.com", send_recv_fn=wrong_id) is None
 
 
 def test_datagram_without_the_response_bit_is_rejected():
@@ -100,14 +224,14 @@ def test_datagram_without_the_response_bit_is_rejected():
         reply[2] = 0x00  # QR clear: this is a query
         return bytes(reply)
 
-    assert query_public_dns("example.com", send_recv_fn=query_not_response) is False
+    assert query_public_dns("example.com", send_recv_fn=query_not_response) is None
 
 
 def test_runt_datagram_shorter_than_a_dns_header_is_rejected():
     """An all-zero 5-byte runt has RCODE 0 in the low nibble of byte 3, so the
     old `len(response) < 4` floor read it as a successful answer.
     """
-    assert query_public_dns("example.com", send_recv_fn=lambda *a: b"\x00" * 5) is False
+    assert query_public_dns("example.com", send_recv_fn=lambda *a: b"\x00" * 5) is None
 
 
 def test_undecodable_domain_returns_false_instead_of_raising():

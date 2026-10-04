@@ -196,3 +196,34 @@ def test_the_status_provider_is_passed_through(capsys):
     console = controller(status=lambda: "state: healthy")
     console.run_line(":status")
     assert "state: healthy" in capsys.readouterr().out
+
+
+def test_actual_main_queue_failure_releases_busy_without_appkit_write(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    def unavailable():
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "Foundation",
+        SimpleNamespace(NSOperationQueue=SimpleNamespace(mainQueue=unavailable)),
+    )
+    console = controller()
+    console._on_main_hook = None
+    console.text_view = object()
+    console._busy = True
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        console.run_line("echo hi")
+    assert console._busy is False
+
+
+def test_multiple_console_targets_share_one_objc_class_with_separate_controllers():
+    from netdnsmonitor.console_window import _make_target
+
+    first, second = object(), object()
+    a, b = _make_target(first), _make_target(second)
+    assert type(a) is type(b)
+    assert a._controller is first
+    assert b._controller is second
