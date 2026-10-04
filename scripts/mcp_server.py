@@ -3,11 +3,14 @@
 by semantic_indexer.py. See docs/MCP.md.
 """
 
+import argparse
+import asyncio
 import sys
 
 from semantic_indexer import REQUIREMENTS_HINT, open_collection
 
 MAX_RESULTS = 20
+EXPECTED_TOOLS = frozenset({"search_codebase"})
 
 
 def search(query: str, n_results: int, open_fn=open_collection) -> str:
@@ -43,15 +46,48 @@ def search_codebase(query: str, n_results: int = 3) -> str:
     return search(query, n_results)
 
 
-def main() -> int:
-    try:
-        # FastMCP is packaged separately from the low-level MCP SDK in current releases.
-        from fastmcp import FastMCP
-    except ImportError as exc:
-        print(f"{exc.name} is not installed; {REQUIREMENTS_HINT}", file=sys.stderr)
-        return 1
-    mcp = FastMCP("Local Semantic Search")
+def build_server(fastmcp_cls):
+    mcp = fastmcp_cls("Local Semantic Search")
     mcp.tool()(search_codebase)
+    return mcp
+
+
+def self_test(mcp) -> int:
+    """Check the registered tool set without serving, opening the index or
+    contacting Ollama, so the check is safe while indexing is paused."""
+    try:
+        names = {tool.name for tool in asyncio.run(mcp.list_tools())}
+    except Exception as e:  # noqa: BLE001 - report the failure as data
+        print(f"self-test failed: could not list tools ({type(e).__name__})", file=sys.stderr)
+        return 1
+    if names != EXPECTED_TOOLS:
+        print(
+            f"self-test failed: tools {sorted(names)}, expected {sorted(EXPECTED_TOOLS)}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"self-test ok: {len(names)} tool(s): {', '.join(sorted(names))}")
+    return 0
+
+
+def main(argv: list[str] | None = None, fastmcp_cls=None) -> int:
+    parser = argparse.ArgumentParser(description="Local semantic search MCP server (stdio).")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="build the server, verify its tool list and exit without serving",
+    )
+    args = parser.parse_args(argv)
+    if fastmcp_cls is None:
+        try:
+            # FastMCP is packaged separately from the low-level MCP SDK in current releases.
+            from fastmcp import FastMCP as fastmcp_cls
+        except ImportError as exc:
+            print(f"{exc.name} is not installed; {REQUIREMENTS_HINT}", file=sys.stderr)
+            return 1
+    mcp = build_server(fastmcp_cls)
+    if args.self_test:
+        return self_test(mcp)
     mcp.run()
     return 0
 

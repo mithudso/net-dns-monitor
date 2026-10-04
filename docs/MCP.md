@@ -17,6 +17,11 @@ Developer dependencies are pinned separately in `requirements-index.txt`.
 |---|---|---|
 | `search_codebase` | `query: str`, `n_results: int = 3` (capped at 20) | Matching source chunks and their file paths, or an unavailable-index error. |
 
+`python3 scripts/mcp_server.py --self-test` builds the server, checks that it
+registers exactly that tool and exits 0, or exits 1 naming the mismatch. It does
+not serve, open the index or contact Ollama, so it is safe while indexing is
+paused. It still needs `fastmcp` from `requirements-index.txt`.
+
 `scripts/query_index.py` is the shell counterpart. Both query paths generate an
 embedding; they are not purely static reads. The server does not provide remote
 HTTP authentication because its transport is local stdio. Configure access in

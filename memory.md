@@ -153,3 +153,13 @@ rotation script with six tests, test counts (2209), index/overview/SCRIPTS rows,
 a regenerated static dossier (223 cards) and the ledger re-audit section.
 Verification: Ruff lint/format clean, 2209 tests pass, `check_docs.py
 --collect-tests` passes, `git diff --check` clean. Remaining: commit and push.
+
+## v9 - 2026-10-04 - MCP self-test and Dependabot PR #28
+
+Delta: 1
+
+Owner answers to v8 questions: add the MCP `--self-test` flag; resolve PR #28's
+conflicts and merge it (this replaced the earlier "close it" answer).
+`scripts/mcp_server.py --self-test` lists tools through FastMCP `list_tools()`
+(present in both the local 3.2.4 and the pinned 4.0.10) without serving; three
+offline tests use a fake FastMCP. Tests: 2212.

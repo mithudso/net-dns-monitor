@@ -53,6 +53,7 @@ it would start them in every session), `scripts/watch_and_index.sh`
 Not rerun: code-deep-optimizer and the full crawl. The v7 pass converged today
 and no application source changed since. The static dossier was regenerated.
 
-Residual (minor): `scripts/mcp_server.py` has no `--self-test` flag, so the
-checklist's MCP boot check cannot run without starting the server.
+`scripts/mcp_server.py --self-test` now runs the checklist's MCP boot check: it
+builds the server and compares its tool list with `docs/MCP.md` (one tool,
+`search_codebase`) without serving or opening the index.
 `memory.md` lists v5 before v4; journals record history and are not reordered.

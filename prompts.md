@@ -65,3 +65,13 @@ Delta: 1
 Prompt:
 
 > Run the repo-boostrapper skill on this repo.
+
+## v9 - 2026-10-04 - MCP self-test and Dependabot PR #28
+
+Delta: 1
+
+Prompt:
+
+> 1.Close it. 2. Add flag.
+
+> ALso resolve all the conflicts for the https://github.com/mithudso/net-dns-monitor/pull/28 merge and

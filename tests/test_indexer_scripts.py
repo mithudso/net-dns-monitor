@@ -187,3 +187,49 @@ def test_n_results_is_clamped_to_a_sane_range():
 
 def test_results_are_rendered_with_their_source():
     assert "--- SOURCE: a.py ---" in mcp_server.search("q", 3, FakeCollection)
+
+
+class FakeFastMCP:
+    """Records registered tools; fails the test if anything tries to serve."""
+
+    def __init__(self, name, tools=None):
+        self.name = name
+        self.tools = [] if tools is None else tools
+
+    def tool(self):
+        def register(fn):
+            self.tools.append(fn)
+            return fn
+
+        return register
+
+    async def list_tools(self):
+        return [type("Tool", (), {"name": fn.__name__})() for fn in self.tools]
+
+    def run(self):
+        raise AssertionError("self-test must not start the server")
+
+
+def test_self_test_lists_tools_without_serving(capsys):
+    assert mcp_server.main(["--self-test"], fastmcp_cls=FakeFastMCP) == 0
+    assert "self-test ok: 1 tool(s): search_codebase" in capsys.readouterr().out
+
+
+def test_self_test_fails_on_an_unexpected_tool_set(capsys):
+    class Extra(FakeFastMCP):
+        def __init__(self, name):
+            super().__init__(name, tools=[lambda: None])
+
+    assert mcp_server.main(["--self-test"], fastmcp_cls=Extra) == 1
+    assert "expected ['search_codebase']" in capsys.readouterr().err
+
+
+def test_self_test_reports_a_listing_failure_by_class_name(capsys):
+    class Broken(FakeFastMCP):
+        async def list_tools(self):
+            raise RuntimeError("/Users/someone/secret")
+
+    assert mcp_server.main(["--self-test"], fastmcp_cls=Broken) == 1
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err
+    assert "/Users/someone" not in err
