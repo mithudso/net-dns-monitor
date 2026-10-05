@@ -286,9 +286,9 @@ Uploads so far (2026-09-27):
   answer `UNAVAILABLE_IN_APP_STORE_BUILD`; the window is the left column alone
   (`DashboardWindow(log_column=False)`). Needs build 3 and retaken screenshots.
 
-- The NAT LaunchDaemon on this Mac still runs a user-writable script as root
-  until `sudo router/scripts/install_persistent_nat.sh` is re-run (CLAUDE.md,
-  Known-unverified areas).
+- Resolved 2026-10-05: the retired router stack's LaunchDaemons, including the NAT
+  daemon that ran a user-writable script as root, were removed from this Mac
+  (CLAUDE.md, Known-unverified areas). Do not re-run `install_persistent_nat.sh`.
 - `net-dns-monitor/net-dns-monitor/` in the main checkout is a stock Xcode
   SwiftUI template created on 2026-09-15, untracked, with its own `.git`. It
   is not part of this build; delete it or move it out of the repository.

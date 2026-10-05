@@ -220,13 +220,15 @@ comment that is wrong about why is as expensive as code that is wrong.
   the `com.custom.router.nat` LaunchDaemon. Both want UDP 67 and
   `net.inet.ip.forwarding`, so `Router.start` and `Router.stop` refuse while
   `/Library/LaunchDaemons/com.custom.router.nat.plist` exists.
-- **The NAT LaunchDaemon installed on the owner's machine runs a user-writable script
-  as root.** Its `ProgramArguments` still points at `router/scripts/enable_nat.sh` in
-  the main checkout (`~/dev/net-dns-monitor`), and launchd runs it every 60s. The fixed
-  `router/scripts/install_persistent_nat.sh` installs a root-owned copy at
-  `/Library/PrivilegedHelperTools/net-dns-monitor/enable_nat.sh` and points the daemon
-  there. Until the owner re-runs that installer as root, any process running as the
-  checkout's owner can edit the script and have it run as root.
+- **The router stack's LaunchDaemons were removed from the owner's machine on
+  2026-10-05.** `com.custom.router.nat` (which ran the user-writable
+  `router/scripts/enable_nat.sh` as root every 60s), `com.local.pf-http80`,
+  `homebrew.mxcl.dnsmasq` and `homebrew.mxcl.unbound` were booted out and their plists
+  moved to `/Users/mitch/Archive/old-network-2026-09-22/system/retired-live/LaunchDaemons/`,
+  where that archive's `restore.sh` can put them back. Do not re-run
+  `router/scripts/install_persistent_nat.sh` to "fix" the old privilege-escalation
+  finding: the stack is retired (see `router/docs/ROUTER.md`) and the installer would
+  start a second DHCP server on the 192.168.1.0/24 LAN.
 - **The Mac App Store build is a reduced edition.** Release signing first ran
   with real certificates on 2026-09-27. `docs/APP_STORE_CHECKLIST.md` records
   submitted build 1.0 (3) from `395c14e`; `docs/APP_STORE_REVIEW_RESPONSE.md`
