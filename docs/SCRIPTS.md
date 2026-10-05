@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2529 tests; the whole decision surface
+python3 -m pytest -q          # 2532 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2529 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2529 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2532 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -856,7 +856,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2529 passed
+python3 -m pytest -q            # 2532 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -914,7 +914,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 18 | `test_alert.py` |
 | 25 | `test_app_ping_wiring.py` |
 | 27 | `test_indexer_scripts.py` |
-| 31 | `test_interface_probe.py` |
+| 32 | `test_interface_probe.py` |
 | 16 | `test_resolution_prober.py` |
 | 19 | `test_console_window.py` |
 | 15 | `test_escalation.py` |
@@ -923,7 +923,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 27 | `test_credentials.py` |
 | 13 | `test_app_console_wiring.py` |
 | 14 | `test_log_watcher.py` |
-| 15 | `test_prober.py` |
+| 17 | `test_prober.py` |
 | 12 | `test_flap_gate.py` |
 | 12 | `test_query_log.py` |
 | 36 | `test_dns_query.py` |
@@ -944,7 +944,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 3 | `test_record_demo.py` |
 | 7 | `test_sandbox_probe.py` |
 | 31 | `test_shell_scripts.py` |
-| **2529** | **total** |
+| **2532** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

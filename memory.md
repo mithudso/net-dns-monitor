@@ -209,3 +209,12 @@ tooltip. The 62-key report was the Sep 17 `dist/` build (predates the
 changed-keys comparison); current code finds 0 changes against the real config.
 Verification: ruff clean, 2529 tests pass. Remaining: commit, push, CI; owner
 runs the sudo commands to disable boot-time dnsmasq/bootpd/NAT daemons.
+
+## v12 - 2026-10-05 - Connection refused counts as reachable
+
+Delta: 1
+
+`prober.default_connect` and `interface_probe.default_bound_connect` return True
+on ConnectionRefusedError (an RST is the target answering). Verified read-only:
+`launchctl print-disabled system` shows homebrew.mxcl.dnsmasq, com.apple.bootpd
+and com.custom.router.nat disabled; no dnsmasq/bootpd process. 2532 tests pass.

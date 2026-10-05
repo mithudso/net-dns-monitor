@@ -1,5 +1,5 @@
 # net-dns-monitor — static and optional semantic retrieval maps
-> Source: /Users/mitch/dev/net-dns-monitor · remote URL omitted @ 7884098 dirty
+> Source: /Users/mitch/dev/net-dns-monitor · remote URL omitted @ 3e8b803 dirty
 > Generated: 2026-10-05 by crawl-repo-to-llms v1.2.0 (partial static adapter)
 > Census: 227 enumerated / 0 deep-read / 227 shallow · partial: census only; no deep cards or executable inventory
 

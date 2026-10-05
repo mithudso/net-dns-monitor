@@ -20,6 +20,10 @@ def default_connect(host: str, port: int, timeout: float) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
+    except ConnectionRefusedError:
+        # An RST is the target answering: the path to it works, and nothing
+        # listening on that port is a fact about the target, not the network.
+        return True
     except OSError:
         return False
 

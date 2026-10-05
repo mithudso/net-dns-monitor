@@ -106,8 +106,11 @@ credentials; `netdns ladder` exits 3 for a partial outcome; the app router
 starts bootpd with `launchctl load -F`, so DHCP never stays enabled across a
 reboot; the Settings note lists four keys plus a count and keeps its full text
 in a tooltip. The "62 keys need a restart" report came from a Sep 17 build that
-predates the changed-keys comparison. The connection-refused question is still
-open, and the indexer watcher stays running.
+predates the changed-keys comparison. A refused TCP connection now counts as
+the target answering, so the link is reachable, in both `prober.default_connect`
+and `interface_probe.default_bound_connect`. The indexer watcher stays running.
+The owner disabled the boot-time `homebrew.mxcl.dnsmasq`, `com.apple.bootpd`
+and `com.custom.router.nat` services, so no DHCP server starts at boot.
 
 | Location | Question |
 |---|---|

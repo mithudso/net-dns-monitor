@@ -465,3 +465,13 @@ def test_one_none_does_not_hide_a_measured_failure():
         TARGETS, timeout=2.0, connect_fn=lambda d, h, p, t: next(answers), index_fn=lambda d: 15
     )
     assert probe("en0") is False
+
+
+def test_a_refused_connection_through_the_interface_counts_as_reachable(monkeypatch):
+    # A TCP RST is the target answering: the packet went out through this
+    # interface and the reply came back. Nothing listening on the port is a
+    # fact about the target, not the link -- a router that answers but runs no
+    # DNS over TCP read as a dead link.
+    _fake_socket(monkeypatch, connect=ConnectionRefusedError(errno.ECONNREFUSED, "refused"))
+    probe = make_interface_prober([("192.168.1.1", 53)], timeout=1.0, index_fn=lambda d: 7)
+    assert probe("en0") is True

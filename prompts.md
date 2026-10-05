@@ -95,3 +95,11 @@ Delta: 1
 Prompt:
 
 > 1. I don't understand. 2. Yes. 3. It should exit with a partial status code. 4. Yes, the dhcp service should not be on by default my network issues are more resolved nowm dhcp server should be opt in. 5. (screenshot of the Settings status label: "Saved. These need a restart to take effect (62): control_domain, domain_learn_interval_seconds, domains" clipped) 6. leave it.
+
+## v12 - 2026-10-05 - Connection refused counts as reachable
+
+Delta: 1
+
+Prompt:
+
+> 1. Yes, because it received a response. 2. I ran the sudo command.

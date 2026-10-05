@@ -94,7 +94,7 @@ report, because someone will act on it.
 ## Commands — before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2529 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2532 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in

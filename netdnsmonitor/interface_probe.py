@@ -107,6 +107,11 @@ def default_bound_connect(
             sock.settimeout(remaining / (len(candidates) - i))
             sock.connect(address)
             return True
+        except ConnectionRefusedError:
+            # An RST is the target answering through this interface. A router
+            # that answers but runs no DNS over TCP is a working link, not a
+            # dead one.
+            return True
         except OSError as exc:
             # ENXIO from the bind is the interface vanishing between the index
             # lookup and here: an unplugged adapter, not a dead link.

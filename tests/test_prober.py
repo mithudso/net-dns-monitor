@@ -292,3 +292,29 @@ def test_a_domains_callable_is_re_read_on_every_probe():
     current.append("b.example")
     prober()
     assert seen == ["a.example", "a.example", "b.example"]
+
+
+def test_a_refused_connection_counts_as_the_target_answering(monkeypatch):
+    # The same rule as interface_probe: an RST came back from the target, so the
+    # path to it works even though nothing listens on that port.
+    import socket
+
+    from netdnsmonitor import prober
+
+    def refuse(address, timeout=None):
+        raise ConnectionRefusedError(61, "Connection refused")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    assert prober.default_connect("192.168.1.1", 53, 1.0) is True
+
+
+def test_a_timed_out_connection_is_still_unreachable(monkeypatch):
+    import socket
+
+    from netdnsmonitor import prober
+
+    def timeout(address, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr(socket, "create_connection", timeout)
+    assert prober.default_connect("192.168.1.1", 53, 1.0) is False
