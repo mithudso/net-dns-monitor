@@ -328,3 +328,30 @@ def test_main_runs_the_app_it_built(tmp_path):
     )
 
     assert ran == [True]
+
+
+def test_saving_the_window_unchanged_names_no_restart_keys(tmp_path):
+    # The owner saw "These need a restart to take effect (62)" after a save.
+    # The window shows the file's values as text (paths with ~, lists joined),
+    # and the note compared that raw text with the running config's normalised
+    # values, so every path and list looked changed.
+    from netdnsmonitor.settings_window import FIELDS, format_field
+
+    app = build_app(tmp_path, capabilities=DIRECT)
+    shown = app._load_config(app.config_path)
+    values = {key: format_field(kind, shown.get(key)) for key, _label, kind in FIELDS}
+    note = app._save_settings(values)
+    assert "need a restart" not in note, note
+    note = app._save_settings(values)
+    assert "need a restart" not in note, note
+
+
+def test_changing_one_restart_key_names_only_that_key(tmp_path):
+    from netdnsmonitor.settings_window import FIELDS, format_field
+
+    app = build_app(tmp_path, capabilities=DIRECT)
+    shown = app._load_config(app.config_path)
+    values = {key: format_field(kind, shown.get(key)) for key, _label, kind in FIELDS}
+    values["failure_threshold"] = str(shown["failure_threshold"] + 2)
+    note = app._save_settings(values)
+    assert "(1): failure_threshold" in note, note

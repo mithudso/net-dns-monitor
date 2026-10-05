@@ -189,3 +189,23 @@ retracted except 6 BLOCKED owner decisions listed in
 Verification: ruff clean, 2521 tests pass, check_docs passes, bash -n clean,
 notification leak recorder 0. Status CONVERGED (not CLEAN: BLOCKED rows remain).
 Remaining: commit, push, CI.
+
+## v11 - 2026-10-05 - Owner decisions on the optimizer's open questions
+
+Delta: 1
+
+Active task: TASK-416. Strip credentials from console children; `netdns ladder`
+partial exit code; app router start uses `launchctl load -F` so bootpd is never
+persistently enabled (DHCP opt-in); Settings restart note compares normalized
+values (screenshot showed 62 false "restart" keys) and fits its label. Decision 1
+(connection refused = reachable) awaits an explanation to the owner. Live boot-time
+DHCP services (homebrew.mxcl.dnsmasq, com.apple.bootpd overrides enabled) need sudo;
+commands go to the owner.
+
+Completed (v11): console strips credentials; `netdns ladder` exits 3 for
+partial/unknown/NOT_AUTOMATED (1 still wins for a hard failure); router start uses
+`launchctl load -F`; Settings note names 4 keys plus a count, bigger label,
+tooltip. The 62-key report was the Sep 17 `dist/` build (predates the
+changed-keys comparison); current code finds 0 changes against the real config.
+Verification: ruff clean, 2529 tests pass. Remaining: commit, push, CI; owner
+runs the sudo commands to disable boot-time dnsmasq/bootpd/NAT daemons.

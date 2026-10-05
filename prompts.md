@@ -87,3 +87,11 @@ Prompt:
 > run the code deep optimizer again
 
 > I keep getting these notifications even though my network is fine: (screenshot: "Net-DNS-Monitor: network failed -- Ping to 2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1 failed -- no reply from 8.8.8.8")
+
+## v11 - 2026-10-05 - Owner decisions on the optimizer's open questions
+
+Delta: 1
+
+Prompt:
+
+> 1. I don't understand. 2. Yes. 3. It should exit with a partial status code. 4. Yes, the dhcp service should not be on by default my network issues are more resolved nowm dhcp server should be opt in. 5. (screenshot of the Settings status label: "Saved. These need a restart to take effect (62): control_domain, domain_learn_interval_seconds, domains" clipped) 6. leave it.

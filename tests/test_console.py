@@ -509,6 +509,20 @@ def test_running_from_source_passes_the_environment_through_unchanged():
     assert env is not environ
 
 
+def test_console_commands_never_inherit_the_apps_credentials():
+    # `env` in the console would print them, and a backgrounded command would
+    # keep them for its whole life. The app reads them from the Keychain, so
+    # nothing a console command needs is lost.
+    environ = {
+        "ANTHROPIC_API_KEY": "sk-ant-secret",
+        "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T/B/x",
+        "SMTP_PASSWORD": "hunter2",
+        "PATH": "/usr/bin",
+    }
+    for frozen in (None, "macosx_app"):
+        assert child_env(environ, frozen) == {"PATH": "/usr/bin"}
+
+
 def test_output_survives_a_child_that_outlives_the_shell(tmp_path):
     """`sh -c 'sleep 20' & echo started` exits at once, but the grandchild keeps
     the pipe's write end open. A reader that waits for a full block or EOF sits

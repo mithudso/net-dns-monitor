@@ -101,6 +101,14 @@ Grouped by theme:
 
 ## BLOCKED (owner decision)
 
+Owner answers on 2026-10-05 (TASK-416): the console now strips the three
+credentials; `netdns ladder` exits 3 for a partial outcome; the app router
+starts bootpd with `launchctl load -F`, so DHCP never stays enabled across a
+reboot; the Settings note lists four keys plus a count and keeps its full text
+in a tooltip. The "62 keys need a restart" report came from a Sep 17 build that
+predates the changed-keys comparison. The connection-refused question is still
+open, and the indexer watcher stays running.
+
 | Location | Question |
 |---|---|
 | `netdnsmonitor/interface_probe.py:93` | Should a TCP RST (connection refused) through the interface count as "reachable"? `prober.default_connect` treats refusal as a failure, so the two stay consistent today. |

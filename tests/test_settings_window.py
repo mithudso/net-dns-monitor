@@ -888,3 +888,15 @@ def test_hidden_keys_get_no_field_and_are_never_collected():
     assert "ping_host" in window.fields
     window.load({"ping_host": "1.1.1.1"})
     assert window.changed_keys({"ping_host": "1.1.1.1"}) == set()
+
+
+def test_a_long_restart_note_names_a_few_keys_and_counts_the_rest():
+    # The status label holds about three lines; a note listing 62 keys was cut
+    # off after the second, so the restart instruction never showed.
+    restart_keys = sorted(NEEDS_RESTART)[:10]
+    note = restart_note({key: 1 for key in restart_keys})
+    assert "(10)" in note
+    assert "and 6 more" in note
+    assert all(key in note for key in restart_keys[:4])
+    assert restart_keys[4] not in note
+    assert note.rstrip().endswith(SERVICE_RESTART_HINT)

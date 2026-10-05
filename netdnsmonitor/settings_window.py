@@ -590,6 +590,9 @@ STORE_RESTART_HINT = "Quit and reopen Net-DNS-Monitor."
 DEFAULT_CONFIG_PATH_DISPLAY = "~/.config/net-dns-monitor/config.yaml"
 
 
+RESTART_KEYS_SHOWN = 4
+
+
 def restart_note(
     updates: dict,
     previous: Optional[dict] = None,
@@ -613,11 +616,12 @@ def restart_note(
     pending = sorted(key for key in keys if key in NEEDS_RESTART)
     if not pending:
         return "Saved. These take effect immediately."
-    return (
-        "Saved. These need a restart to take effect "
-        f"({len(pending)}): {', '.join(pending)}.\n"
-        f"{restart_hint}"
-    )
+    # The status label holds about three lines. A full list pushed the restart
+    # instruction out of view, which is the one line that matters.
+    named = ", ".join(pending[:RESTART_KEYS_SHOWN])
+    if len(pending) > RESTART_KEYS_SHOWN:
+        named += f" and {len(pending) - RESTART_KEYS_SHOWN} more"
+    return f"Saved. These need a restart to take effect ({len(pending)}): {named}.\n{restart_hint}"
 
 
 def settings_notice(
@@ -760,7 +764,11 @@ class SettingsWindow:
             button.setKeyEquivalent_(key if action == "save" else "")
             outer.addSubview_(button)
 
-        self.status = _label(AppKit, AppKit.NSMakeRect(16, 16, 260, 30), "", 9.5)
+        # Fills the footer up to the buttons, three lines tall. A long message
+        # still keeps its full text in the tooltip (see set_status).
+        self.status = _label(
+            AppKit, AppKit.NSMakeRect(16, 6, WINDOW_WIDTH - 32 - 2 * 104 - 16, 44), "", 9.5
+        )
         outer.addSubview_(self.status)
 
     def _handle(self, sender):
@@ -771,16 +779,16 @@ class SettingsWindow:
             except ValueError as exc:
                 # A parse error names the offending field. Reported in the window
                 # rather than raised into an AppKit callback, where nobody sees it.
-                self.status.setStringValue_(f"Not saved -- {exc}")
+                self.set_status(f"Not saved -- {exc}")
                 return
             except Exception as exc:  # noqa: BLE001 - never raise into AppKit
                 # Anything else -- a full disk, a read-only config directory. The
                 # narrow ValueError catch let those escape into the ObjC callback,
                 # where the click looked like it did nothing at all.
                 traceback.print_exc()
-                self.status.setStringValue_(f"Not saved -- {type(exc).__name__}: {exc}")
+                self.set_status(f"Not saved -- {type(exc).__name__}: {exc}")
                 return
-            self.status.setStringValue_(message)
+            self.set_status(message)
         elif action == "reload":
             # load_config raises on a malformed or refused file (YAMLError,
             # ValueError, UnicodeDecodeError). The status used to say "Reloaded
@@ -790,9 +798,9 @@ class SettingsWindow:
                 message = self.on_save(None)
             except Exception as exc:  # noqa: BLE001 - never raise into AppKit
                 traceback.print_exc()
-                self.status.setStringValue_(f"Not reloaded -- {type(exc).__name__}: {exc}")
+                self.set_status(f"Not reloaded -- {type(exc).__name__}: {exc}")
                 return
-            self.status.setStringValue_(
+            self.set_status(
                 message if isinstance(message, str) and message else "Reloaded from disk."
             )
 
@@ -816,3 +824,5 @@ class SettingsWindow:
 
     def set_status(self, text: str):
         self.status.setStringValue_(text)
+        # The label can still clip a long validation message; hovering shows it whole.
+        self.status.setToolTip_(text)

@@ -320,6 +320,14 @@
     "provenance": "[src: docs/caching-and-optimization.md#L1]"
   },
   {
+    "path": "docs/code-deep-optimizer-2026-10-05.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: docs/code-deep-optimizer-2026-10-05.md#L1]"
+  },
+  {
     "path": "docs/codebase-overview.md",
     "role": "docs",
     "importance": "ordinary",

@@ -507,3 +507,14 @@ def test_start_script_prints_a_marker_for_each_readback():
 def test_the_root_scripts_parse_as_posix_sh(script):
     result = subprocess.run(["/bin/sh", "-n", "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_starting_the_router_never_enables_dhcp_at_boot():
+    # `load -w` wrote an enabled override, so bootpd answered DHCP on every
+    # boot after one Start, router_enabled or not. DHCP is opt-in: Start loads
+    # it for this session only, and Stop writes the disabled override back.
+    start = start_script(validate(**GOOD))
+    assert "launchctl load -w" not in start
+    assert "launchctl unload -w" not in start
+    assert f"/bin/launchctl load -F {router_module.BOOTPS_DAEMON}" in start
+    assert f"/bin/launchctl unload -w {router_module.BOOTPS_DAEMON}" in stop_script()

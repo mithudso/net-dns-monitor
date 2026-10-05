@@ -31,6 +31,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from netdnsmonitor.credentials import NAMES as CREDENTIAL_NAMES
+
 PROMPT = "netdns> "
 
 # Long enough for `ping -c 5` or a slow `dig`, short enough that a typo like a
@@ -247,11 +249,13 @@ FROZEN_ONLY_ENVIRONMENT = (
 def child_env(environ: Mapping[str, str], frozen: Optional[str]) -> dict:
     """The environment a console command runs with.
 
-    Unchanged when running from source. Inside the built app, the variables the
-    launcher set for its own interpreter are removed, so a command gets the
-    user's environment and not the bundle's.
+    The app's credentials are always removed: `env` would print them into the
+    window, and a backgrounded command would carry them for its whole life. The
+    app reads them from the Keychain, so no console command needs them. Inside
+    the built app, the variables the launcher set for its own interpreter are
+    removed too, so a command gets the user's environment and not the bundle's.
     """
-    env = dict(environ)
+    env = {name: value for name, value in environ.items() if name not in CREDENTIAL_NAMES}
     if frozen:
         for name in FROZEN_ONLY_ENVIRONMENT:
             env.pop(name, None)

@@ -1,7 +1,7 @@
 # net-dns-monitor — complete source census with shallow cards
-> Source: /Users/mitch/dev/net-dns-monitor · remote URL omitted @ 6b1280c dirty
+> Source: /Users/mitch/dev/net-dns-monitor · remote URL omitted @ 7884098 dirty
 > Generated: 2026-10-05 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 226 enumerated / 0 deep-read / 226 shallow · partial: census only; no deep cards or executable inventory
+> Census: 227 enumerated / 0 deep-read / 227 shallow · partial: census only; no deep cards or executable inventory
 
 - .editorconfig | source | ordinary | shallow. [src: .editorconfig#L1] Role and importance are retrieval hints. [asserted]
 - .env.example | source | ordinary | shallow. [src: .env.example#L1] Role and importance are retrieval hints. [asserted]
@@ -43,6 +43,7 @@
 - docs/SECURITY.md | docs | high | shallow. [src: docs/SECURITY.md#L1] Role and importance are retrieval hints. [asserted]
 - docs/TESTING.md | docs | high | shallow. [src: docs/TESTING.md#L1] Role and importance are retrieval hints. [asserted]
 - docs/caching-and-optimization.md | docs | high | shallow. [src: docs/caching-and-optimization.md#L1] Role and importance are retrieval hints. [asserted]
+- docs/code-deep-optimizer-2026-10-05.md | docs | ordinary | shallow. [src: docs/code-deep-optimizer-2026-10-05.md#L1] Role and importance are retrieval hints. [asserted]
 - docs/codebase-overview.md | docs | ordinary | shallow. [src: docs/codebase-overview.md#L1] Role and importance are retrieval hints. [asserted]
 - docs/external-calls.md | docs | ordinary | shallow. [src: docs/external-calls.md#L1] Role and importance are retrieval hints. [asserted]
 - docs/high_signal_file_index.json | source | ordinary | shallow. [src: docs/high_signal_file_index.json#L1] Role and importance are retrieval hints. [asserted]

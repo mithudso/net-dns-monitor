@@ -52,7 +52,14 @@ ENABLED_LABELS = {True: "on", False: "OFF"}
 # Outcomes that mean a ladder step did not do what it is for. `cannot renew:`
 # is a lease request that never happened, which is a failure however politely
 # it is worded.
-LADDER_FAILURE_PREFIXES = ("failed:", "NEEDS_PRIVILEGE:", "partial:", "cannot renew:")
+LADDER_FAILURE_PREFIXES = ("failed:", "NEEDS_PRIVILEGE:", "cannot renew:")
+# Outcomes where a step did part of its job, or cannot say whether it did:
+# a flush whose HUP failed, a lease request that timed out after it may have
+# been sent, a step that is never automated. Not a success, but not the same
+# fault as a refused repair either, so the ladder exits EXIT_PARTIAL for these
+# when nothing failed outright.
+LADDER_PARTIAL_PREFIXES = ("partial:", "unknown:", "NOT_AUTOMATED:")
+EXIT_PARTIAL = 3
 
 
 # --- rendering (pure) -------------------------------------------------------
@@ -430,6 +437,7 @@ def cmd_ladder(
         )
     classification = classify(False, False) if args.layer == "network" else classify(True, False)
     failed = False
+    partial = False
     for step in ladder_for(classification):
         # An injected executor has no failover wired in, so letting the step
         # reach it would report "not configured" on a machine where it is. This
@@ -447,7 +455,10 @@ def cmd_ladder(
         first = outcome.splitlines()
         out(f"{step.name}: {first[0] if first else outcome}")
         failed = failed or outcome.startswith(LADDER_FAILURE_PREFIXES)
-    return 1 if failed else 0
+        partial = partial or outcome.startswith(LADDER_PARTIAL_PREFIXES)
+    if failed:
+        return 1
+    return EXIT_PARTIAL if partial else 0
 
 
 def cmd_run(args, config, out, run_fn: Callable = subprocess.run) -> int:

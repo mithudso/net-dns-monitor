@@ -233,8 +233,12 @@ def start_script(settings: RouterSettings) -> str:
             '/usr/sbin/chown root:wheel "$tmp"',
             '/bin/chmod 644 "$tmp"',
             f'/bin/mv -f "$tmp" {BOOTPD_PLIST}',
-            f"/bin/launchctl unload -w {BOOTPS_DAEMON} || true",
-            f"/bin/launchctl load -w {BOOTPS_DAEMON}",
+            # DHCP is opt-in. `load -w` wrote an enabled override, after which
+            # bootpd answered DHCP on every boot whether or not the router was
+            # on. `-F` loads it for this session only; Stop's `unload -w`
+            # writes the disabled override back.
+            f"/bin/launchctl unload {BOOTPS_DAEMON} || true",
+            f"/bin/launchctl load -F {BOOTPS_DAEMON}",
             # Read back before anything is reported as started: `launchctl load`
             # can exit 0 without loading, and an anchor can be loaded empty.
             f"/sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null | /usr/bin/grep -q 'nat on' "

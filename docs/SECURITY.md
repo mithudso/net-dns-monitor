@@ -205,7 +205,9 @@ Mitigations in the code:
   process group. `_collect` also kills the group when a background job still
   holds the output pipes after the shell exits.
 - `MAX_OUTPUT_BYTES` caps output at 64 KB.
-- In the built app, `child_env` removes the py2app launcher variables
+- `child_env` always removes `ANTHROPIC_API_KEY`, `SLACK_WEBHOOK_URL` and
+  `SMTP_PASSWORD` (`credentials.NAMES`), so `env` in the console cannot print
+  them. In the built app it also removes the py2app launcher variables
   (`FROZEN_ONLY_ENVIRONMENT`), so a child does not inherit the bundle's
   `PYTHONHOME`.
 - `kill_running` kills every live command group. `app.py` registers it with

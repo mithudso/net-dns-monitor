@@ -16,6 +16,7 @@ import yaml
 
 from netdnsmonitor import cli, privileges
 from netdnsmonitor.cli import (
+    EXIT_PARTIAL,
     build_parser,
     cmd_failover,
     cmd_ladder,
@@ -490,17 +491,53 @@ def test_an_ungranted_repair_makes_the_ladder_exit_nonzero():
     assert cmd_ladder(args, {}, out, executor_factory=factory, failover_configured=False) == 1
 
 
-def test_a_partial_flush_makes_the_ladder_exit_nonzero():
+def test_a_partial_flush_makes_the_ladder_exit_partial():
     def run(argv, **kwargs):
-        # dscacheutil succeeds; the HUP and the elevated retry both fail.
-        code = 0 if os.path.basename(argv[0]) == "dscacheutil" else 1
+        # Everything succeeds except the HUP and its elevated retry.
+        code = 1 if os.path.basename(argv[0]) in ("killall", "sudo") else 0
         return SimpleNamespace(returncode=code, stdout="", stderr="not permitted")
 
     factory = recording_factory(run)
     lines, out = collect()
     args = build_parser().parse_args(["ladder", "dns", "--repair"])
-    assert cmd_ladder(args, {}, out, executor_factory=factory, failover_configured=False) == 1
+    assert cmd_ladder(args, {}, out, executor_factory=factory, failover_configured=False) == (
+        EXIT_PARTIAL
+    )
     assert any(line.startswith("flush_dns_cache: partial") for line in lines)
+
+
+def test_a_step_that_is_never_automated_makes_the_ladder_exit_partial():
+    # toggle_network_service always returns NOT_AUTOMATED:, so a network repair
+    # run did not do everything it lists even when every other step worked.
+    factory = recording_factory(fake_run(stdout="lease_time (uint32): 0x15180\n"))
+    lines, out = collect()
+    args = build_parser().parse_args(["ladder", "network", "--repair"])
+    code = cmd_ladder(args, {}, out, executor_factory=factory, failover_configured=False)
+    assert code == EXIT_PARTIAL
+    assert any("NOT_AUTOMATED" in line for line in lines)
+
+
+def test_a_repair_whose_outcome_is_unknown_makes_the_ladder_exit_partial():
+    import subprocess as sp
+
+    def run(argv, **kwargs):
+        if "set" in argv:
+            raise sp.TimeoutExpired(argv, 5)
+        return SimpleNamespace(returncode=0, stdout="lease_time (uint32): 0x15180\n", stderr="")
+
+    factory = recording_factory(run)
+    lines, out = collect()
+    args = build_parser().parse_args(["ladder", "network", "--repair"])
+    code = cmd_ladder(args, {}, out, executor_factory=factory, failover_configured=False)
+    assert code == EXIT_PARTIAL
+    assert any(line.startswith("renew_dhcp_lease: unknown:") for line in lines)
+
+
+def test_a_hard_failure_outranks_a_partial_step():
+    factory = recording_factory(fake_run(returncode=1, stderr="ipconfig: denied"))
+    lines, out = collect()
+    args = build_parser().parse_args(["ladder", "network", "--repair"])
+    assert cmd_ladder(args, {}, out, executor_factory=factory, failover_configured=False) == 1
 
 
 def test_checks_alone_that_succeed_exit_zero():

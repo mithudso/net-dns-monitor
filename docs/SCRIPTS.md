@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2521 tests; the whole decision surface
+python3 -m pytest -q          # 2529 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2521 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2521 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2529 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -88,6 +88,12 @@ the repo root.
 | `console` | interactive |
 
 `--json` on `status`, `interfaces` and `bench` gives machine-readable output.
+
+`ladder` exits 0 when every step it ran did its job, 1 when a step failed or was
+refused (`failed:`, `NEEDS_PRIVILEGE:`, `cannot renew:`), and 3 when nothing failed
+but a step only partly worked, could not say whether it worked, or is never
+automated (`partial:`, `unknown:`, `NOT_AUTOMATED:`). `ladder network --repair`
+therefore exits at least 3, because `toggle_network_service` is never automated.
 
 Real output from this machine:
 
@@ -850,7 +856,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2521 passed
+python3 -m pytest -q            # 2529 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -865,22 +871,22 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 |---|---|
 | 295 | `test_config.py` |
 | 122 | `test_failover.py` |
-| 109 | `test_settings_window.py` |
+| 110 | `test_settings_window.py` |
 | 89 | `test_privileges.py` |
 | 64 | `test_status.py` |
 | 60 | `test_cli_console.py` |
 | 62 | `test_app_appstore_wiring.py` |
 | 60 | `test_dashboard.py` |
-| 62 | `test_console.py` |
+| 63 | `test_console.py` |
 | 53 | `test_app_dashboard_wiring.py` |
 | 56 | `test_peer_net.py` |
 | 51 | `test_system_log.py` |
 | 51 | `test_peers.py` |
-| 42 | `test_cli.py` |
+| 45 | `test_cli.py` |
 | 41 | `test_app_failover_wiring.py` |
 | 41 | `test_domain_learner.py` |
 | 49 | `test_repair_executor.py` |
-| 73 | `test_router.py` |
+| 74 | `test_router.py` |
 | 41 | `test_localize.py` |
 | 44 | `test_router_window.py` |
 | 35 | `test_app_log_wiring.py` |
@@ -899,7 +905,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 23 | `test_state_machine.py` |
 | 20 | `test_appstore_screenshots.py` |
 | 24 | `test_service_order.py` |
-| 19 | `test_app_settings_wiring.py` |
+| 21 | `test_app_settings_wiring.py` |
 | 18 | `test_app_peer_wiring.py` |
 | 18 | `test_mini_window.py` |
 | 22 | `test_anthropic_escalator.py` |
@@ -938,7 +944,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 3 | `test_record_demo.py` |
 | 7 | `test_sandbox_probe.py` |
 | 31 | `test_shell_scripts.py` |
-| **2521** | **total** |
+| **2529** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,
