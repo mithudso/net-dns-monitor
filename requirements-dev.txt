@@ -11,6 +11,6 @@
 #   ruff check . && ruff format --check . && python -m pytest -q
 -r requirements.txt
 pytest==9.1.1
-ruff==0.16.9
+ruff==0.16.10
 # Install pre-commit separately with pipx or uv tool, as documented in
 # .pre-commit-config.yaml; its environment is separate from the app's pins.
