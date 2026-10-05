@@ -92,7 +92,7 @@ def test_a_host_that_cannot_be_an_argv_word_is_refused_not_pinged(host):
     int is a TypeError. All of them are a configuration fault, not "no reply".
     """
     run_fn, calls = fake_run_factory()
-    with pytest.raises(ValueError, match="ping_host"):
+    with pytest.raises(ValueError, match="ping host"):
         ping_once(host, run_fn=run_fn)
     assert calls == []
 
@@ -222,3 +222,30 @@ def test_a_ping6_that_times_out_is_a_failed_reading_naming_the_host():
         "rtt_ms": None,
         "error": "no reply from 2001:db8::1 within 2s",
     }
+
+
+def test_exit_68_says_the_name_did_not_resolve_and_nothing_was_sent():
+    """Exit 68 is a resolver failure: no echo request left the machine, so it is
+    not evidence about the network path and must not read as "no reply".
+    """
+    run_fn, _ = fake_run_factory(returncode=68, stdout="", stderr="")
+    result = ping_once("nope.invalid", run_fn=run_fn)
+    assert result["ok"] is False
+    assert result["probed"] is False
+    assert "did not resolve" in result["error"]
+    assert "no echo request" in result["error"]
+
+
+def test_a_no_reply_exit_is_not_marked_unprobed():
+    run_fn, _ = fake_run_factory(returncode=2, stdout=NO_REPLY)
+    assert "probed" not in ping_once("8.8.8.8", run_fn=run_fn)
+
+
+def test_the_refusal_names_the_host_it_refused_and_shares_config_host_problem():
+    from netdnsmonitor.config import host_problem
+
+    for bad in ("-c5", "a b", ""):
+        assert host_problem(bad) is not None
+        with pytest.raises(ValueError, match="ping host") as caught:
+            ping_once(bad)
+        assert repr(bad) in str(caught.value)

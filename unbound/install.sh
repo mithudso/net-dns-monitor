@@ -95,6 +95,25 @@ if [[ -z "$BOUND" ]]; then
     exit 1
 fi
 
+# Same reason as the dnsmasq check: `brew services restart unbound` does not
+# notice an unbound that exited after starting, or lost the port to another
+# resolver, so the banner below would claim DNS is served when it is not.
+echo "=> Verifying unbound holds DNS (port 53)..."
+DNS_BOUND=""
+for _ in 1 2 3 4 5; do
+    LSOF_DNS="$(sudo lsof -nP -iUDP:53 2>/dev/null || true)"
+    if grep -q unbound <<<"$LSOF_DNS"; then
+        DNS_BOUND=1
+        break
+    fi
+    sleep 1
+done
+if [[ -z "$DNS_BOUND" ]]; then
+    echo "ERROR: unbound is not bound to port 53. DNS is NOT being served by it." >&2
+    echo "       Check: sudo lsof -nP -iUDP:53   and   router/scripts/test_router.sh" >&2
+    exit 1
+fi
+
 echo "============================================="
 echo "✅ ARCHITECTURE DEPLOYED"
 echo "- Dnsmasq: Listening on 192.168.4.1:67 (DHCP Server Only)"

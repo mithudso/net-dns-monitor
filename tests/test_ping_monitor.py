@@ -193,3 +193,25 @@ def test_a_result_missing_keys_is_treated_as_a_failure_not_a_crash():
     snapshot = PingMonitor().record({}, now=0.0)
     assert snapshot["down"] is True
     assert snapshot["rtt_ms"] is None
+
+
+def test_a_float_loss_window_is_coerced_not_a_typeerror():
+    monitor = PingMonitor(loss_window=12.0)
+    monitor.record(OK, now=0.0)
+    assert monitor.record(FAIL, now=1.0)["loss_pct"] == 50.0
+
+
+def test_a_reading_where_no_echo_was_sent_does_not_count_as_loss():
+    # Exit 68 (the name did not resolve) sends no echo request, so it says
+    # nothing about the network path. Counting it would turn a DNS fault into
+    # a "network failed" alert.
+    monitor = PingMonitor(failure_threshold=1, loss_window=4)
+    monitor.record({"ok": True, "rtt_ms": 5.0}, now=0.0)
+    snapshot = monitor.record(
+        {"ok": False, "rtt_ms": None, "probed": False, "error": "name did not resolve"},
+        now=1.0,
+    )
+    assert snapshot["alert"] is False
+    assert snapshot["consecutive_failures"] == 0
+    assert snapshot["loss_pct"] == 0.0
+    assert snapshot["error"] == "name did not resolve"

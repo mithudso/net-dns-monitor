@@ -10,6 +10,7 @@ installed -- which is what lets the offline test suite cover them.
 """
 
 import os
+import re
 import sys
 
 # Anchored to this file, not the cwd: the watcher is started by launchd with
@@ -36,7 +37,24 @@ EXCLUDED = {
     "build",
     "node_modules",
     ".cdo-backup",
+    ".remember",
+    ".stele",
+    ".mypy_cache",
+    ".tox",
+    "venv",
+    "env",
+    "htmlcov",
+    ".hypothesis",
+    "site-packages",
 }
+# Files that are likely to hold a credential. The index is served to agents
+# over MCP and embedded by a model, so a name that suggests a secret is left
+# out even when its extension qualifies. The match is deliberately broad, so it
+# applies to data files only: source named after the thing it handles
+# (credentials.py, test_credentials.py) is code, and the code is what agents
+# search the index for.
+SENSITIVE_NAME = re.compile(r"secret|credential|token|\.env", re.IGNORECASE)
+SOURCE_SUFFIXES = (".py", ".sh", ".md")
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
@@ -57,6 +75,9 @@ def should_index(path: str, root: str = None) -> bool:
     # Tested on the path relative to the root, not the absolute path: a
     # checkout that itself lives under a dot directory (.claude/worktrees/...)
     # would otherwise exclude every file it contains.
+    name = os.path.basename(rel)
+    if SENSITIVE_NAME.search(name) and not name.endswith(SOURCE_SUFFIXES):
+        return False
     return not (set(rel.split(os.sep)[:-1]) & EXCLUDED)
 
 
@@ -101,18 +122,24 @@ def index_file(filepath: str, collection=None, root: str = None) -> None:
     with open(filepath, encoding="utf-8", errors="replace") as f:
         text = f.read()
     chunks = chunk_text(text)
+    collection = collection if collection is not None else open_collection()
+    ids = [f"{src}_chunk_{i}" for i in range(len(chunks))]
+    # Upsert first, then delete only this source's ids that are no longer
+    # produced. Delete-then-upsert left the file with no chunks at all if the
+    # embedding call failed in between; a file that shrank from eight chunks to
+    # five would otherwise keep serving chunks 5-7 from its old contents.
+    if chunks:
+        collection.upsert(
+            documents=chunks,
+            metadatas=[{"source": src} for _ in chunks],
+            ids=ids,
+        )
+    existing = collection.get(where={"source": src}).get("ids") or []
+    stale = [i for i in existing if i not in set(ids)]
+    if stale:
+        collection.delete(ids=stale)
     if not chunks:
         return
-
-    collection = collection if collection is not None else open_collection()
-    # Upsert only overwrites ids that still exist. A file that shrank from
-    # eight chunks to five kept serving chunks 5-7 from its old contents.
-    collection.delete(where={"source": src})
-    collection.upsert(
-        documents=chunks,
-        metadatas=[{"source": src} for _ in chunks],
-        ids=[f"{src}_chunk_{i}" for i in range(len(chunks))],
-    )
     print(f"Successfully indexed {len(chunks)} chunks for {src}")
 
 

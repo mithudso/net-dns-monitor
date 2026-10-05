@@ -419,7 +419,7 @@ either way.
 - Enable by setting `ANTHROPIC_API_KEY`. Without it, escalation is skipped
   and reported as `"error": "ANTHROPIC_API_KEY not set; skipped LLM escalation"`.
 - Uses `claude-haiku-4-5-20251001` by default (a bounded
-  classification/diagnosis task); falls back to `claude-sonnet-5` when
+  classification/diagnosis task); falls back to `claude-sonnet-5-5` when
   local triage couldn't classify the incident at all (the harder case).
 - Everything sent is redacted first: every string in `sensitive_strings`
   is replaced with `[REDACTED]` in the classification, probe results,
@@ -870,7 +870,7 @@ Status is re-probed whenever the window is opened, not just after a Grant or
 Revoke — the file itself invites `sudo rm`, so the privilege can disappear without
 this app being involved.
 
-**With the grant:** "Flush DNS cache" restarts mDNSResponder instead of
+**With the grant:** "Flush DNS cache" sends mDNSResponder a HUP instead of
 reporting a partial result, and `renew_dhcp_lease` runs on the default-route
 interface instead of returning `NEEDS_PRIVILEGE`.
 

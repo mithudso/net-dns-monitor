@@ -51,6 +51,8 @@ import re
 import subprocess
 from typing import Callable, Optional
 
+from netdnsmonitor.config import host_problem
+
 RunFn = Callable[..., object]
 
 PING_BIN = "/sbin/ping"
@@ -78,7 +80,9 @@ def ping_once(
 ) -> dict:
     """Send a single echo request and report the outcome.
 
-    Returns {"ok": bool, "rtt_ms": float|None, "error": str|None}. Never
+    Returns {"ok": bool, "rtt_ms": float|None, "error": str|None}, plus
+    "probed": False when exit 68 shows the name never resolved and so no echo
+    request was sent. Never
     raises for a network outcome: the heartbeat caller is a worker thread
     started from a rumps timer, and an escaping exception there kills the
     heartbeat for the rest of the process's life while the menu bar keeps
@@ -92,18 +96,14 @@ def ping_once(
     only, and treating it as a failure would fire the network-failed alert on a
     network that answered.
     """
-    # `ping_host` is user-settable YAML that lands in argv unquoted. A value
+    # The host is user-settable YAML that lands in argv unquoted. A value
     # starting with "-" is consumed by ping as a flag; an embedded NUL raises
-    # from subprocess; anything unprintable is not a name. `--` is not the
-    # answer here because BSD ping does not honour it consistently.
-    if (
-        not isinstance(host, str)
-        or not host
-        or host[0] == "-"
-        or " " in host
-        or not host.isprintable()
-    ):
-        raise ValueError(f"ping_host must be a host name or address, got {host!r}")
+    # from subprocess; anything unprintable is not a name. `--` is not relied
+    # on; refusing a leading "-" is the guard. The predicate is shared with
+    # config validation so the two cannot disagree.
+    problem = host_problem(host)
+    if problem is not None:
+        raise ValueError(f"ping host must be a host name or address: {problem}")
     # BSD ping reads `-t 0` as "no timeout", the opposite of a short one, so
     # round up rather than truncate. NaN, inf, a string and None all fail
     # here rather than inside the argv build, where the message would name
@@ -157,6 +157,19 @@ def ping_once(
 
     if result.returncode == 0:
         return {"ok": True, "rtt_ms": _parse_rtt_ms(result.stdout), "error": None}
+
+    if result.returncode == 68:
+        # A resolver failure, not a lost echo: nothing was sent, so this says
+        # nothing about the network path. A DNS fault must not read as a
+        # network one.
+        detail = (result.stderr or "").strip().splitlines()
+        return {
+            "ok": False,
+            "rtt_ms": None,
+            "probed": False,
+            "error": f"{host} did not resolve (DNS lookup failed); no echo request was sent"
+            + (f" ({detail[0]})" if detail else ""),
+        }
 
     stderr = (result.stderr or "").strip()
     return {

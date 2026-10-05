@@ -206,6 +206,7 @@ def test_the_store_builds_settings_window_names_its_own_file_and_restart(tmp_pat
     assert app._settings.options == {
         "config_path_display": app.config_path,
         "restart_hint": STORE_RESTART_HINT,
+        "hidden_keys": app.hidden_setting_keys(),
     }
 
 

@@ -342,3 +342,89 @@ def test_icon_problem_requires_icns_suffix_and_readable_file():
         raise FileNotFoundError("no such file")
 
     assert "no such file" in build.icon_problem(Path("/x/AppIcon.icns"), read=missing)
+
+
+# --- release preflight, timestamp, failure reporting -------------------------
+
+
+def _args(**kw):
+    import argparse
+
+    base = {"bundle_id": "com.example.app", "version": "1.2", "build_number": "7"}
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+@pytest.mark.parametrize("value", ["1", "1.0", "1.2.3"])
+def test_version_problem_accepts_store_versions(value):
+    assert build.version_problem(value, "--version") is None
+
+
+@pytest.mark.parametrize("value", ["", "1.2.3.4", "v1", "1.x", "1..2", "1.0-beta"])
+def test_version_problem_rejects_others(value):
+    assert "--version" in build.version_problem(value, "--version")
+
+
+def test_release_requires_explicit_bundle_id():
+    assert "--bundle-id" in build.release_input_problem(_args(bundle_id=None))
+    assert build.release_input_problem(_args()) is None
+
+
+def test_release_rejects_bad_build_number():
+    assert "--build-number" in build.release_input_problem(_args(build_number="1.2.3.4"))
+
+
+def test_profile_mismatch_is_reported():
+    assert build.profile_problem("ABCDE12345.com.x", "ABCDE12345", "com.x") is None
+    message = build.profile_problem("ABCDE12345.com.y", "ABCDE12345", "com.x")
+    assert "com.y" in message and "ABCDE12345.com.x" in message
+
+
+def test_release_checks_run_before_the_build(monkeypatch, tmp_path):
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
+    monkeypatch.setattr(build, "profile_application_identifier", lambda p: "WRONG.id")
+    built = []
+    monkeypatch.setattr(build, "py2app_build", lambda *a, **k: built.append(1))
+    monkeypatch.setattr(build, "run", lambda *a, **k: built.append("run"))
+    argv = [
+        "release", "--bundle-id", "com.x", "--team-id", "ABCDE12345",
+        "--app-identity", "A", "--installer-identity", "I", "--profile", "p",
+        "--privacy-policy-url", "https://example.com/p",
+    ]  # fmt: skip
+    with pytest.raises(SystemExit, match="provisioning profile"):
+        build.main(argv)
+    assert built == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "name", "expected"),
+    [
+        ("library", "x.dylib", (None, None)),
+        ("framework", "X.framework", (None, None)),
+        ("helper", "helper", ("H", None)),
+        ("helper", build.PROBE_NAME, ("A", build.probe_identifier("com.x"))),
+        ("app", "App.app", ("A", None)),
+    ],
+)
+def test_codesign_args_dispatch(kind, name, expected):
+    got = build.codesign_args(kind, Path(name), "com.x", Path("A"), Path("H"))
+    want = (Path(expected[0]) if expected[0] else None, expected[1])
+    assert got == want
+
+
+def test_codesign_adds_timestamp_only_for_real_identity(monkeypatch):
+    seen = []
+    monkeypatch.setattr(build, "run", lambda cmd, **k: seen.append(list(cmd)))
+    build.codesign(Path("/x"), "Developer ID", None)
+    build.codesign(Path("/x"), "-", None)
+    assert "--timestamp" in seen[0]
+    assert "--timestamp" not in seen[1]
+
+
+def test_capture_failure_carries_tool_stderr():
+    import sys
+
+    cmd = [sys.executable, "-c", "import sys; sys.stderr.write('boom text'); sys.exit(3)"]
+    with pytest.raises(SystemExit, match="boom text"):
+        build.capture(cmd)

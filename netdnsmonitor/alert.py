@@ -115,7 +115,7 @@ def notify(
     # scripting host rather than this app, which is why it is the fallback.
     try:
         script = f"display notification {_as_applescript_string(message)} with title {_as_applescript_string(title)}"
-        run_fn(
+        result = run_fn(
             [OSASCRIPT_BIN, "-e", script],
             capture_output=True,
             text=True,
@@ -126,6 +126,10 @@ def notify(
             # more than a few seconds of a frozen monitor.
             timeout=3,
         )
+        # Exit code only: stderr can echo the message text.
+        returncode = getattr(result, "returncode", 0)
+        if returncode:
+            print(f"osascript fallback exited {returncode}", file=sys.stderr)
     except (subprocess.SubprocessError, OSError, UnicodeError):
         traceback.print_exc()
 

@@ -149,7 +149,7 @@ The ordered troubleshooting steps per classification (`NETWORK_LADDER`, `DNS_LAD
 
 ### `netdnsmonitor/ping.py`
 
-`ping_once(host)` sends one ICMP echo with `/sbin/ping` and returns `{"ok", "rtt_ms", "error"}`. Never raises.
+`ping_once(host)` sends one ICMP echo with `/sbin/ping` and returns `{"ok", "rtt_ms", "error"}` (plus `"probed": False` when the name did not resolve). It raises `ValueError` for a host `config.host_problem` refuses, before running anything; `app.ping_heartbeat` records that per host and tries the next.
 
 - **Used by:** `app` (`ping_once`).
 - **Imports:** package: none; stdlib with effects: `subprocess`.

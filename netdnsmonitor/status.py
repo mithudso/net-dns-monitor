@@ -38,6 +38,7 @@ react fast. The gate keeps owning what gets *repaired* and reported, this owns
 what gets *shown*.
 """
 
+import time
 from typing import Optional
 
 ICONS = {"healthy": "\U0001f7e2", "flaky": "\U0001f7e1", "incident": "\U0001f534"}
@@ -203,7 +204,34 @@ def build_title(
 REACHABILITY = {True: "reachable", False: "unreachable", None: "not probed"}
 
 
-def _describe_side(side: dict, label: str, is_active: bool) -> str:
+def resolution_counts(findings) -> tuple[int, int]:
+    """(failing, not_probed) for a resolution batch.
+
+    An "abandoned" lookup never got an answer either way: the shared tick
+    deadline ran out first. Counting it as failing would blame a domain for the
+    clock, so it is reported separately as not probed.
+    """
+    failing = not_probed = 0
+    for finding in findings or []:
+        if finding.get("outcome") == "abandoned":
+            not_probed += 1
+        elif not finding.get("resolved"):
+            failing += 1
+    return failing, not_probed
+
+
+def _checked_suffix(taken_at) -> str:
+    # The reachability probe is a one-off, not a live reading; without a time a
+    # reader cannot tell a minute-old answer from one taken yesterday.
+    if not isinstance(taken_at, (int, float)) or isinstance(taken_at, bool):
+        return ""
+    try:
+        return f" (checked {time.strftime('%H:%M', time.localtime(taken_at))})"
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def _describe_side(side: dict, label: str, is_active: bool, taken_at=None) -> str:
     marker = "●" if is_active else "○"  # filled = carrying traffic
     if not side.get("found"):
         return f"{marker} {label}: {side['name']} — NOT FOUND in the service order"
@@ -211,6 +239,7 @@ def _describe_side(side: dict, label: str, is_active: bool) -> str:
     return (
         f"{marker} {label}: {side['name']} ({device}) — "
         f"{REACHABILITY.get(side.get('reachable'), 'unknown')}"
+        f"{_checked_suffix(taken_at)}"
     )
 
 
@@ -250,11 +279,12 @@ def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
     # of the order that is not a configured backup, so keying the preferred
     # marker off it filled that row while a third service carried the traffic.
     preferred = snapshot["preferred"]
+    taken_at = snapshot.get("taken_at")
     lines = [
         f"Active: {active_service} — failover is {mode}",
-        _describe_side(preferred, "Preferred", preferred.get("name") == active_service),
+        _describe_side(preferred, "Preferred", preferred.get("name") == active_service, taken_at),
     ]
     if backup:
         label = "Backup" if len(backups) <= 1 else f"Backup (of {len(backups)})"
-        lines.append(_describe_side(backup, label, backup.get("name") == active_service))
+        lines.append(_describe_side(backup, label, backup.get("name") == active_service, taken_at))
     return lines

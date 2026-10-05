@@ -184,3 +184,24 @@ def test_a_result_without_stdout_or_returncode_is_reported_not_a_crash():
     # No returncode counts as a failed read, which is reported, not raised.
     assert len(excerpts) == 1
     assert excerpts[0].startswith(NO_EVIDENCE_PREFIX)
+
+
+def test_a_lookback_subprocess_rejects_is_reported_by_class_name_only():
+    """A NUL in `log_lookback` makes subprocess raise ValueError; a non-str makes
+    it TypeError. Neither may escape an incident tick or leak the message."""
+
+    def make_run_fn(exc):
+        def run_fn(args, **kwargs):
+            raise exc
+
+        return run_fn
+
+    for exc, name in (
+        (ValueError("embedded null byte secret"), "ValueError"),
+        (TypeError("secret"), "TypeError"),
+    ):
+        lines = make_log_watcher(run_fn=make_run_fn(exc))()
+        assert len(lines) == 1
+        assert lines[0].startswith(NO_EVIDENCE_PREFIX)
+        assert name in lines[0]
+        assert "secret" not in lines[0]

@@ -7,6 +7,7 @@ not proof of where a fault lies: split DNS, VPNs and filtering can differ.
 import secrets
 import socket
 import struct
+import time
 from typing import Callable, Optional
 
 SendRecvFn = Callable[[bytes, str, int, float], bytes]
@@ -26,16 +27,25 @@ def _default_send_recv(packet: bytes, server: str, port: int, timeout: float) ->
         server, port, 0, socket.SOCK_DGRAM
     )[0]
     sock = socket.socket(family, socktype, proto)
-    sock.settimeout(timeout)
     try:
-        # connect() makes the kernel drop datagrams from any other source. An
-        # unconnected recvfrom accepts the first packet to arrive from anyone,
-        # and a stray one fails the transaction-id check below, which reads as
-        # "the public resolver did not answer" -- the wrong half of the one
-        # distinction this module exists to draw.
+        # connect() makes the kernel drop datagrams from any other source, but a
+        # datagram from the resolver's own address with a different transaction
+        # id can still arrive (a late reply to an earlier query on a reused
+        # port, or an off-path guess). Taking the first datagram would end the
+        # wait on it and read as "the public resolver did not answer" -- the
+        # wrong half of the one distinction this module exists to draw. So keep
+        # reading until the deadline and drop what does not carry our id.
         sock.connect(address)
         sock.send(packet)
-        return sock.recv(512)
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("no reply with a matching transaction id")
+            sock.settimeout(remaining)
+            data = sock.recv(512)
+            if data[:2] == packet[:2]:
+                return data
     finally:
         sock.close()
 
@@ -44,7 +54,9 @@ def _encode_query(domain: str, transaction_id: int) -> bytes:
     header = struct.pack(">HHHHHH", transaction_id, 0x0100, 1, 0, 0, 0)
     question = b""
     for label in domain.strip(".").split("."):
-        encoded = label.encode("ascii")
+        # IDNA, not ASCII: a Unicode name has a wire form (xn-- labels), and a
+        # name that is merely unusual is not a name that failed to resolve.
+        encoded = label.encode("idna")
         # A label is at most 63 bytes on the wire: length bytes of 192 and
         # above are compression pointers, so a 200-byte label would encode as
         # a pointer into the packet and be answered as some other name. (255
@@ -175,15 +187,15 @@ def query_public_dns(
     # spoofed answer, so it must not come from a predictable generator.
     transaction_id = secrets.randbelow(65536)
     try:
-        # _encode_query is guarded because it can raise on input it cannot
-        # represent: a non-ASCII domain gives UnicodeEncodeError, and a label
-        # over 255 bytes gives struct.error. `domain` is a caller default
-        # (repair_executor.make_repair_executor), not a constant, so those are
-        # one config change from reachable. Such a name has no DNS wire form,
-        # so False stays the answer for it.
+        # _encode_query is guarded because it can raise on a name that has no
+        # wire form even after IDNA encoding (an empty or over-long label, a
+        # name over 255 bytes). `domain` is a caller default
+        # (repair_executor.make_repair_executor), not a constant, so that is
+        # one config change from reachable. Nothing was sent, so nothing was
+        # learned about the name: None (not probed), never False (CLAUDE.md #2).
         packet = _encode_query(domain, transaction_id)
-    except (UnicodeError, ValueError, struct.error):
-        return False
+    except (UnicodeError, ValueError):
+        return None
     try:
         response = send_recv_fn(packet, server, port, timeout)
     except OSError:

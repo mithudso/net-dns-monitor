@@ -51,7 +51,10 @@ INCONCLUSIVE = "inconclusive"
 # What each verdict means, in the words the window and the forensic log use.
 SUMMARIES = {
     LOCAL_MACHINE: "This machine",
-    LOCAL_NETWORK: "The local network",
+    # Hedged on purpose: the verdict is only returned when no peer gives a usable
+    # internet answer, which leaves this machine's route and everything beyond the
+    # LAN both possible. "The local network" read as a finding.
+    LOCAL_NETWORK: "Undetermined: this machine's route or the network beyond it",
     LOCAL_DNS: "DNS resolution on this machine",
     DNS_OUTAGE: "DNS resolution for the whole network",
     UPSTREAM_OUTAGE: "Upstream of this network (router, modem or ISP)",
@@ -173,6 +176,13 @@ def localize(
     # blocked VPN into a high-confidence "the shared resolver is down".
     dns_witnesses = [p for p in informative if p.get("external_reachable") is not False]
     peer_dns = _consensus(dns_witnesses, "dns_ok")
+    # Peers that reported DNS but were set aside above; the fallthrough reasons
+    # must not call them "no peer reported".
+    excluded = [
+        p
+        for p in informative
+        if p.get("external_reachable") is False and p.get("dns_ok") is not None
+    ]
     evidence["peer_external_reachable"] = peer_external
     evidence["peer_dns_ok"] = peer_dns
 
@@ -242,7 +252,7 @@ def localize(
             LOCAL_DNS,
             "medium",
             "This machine cannot resolve names, external reachability was not "
-            "probed, and no peer reported its own DNS state. A resolver problem on "
+            f"probed, and {_dns_witness_note(excluded)}. A resolver problem on "
             "this machine is possible, but so is a wider connectivity fault.",
             evidence,
         )
@@ -269,10 +279,20 @@ def localize(
     return _verdict(
         LOCAL_DNS,
         "medium",
-        "This machine cannot resolve names but can still reach addresses, and no "
-        "peer reported its own DNS state. A resolver problem on this machine is "
+        "This machine cannot resolve names but can still reach addresses, and "
+        f"{_dns_witness_note(excluded)}. A resolver problem on this machine is "
         "the most likely cause, but a peer reporting its DNS state would settle it.",
         evidence,
+    )
+
+
+def _dns_witness_note(excluded: list) -> str:
+    """Why no peer's DNS reading was usable: none reported, or all were set aside."""
+    if not excluded:
+        return "no peer reported its own DNS state"
+    return (
+        f"{len(excluded)} peer(s) reported DNS but cannot reach the internet "
+        "themselves, so their DNS reading says nothing about the resolver"
     )
 
 

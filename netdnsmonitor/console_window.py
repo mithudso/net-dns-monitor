@@ -23,7 +23,7 @@ import threading
 import traceback
 from typing import Callable, Optional
 
-from netdnsmonitor.console import BANNER, CLEAR, PROMPT, ConsoleState, handle, run_command
+from netdnsmonitor.console import BANNER, PROMPT, ClearSignal, ConsoleState, handle, run_command
 
 # titled | closable | miniaturizable | resizable. Spelled numerically because
 # the PyObjC constant names for these moved between versions (NSTitledWindowMask
@@ -35,7 +35,7 @@ STYLE_MASK = 1 | 2 | 4 | 8
 RESIZE_BOTH = 2 | 16
 RESIZE_PINNED_BOTTOM = 2 | 32
 
-BUSY_MESSAGE = "(a command is still running -- wait for it, or close the window)"
+BUSY_MESSAGE = "(a command is still running -- wait for it, up to the command timeout)"
 
 # Characters kept in the transcript. The controller lives for the whole app
 # session and is never rebuilt, so without a ceiling the text storage grows
@@ -209,7 +209,7 @@ class ConsoleWindowController:
                 self.state.closed = False  # so a reopened window is not born closed
                 self.close()
                 return
-            if text == CLEAR:
+            if isinstance(text, ClearSignal):
                 self.clear()
                 return
             self.append(text)

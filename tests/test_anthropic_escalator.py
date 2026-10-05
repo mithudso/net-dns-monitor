@@ -1,4 +1,6 @@
 from netdnsmonitor.anthropic_escalator import (
+    DEFAULT_MODEL,
+    FALLBACK_MODEL,
     SYSTEM_PROMPT,
     build_prompt,
     default_client,
@@ -16,7 +18,7 @@ class FakeMessages:
         return type(
             "Resp",
             (),
-            {"content": [type("Block", (), {"text": self.text})()]},
+            {"content": [type("Block", (), {"type": "text", "text": self.text})()]},
         )()
 
 
@@ -91,19 +93,19 @@ INJECTED_LOG_LINE = (
 def test_uses_default_model_for_classified_incidents():
     client = FakeClient()
     escalator = make_escalator(
-        client=client, default_model="claude-haiku-4-5-20251001", fallback_model="claude-sonnet-5"
+        client=client, default_model=DEFAULT_MODEL, fallback_model=FALLBACK_MODEL
     )
     escalator(_bundle(classification="dns"))
-    assert client.messages.calls[0]["model"] == "claude-haiku-4-5-20251001"
+    assert client.messages.calls[0]["model"] == DEFAULT_MODEL
 
 
 def test_uses_fallback_model_for_unclassified_incidents():
     client = FakeClient()
     escalator = make_escalator(
-        client=client, default_model="claude-haiku-4-5-20251001", fallback_model="claude-sonnet-5"
+        client=client, default_model=DEFAULT_MODEL, fallback_model=FALLBACK_MODEL
     )
     escalator(_bundle(classification="unclassified"))
-    assert client.messages.calls[0]["model"] == "claude-sonnet-5"
+    assert client.messages.calls[0]["model"] == FALLBACK_MODEL
 
 
 def test_returns_analysis_text_from_response():
@@ -114,18 +116,18 @@ def test_returns_analysis_text_from_response():
     # `"model" in result` is vacuous -- any value passes, including the wrong
     # one. This dict is embedded verbatim in the report handed to IT, so the
     # model it names has to be the model that actually answered.
-    assert result["model"] == "claude-haiku-4-5-20251001"
+    assert result["model"] == DEFAULT_MODEL
 
 
 def test_result_reports_the_model_that_actually_answered():
     client = FakeClient()
     escalator = make_escalator(
         client=client,
-        default_model="claude-haiku-4-5-20251001",
-        fallback_model="claude-sonnet-5",
+        default_model=DEFAULT_MODEL,
+        fallback_model=FALLBACK_MODEL,
     )
     result = escalator(_bundle(classification="unclassified"))
-    assert result["model"] == "claude-sonnet-5"
+    assert result["model"] == FALLBACK_MODEL
 
 
 def test_client_error_returns_error_dict_instead_of_raising():
@@ -238,3 +240,43 @@ def test_default_client_uses_an_explicit_key_when_given(monkeypatch):
     client = default_client(api_key="sk-ant-from-keychain-not-real")
     assert client.api_key == "sk-ant-from-keychain-not-real"
     assert client.max_retries == 0
+
+
+def test_fallback_model_is_the_current_sonnet_id():
+    assert FALLBACK_MODEL == "claude-sonnet-5-5"
+
+
+def _resp(blocks, stop_reason="end_turn"):
+    class Messages:
+        def create(self, **kwargs):
+            return type("Resp", (), {"content": blocks, "stop_reason": stop_reason})()
+
+    return type("C", (), {"messages": Messages()})()
+
+
+def _block(text=None, kind="text"):
+    attrs = {"type": kind}
+    if text is not None:
+        attrs["text"] = text
+    return type("B", (), attrs)()
+
+
+def test_joins_all_text_blocks_and_skips_non_text():
+    client = _resp([_block(kind="thinking"), _block("one"), _block("two")])
+    result = make_escalator(client=client)(_bundle())
+    assert result["analysis"] == "one\ntwo"
+
+
+def test_empty_response_is_an_error():
+    result = make_escalator(client=_resp([_block(kind="thinking")]))(_bundle())
+    assert result == {"error": "empty response", "model": DEFAULT_MODEL}
+
+
+def test_refusal_is_an_error_not_an_analysis():
+    result = make_escalator(client=_resp([_block("no")], "refusal"))(_bundle())
+    assert result == {"error": "model declined", "model": DEFAULT_MODEL}
+
+
+def test_max_tokens_marks_the_analysis_truncated():
+    result = make_escalator(client=_resp([_block("cut off")], "max_tokens"))(_bundle())
+    assert result["analysis"].endswith(" [truncated]")

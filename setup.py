@@ -60,7 +60,10 @@ OPTIONS = {
 if os.environ.get("NETDNS_BUILD") == "appstore":
     # Every value that identifies the product in App Store Connect comes from
     # the build script's arguments. A default bundle id here would let a build
-    # upload under an identifier the developer never registered.
+    # upload under an identifier the developer never registered. A wrong id is
+    # caught by build_appstore.py's provisioning-profile check, which compares
+    # the profile's application identifier with team id + bundle id before this
+    # file runs; this file does not validate anything itself.
     PLIST.update(
         {
             "CFBundleIdentifier": os.environ["NETDNS_BUNDLE_ID"],

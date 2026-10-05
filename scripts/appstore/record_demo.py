@@ -7,6 +7,8 @@ Usage:
     .venv/bin/python scripts/appstore/record_demo.py process
 """
 
+from __future__ import annotations
+
 import os
 import signal
 import subprocess
@@ -19,6 +21,25 @@ DEMO_DIR = REPO / "build" / "appstore" / "demo"
 PID_FILE = DEMO_DIR / "screencapture.pid"
 RAW_VIDEO = DEMO_DIR / "demo_raw.mov"
 FINAL_VIDEO = DEMO_DIR / "app-review-demo.mp4"
+START_POLL_SECONDS = 1.0
+
+
+def process_command(pid: int) -> str | None:
+    """The command name of `pid`, or None if no such process (or ps failed)."""
+    try:
+        done = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = done.stdout.strip()
+    return name if done.returncode == 0 and name else None
+
+
+def is_screencapture(pid: int, ps_fn=process_command) -> bool:
+    """A recycled PID belongs to some other program; never signal it."""
+    name = ps_fn(pid)
+    return bool(name) and name.rsplit("/", 1)[-1] == "screencapture"
 
 
 def start() -> None:
@@ -47,6 +68,18 @@ def start() -> None:
         stderr=subprocess.DEVNULL,
     )
     PID_FILE.write_text(str(proc.pid))
+    # screencapture exits at once when Screen Recording permission is missing or
+    # the path is unwritable; a PID file alone would claim a recording that
+    # never started.
+    time.sleep(START_POLL_SECONDS)
+    if proc.poll() is not None:
+        PID_FILE.unlink(missing_ok=True)
+        print(
+            f"screencapture exited immediately (code {proc.returncode}); nothing is recording. "
+            "Check Screen Recording permission for this terminal.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     print(f"Recording running in background (PID {proc.pid}).")
 
 
@@ -60,6 +93,13 @@ def stop() -> None:
 
     try:
         pid = int(pid_str)
+        if not is_screencapture(pid):
+            print(
+                f"PID {pid} is not a screencapture process (stale PID file); "
+                "nothing was signalled and the PID file was removed.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         os.kill(pid, signal.SIGINT)
         print(f"Sent SIGINT to process {pid}. Waiting for file finalize...")
         # screencapture writes the moov atom on exit; a fixed sleep let ffmpeg

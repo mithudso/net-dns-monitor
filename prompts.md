@@ -77,3 +77,13 @@ Prompt:
 > ALso resolve all the conflicts for the https://github.com/mithudso/net-dns-monitor/pull/28 merge and
 
 > 1. Yes do both.
+
+## v10 - 2026-10-05 - Code deep optimizer, second run
+
+Delta: 1
+
+Prompt:
+
+> run the code deep optimizer again
+
+> I keep getting these notifications even though my network is fine: (screenshot: "Net-DNS-Monitor: network failed -- Ping to 2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1 failed -- no reply from 8.8.8.8")

@@ -50,6 +50,10 @@ BUCKETS = (CURRENT, RECENT, OTHER)
 # cap exists so a peer cannot push megabytes of text into the record file.
 MAX_FIELD = 253
 MAX_PEERS = 200
+# One source address may hold at most this many ids. A fresh id per datagram from
+# a single host would otherwise evict every real peer and, by crowding the table
+# with its own readings, decide the fault-localization verdict.
+MAX_IDS_PER_ADDRESS = 4
 
 
 def _utc_now() -> datetime:
@@ -135,6 +139,7 @@ class PeerRegistry:
             entry["missed_healthchecks"] = 0
 
             if is_new:
+                self._evict_address_overflow(entry.get("address", ""))
                 self._evict_if_full()
             # Swapped in whole rather than updated in place, so no reader can copy
             # an entry that is only half written.
@@ -147,6 +152,20 @@ class PeerRegistry:
             peer = self.peers.get(peer_id)
             if peer is not None:
                 peer["missed_healthchecks"] = _as_int(peer.get("missed_healthchecks")) + 1
+
+    def _evict_address_overflow(self, address: str) -> None:
+        """Make room for one more id from `address` without touching other hosts.
+
+        A new id from an address already at its cap replaces that address's
+        oldest entry. Caller holds the lock.
+        """
+        if not address:
+            return
+        same = [key for key, peer in self.peers.items() if peer.get("address") == address]
+        while len(same) >= MAX_IDS_PER_ADDRESS:
+            oldest = min(same, key=lambda key: self.peers[key].get("last_seen", ""))
+            self.peers.pop(oldest)
+            same.remove(oldest)
 
     def _evict_if_full(self) -> None:
         """Drop the least recently heard-from peer to make room.
@@ -247,8 +266,8 @@ class PeerRegistry:
                     "last_seen": sanitise(entry.get("last_seen"), 64),
                     "last_seen_via": sanitise(entry.get("last_seen_via"), 32),
                     "missed_healthchecks": _as_int(entry.get("missed_healthchecks")),
-                    "external_reachable": _as_tristate(entry.get("external_reachable")),
-                    "dns_ok": _as_tristate(entry.get("dns_ok")),
+                    "external_reachable": as_tristate(entry.get("external_reachable")),
+                    "dns_ok": as_tristate(entry.get("dns_ok")),
                 }
 
     def localization_view(self, fresh_seconds: float = 30) -> list:
@@ -338,17 +357,26 @@ def _numeric_address(value) -> str:
     return address
 
 
-def _as_tristate(value):
-    """None stays None; anything else becomes a real bool.
+def as_tristate(value) -> Optional[bool]:
+    """A real bool when the value clearly says yes or no, otherwise None.
 
-    A record file is hand-editable, and a string "false" is truthy in Python --
-    which would silently invert a localization verdict.
+    Shared by the wire parser and the record loader. Both read untrusted input:
+    a string "false" is truthy in Python, and an unrecognised value ("maybe",
+    NaN, 2) must stay "not known" rather than become a verdict -- None is not
+    False, and guessing here would send someone after the wrong fault.
     """
-    if value is None:
-        return None
+    if isinstance(value, bool):
+        return value
     if isinstance(value, str):
-        return value.strip().lower() in ("true", "yes", "1")
-    return bool(value)
+        text = value.strip().lower()
+        if text in ("true", "yes", "1"):
+            return True
+        if text in ("false", "no", "0"):
+            return False
+        return None
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    return None
 
 
 def _as_int(value) -> int:
@@ -382,5 +410,5 @@ def load_record(path: str) -> dict:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}

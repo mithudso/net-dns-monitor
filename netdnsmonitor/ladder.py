@@ -2,7 +2,9 @@
 incident is classified, branching on the network-vs-DNS split. Each step is
 either a check (informational, no side effect) or a repair (attempts a fix)
 and is tagged with whether it needs elevated privilege the sandboxed app may
-not have (see the plan's sandbox/privileged-helper decision).
+not have (see the plan's sandbox/privileged-helper decision). The tag is
+descriptive only; enforcement is in the repair_executor handlers via
+privileges.covers.
 """
 
 from dataclasses import dataclass

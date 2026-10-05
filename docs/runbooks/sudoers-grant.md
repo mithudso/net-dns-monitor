@@ -111,8 +111,9 @@ interface. It exits non-zero when no `NOPASSWD` entry exists for this account.
 
 For an end-to-end check, click **Flush DNS cache (changes system state)** in the
 dashboard. With the grant, the outcome is
-`ok (mDNSResponder restarted using the granted privilege)`. This restarts the DNS
-responder, which interrupts name resolution briefly.
+`ok (HUP sent to mDNSResponder using the granted privilege)`. The HUP makes the DNS
+responder drop its cache and re-read its configuration; it does not restart a wedged
+daemon.
 
 ## Revoke from the app
 

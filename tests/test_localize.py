@@ -368,3 +368,26 @@ def test_a_peer_that_cannot_get_out_is_not_dns_evidence(our_external):
 def test_a_peer_that_can_get_out_still_counts_as_dns_evidence():
     result = localize(True, False, [peer(external=True, dns=False)])
     assert result["verdict"] == DNS_OUTAGE
+
+
+def test_a_local_network_summary_does_not_claim_the_local_network_is_at_fault():
+    """The verdict is returned when no peer gives a usable internet answer, which
+    leaves this machine's route and the network beyond it both possible."""
+    for peers in ([peer()], [peer(external=True), peer(external=False)]):
+        result = localize(False, None, peers)
+        assert result["verdict"] == LOCAL_NETWORK
+        assert result["summary"].startswith("Undetermined")
+        assert "route" in result["summary"]
+
+
+@pytest.mark.parametrize("our_external", [True, None])
+def test_peers_excluded_for_having_no_internet_are_counted_not_called_silent(our_external):
+    result = localize(our_external, False, [peer(external=False, dns=False)])
+    assert "no peer reported" not in result["reason"].lower()
+    assert "1 peer" in result["reason"]
+    assert "cannot reach the internet" in result["reason"]
+
+
+def test_a_dns_reason_without_any_reporting_peer_is_unchanged():
+    result = localize(True, False, [peer()])
+    assert "no peer reported its own DNS state" in result["reason"]

@@ -838,3 +838,53 @@ def test_a_failing_save_is_reported_in_the_window_not_raised_into_appkit():
     window._target.invoke_(save)
     assert "Not saved" in window.status.stringValue()
     assert "No space left" in window.status.stringValue()
+
+
+# --- cdo fixes: learn interval, whole numbers, minimums ---------------------
+
+
+def test_collect_refuses_a_learn_interval_below_twice_the_poll():
+    with pytest.raises(ValueError, match="Learn every"):
+        collect({"poll_interval_seconds": "30", "domain_learn_interval_seconds": "40"})
+
+
+def test_collect_checks_learn_interval_against_the_current_config_poll():
+    with pytest.raises(ValueError, match="Learn every"):
+        collect(
+            {"domain_learn_interval_seconds": "40"}, current_config={"poll_interval_seconds": 30}
+        )
+    assert collect(
+        {"domain_learn_interval_seconds": "60"}, current_config={"poll_interval_seconds": 30}
+    )
+
+
+def test_int_field_rejects_a_fraction_instead_of_truncating():
+    with pytest.raises(ValueError, match="whole number"):
+        parse_field("int", "5.9", "Ping every")
+    assert parse_field("int", "5.0", "Ping every") == 5
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "failure_threshold",
+        "success_threshold",
+        "ping_failure_threshold",
+        "ping_loss_window",
+    ],
+)
+def test_counts_below_one_are_refused(key):
+    with pytest.raises(ValueError):
+        collect({key: "0"})
+    assert collect({key: "1"}) == {key: 1}
+
+
+def test_hidden_keys_get_no_field_and_are_never_collected():
+    window = SettingsWindow(
+        on_save=lambda values: "", hidden_keys=frozenset({"router_enabled", "failover_enabled"})
+    )
+    assert "router_enabled" not in window.fields
+    assert "failover_enabled" not in window.fields
+    assert "ping_host" in window.fields
+    window.load({"ping_host": "1.1.1.1"})
+    assert window.changed_keys({"ping_host": "1.1.1.1"}) == set()

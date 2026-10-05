@@ -12,7 +12,7 @@ falls back to `print`, so these tests capture stdout to see what was drawn.
 
 import pytest
 
-from netdnsmonitor.console import CLEAR, CommandResult, ConsoleState
+from netdnsmonitor.console import CLEAR, ClearSignal, CommandResult, ConsoleState
 from netdnsmonitor.console_window import BUSY_MESSAGE, ConsoleWindowController
 
 
@@ -227,3 +227,16 @@ def test_multiple_console_targets_share_one_objc_class_with_separate_controllers
     assert type(a) is type(b)
     assert a._controller is first
     assert b._controller is second
+
+
+def test_a_command_that_prints_the_sentinel_is_drawn_not_treated_as_clear(capsys):
+    cleared = []
+    console = controller(runner=lambda command, cwd, timeout: CommandResult(stdout="__CLEAR__"))
+    console.clear = lambda: cleared.append(True)
+    console.run_line("curl http://host/x")
+    assert cleared == []
+    assert isinstance(CLEAR, ClearSignal)
+
+
+def test_the_busy_message_does_not_promise_that_closing_ends_the_command():
+    assert "close the window" not in BUSY_MESSAGE

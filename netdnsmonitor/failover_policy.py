@@ -107,7 +107,7 @@ def _brakes(
     if last_switch_at is not None and now >= last_switch_at:
         elapsed = now - last_switch_at
         if elapsed < cooldown_seconds:
-            return f"cooldown: {cooldown_seconds - elapsed:.0f}s remaining since the last switch"
+            return f"cooldown: {cooldown_seconds - elapsed:.0f}s remaining since the last switch attempt"
     recent = _recent_switches(switch_times, now)
     # Fail closed on a nonsense ceiling. Treating a negative as "unlimited"
     # would turn a config typo into no ceiling at all, on a link whose whole

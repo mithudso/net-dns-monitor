@@ -268,3 +268,27 @@ def test_resolution_worker_error_is_not_a_dns_failure():
 
     with pytest.raises(UnicodeError, match="invalid DNS label"):
         resolve_all(["bad.example"], 0.1, bad_lookup)
+
+
+def test_a_domains_callable_is_re_read_on_every_probe():
+    """The learner grows the list between ticks; a snapshot taken at build time
+    would never probe a learned domain.
+    """
+    seen = []
+    current = ["a.example"]
+
+    def resolve_fn(domain, timeout):
+        seen.append(domain)
+        return True
+
+    prober = make_prober(
+        external_targets=[("1.1.1.1", 443)],
+        internal_targets=[],
+        domains=lambda: list(current),
+        connect_fn=lambda host, port, timeout: True,
+        resolve_fn=resolve_fn,
+    )
+    prober()
+    current.append("b.example")
+    prober()
+    assert seen == ["a.example", "a.example", "b.example"]

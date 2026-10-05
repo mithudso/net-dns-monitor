@@ -35,8 +35,9 @@ def test_unclassified_and_healthy_have_no_ladder_steps():
 def test_no_check_step_claims_to_need_privilege():
     """`kind` and `needs_privilege` are independent fields, and only three of
     the eight steps had their flag asserted. A check is read-only with no side
-    effect, so flagging one privileged makes repair_executor stub out a step it
-    could always have run.
+    effect, so the flag would be a false description of it. The flag is
+    descriptive only; enforcement is in repair_executor handlers via
+    privileges.covers.
     """
     for classification in (Classification.NETWORK, Classification.DNS):
         for step in ladder_for(classification):

@@ -470,3 +470,31 @@ def test_manual_only_mode_does_not_claim_a_paused_failback():
     first = build_failover_lines(snap)[0]
     assert "manual only" in first
     assert "paused" not in first
+
+
+# --- resolution_counts / failover snapshot age ------------------------------
+
+
+def test_resolution_counts_separates_abandoned_from_failing():
+    from netdnsmonitor.status import resolution_counts
+
+    findings = [
+        {"resolved": True},
+        {"resolved": False, "outcome": "abandoned"},
+        {"resolved": False, "outcome": "timeout"},
+        {"resolved": None},
+    ]
+    assert resolution_counts(findings) == (2, 1)
+    assert resolution_counts([]) == (0, 0)
+
+
+def test_failover_lines_carry_when_the_probe_was_taken():
+    import time
+
+    taken = time.mktime((2026, 10, 5, 14, 7, 0, 0, 0, -1))
+    lines = build_failover_lines(snapshot(taken_at=taken))
+    assert "(checked 14:07)" in lines[1]
+
+
+def test_failover_lines_without_taken_at_render_as_before():
+    assert all("checked" not in line for line in build_failover_lines(snapshot()))

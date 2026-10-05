@@ -8,10 +8,12 @@ is a pointer to that artifact, not a copy of it.
 Both notifiers take an injected transport so tests never open a socket, and
 neither ever raises: a delivery failure returns {"error": ...} so the report
 still gets written and the menu bar keeps ticking. Timeouts are short and
-mandatory. app.py normally sends from a worker thread, not the rumps main
-thread, but it falls back to sending inline when a thread cannot be started;
-an unbounded send at the exact moment the network is known to be broken would
-then freeze the UI during the very incident it is reporting.
+mandatory, but each bounds one socket operation (connect, read), not the whole
+send, and not the DNS lookup of the destination, which waits on the system
+resolver before any timeout applies. app.py normally sends from a worker
+thread, not the rumps main thread, but it falls back to sending inline when a
+thread cannot be started; during a DNS incident that inline send can still
+block the UI for as long as the resolver takes to answer.
 
 Secrets (the Slack webhook URL, the SMTP password) come from the environment,
 never from config.yaml, and are never echoed into an error string: urllib's
@@ -32,6 +34,13 @@ from typing import Callable, Optional
 DEFAULT_TIMEOUT = 5.0
 
 
+def _recheck_word(report: dict) -> str:
+    # recheck_ok None means the recheck did not run or was half-probed; it is
+    # neither healthy nor failed. Older reports carry only `resolved`.
+    recheck_ok = report.get("recheck_ok", report.get("resolved"))
+    return "inconclusive" if recheck_ok is None else str(bool(recheck_ok))
+
+
 def format_notification(report: dict, report_path: Optional[str] = None) -> str:
     """One short, human-readable block. Deliberately omits probe_results and
     log_excerpts: those are unredacted by design because the report is local.
@@ -44,7 +53,7 @@ def format_notification(report: dict, report_path: Optional[str] = None) -> str:
         # UNCLASSIFIED incident, which runs no ladder, and for a blip that
         # cleared while every repair returned NEEDS_PRIVILEGE -- so it must not
         # be worded as a repair having worked.
-        f"Healthy on recheck: {report.get('resolved')}",
+        f"Healthy on recheck: {_recheck_word(report)}",
         f"Summary: {report.get('summary')}",
     ]
     repair_outcome = report.get("repair_outcome")
@@ -96,6 +105,9 @@ def make_slack_notifier(
             status, body = post_fn(webhook_url, payload, timeout)
         except urllib.error.HTTPError as exc:
             # str(exc) can contain the webhook URL, which is the secret.
+            # An HTTPError wraps the open response; close it so the socket is
+            # not held until garbage collection.
+            exc.close()
             return {"channel": "slack", "error": f"HTTP {exc.code} from Slack webhook"}
         except (
             urllib.error.URLError,

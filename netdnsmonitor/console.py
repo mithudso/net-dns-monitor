@@ -20,11 +20,13 @@ something, no stdin so nothing can hang on a prompt, and an output cap.
 import codecs
 import contextlib
 import os
+import select
 import shlex
 import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -46,10 +48,26 @@ MAX_OUTPUT_BYTES = 64 * 1024
 # consequence is deliberate: a `&` job does not outlive its console line, which
 # is the same contract the timeout already states.
 ORPHAN_GRACE_SECONDS = 0.5
-READER_JOIN_SECONDS = 5.0
+# After the group kill, readers still alive are held by a child that left the
+# session (setsid) and so survived it. They get this long to see EOF, then a stop
+# event ends them; each bound is shared by both readers, not paid per reader.
+READER_JOIN_SECONDS = 0.5
+READER_STOP_SECONDS = 0.5
+# How often a reader wakes to look at the stop event while its pipe is quiet.
+READER_POLL_SECONDS = 0.1
+
+
+class ClearSignal(str):
+    """The "empty the transcript" instruction from `handle`.
+
+    A str subclass, checked with `isinstance`, because a plain string sentinel
+    is indistinguishable from a command that happens to print the same text: a
+    `curl` of a page whose body is "__CLEAR__" would wipe the transcript.
+    """
+
 
 # The window clears its own text storage; `handle` only says that it should.
-CLEAR = "__CLEAR__"
+CLEAR = ClearSignal("__CLEAR__")
 
 BANNER = """\
 Net/DNS console -- arbitrary shell, run as your user in your environment.
@@ -118,7 +136,7 @@ Scripts Catalog & Module Entry Points (from SCRIPTS.md):
 
   2. Test Suite (`pytest`):
      python3 -m pytest -q
-     - Description: Runs the 187-test offline test suite covering the entire decision surface.
+     - Description: Runs the offline test suite covering the entire decision surface.
 
   3. One-shot Prober (`prober.py`):
      python3 -c "from netdnsmonitor.prober import make_prober; p = make_prober(external_targets=[('1.1.1.1',443)], internal_targets=[], domains=['api.anthropic.com']); print(p())"
@@ -187,6 +205,10 @@ class CommandResult:
     stderr: str = ""
     returncode: int = 0
     timed_out: bool = False
+    # Bytes the runner read and discarded past its per-stream cap, so the
+    # rendering can say the output is incomplete.
+    dropped_stdout: int = 0
+    dropped_stderr: int = 0
 
 
 @dataclass
@@ -271,8 +293,8 @@ def _kill_process_group(process) -> None:
             process.kill()
 
 
-def _drain(stream, sink: dict, cap: int) -> None:
-    """Read a pipe to the end, keeping only the first `cap` bytes.
+def _drain(stream, sink: dict, cap: int, stop: threading.Event) -> None:
+    """Read a pipe until EOF or `stop`, keeping only the first `cap` characters.
 
     `communicate()` would accumulate the whole stream in memory: `yes` run for
     the full timeout is a couple of gigabytes, in the address space of a menu
@@ -282,28 +304,36 @@ def _drain(stream, sink: dict, cap: int) -> None:
     Discarding rather than simply stopping is deliberate. Stopping would leave
     the child blocked on a full pipe until the timeout killed it, which turns
     every over-long command into a 20-second wait instead of finishing when it
-    would have.
+    would have. What was discarded is counted in `sink["raw"]` so the result can
+    say so.
 
-    The pipe is binary and read with `read1`, which returns whatever is there
-    now. A text-mode `read(n)` blocks until it has n characters *or EOF*, and
-    EOF on this pipe comes only when every process holding its write end has
-    gone -- so `sh -c 'sleep 60' & echo started` parks the reader on the
-    grandchild's copy of the pipe and the `started` that was printed is
-    reported as no output. The incremental decoder keeps a multibyte character
-    split across two reads from becoming two replacement characters.
+    The fd is read with `select` and `os.read`, which return whatever is there
+    now. A blocking buffered read waits for EOF, and EOF on this pipe comes only
+    when every process holding its write end has gone -- so `sh -c 'sleep 60' &
+    echo started` would park the reader on the grandchild's copy of the pipe and
+    the `started` that was printed is reported as no output. A child that left
+    the session (`setsid`) survives the group kill and holds the pipe open for
+    good; the poll is what lets `stop` end this reader anyway. The reader closes
+    its own pipe, so nothing closes an fd another thread is reading. The
+    incremental decoder keeps a multibyte character split across two reads from
+    becoming two replacement characters.
 
     `cap` counts decoded characters, not bytes. It is a coarse ceiling to keep
-    memory flat, not the reported limit; `truncate` applies the exact byte cap
-    afterwards.
+    memory flat; `truncate` applies the exact byte cap afterwards.
     """
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     try:
-        while True:
-            raw = stream.read1(8192)
+        fd = stream.fileno()
+        while not stop.is_set():
+            ready, _, _ = select.select([fd], [], [], READER_POLL_SECONDS)
+            if not ready:
+                continue
+            raw = os.read(fd, 65536)
             chunk = decoder.decode(raw, not raw)
             if chunk and sink["size"] < cap:
                 sink["parts"].append(chunk[: cap - sink["size"]])
             sink["size"] += len(chunk)
+            sink["raw"] += len(raw)
             if not raw:
                 break
     except (ValueError, OSError):
@@ -344,25 +374,49 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
             _LIVE.discard(process.pid)
 
 
+def _join_all(readers: list, seconds: float) -> None:
+    """Join every reader against one shared deadline, not `seconds` apiece."""
+    deadline = time.monotonic() + seconds
+    for reader in readers:
+        reader.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
 def _collect(process, timeout: float) -> CommandResult:
+    stop = threading.Event()
     sinks = {
-        "stdout": {"parts": [], "size": 0},
-        "stderr": {"parts": [], "size": 0},
+        "stdout": {"parts": [], "size": 0, "raw": 0},
+        "stderr": {"parts": [], "size": 0, "raw": 0},
     }
+    streams = {"stdout": process.stdout, "stderr": process.stderr}
     readers = [
         threading.Thread(
-            target=_drain,
-            args=(process.stdout, sinks["stdout"], MAX_OUTPUT_BYTES),
-            daemon=True,
-        ),
-        threading.Thread(
-            target=_drain,
-            args=(process.stderr, sinks["stderr"], MAX_OUTPUT_BYTES),
-            daemon=True,
-        ),
+            target=_drain, args=(streams[name], sinks[name], MAX_OUTPUT_BYTES, stop), daemon=True
+        )
+        for name in ("stdout", "stderr")
     ]
-    for reader in readers:
-        reader.start()
+    started = []
+    try:
+        for reader in readers:
+            reader.start()
+            started.append(reader)
+    except BaseException as exc:
+        # Without readers nothing drains the pipes, and the child would run on
+        # unobserved after this frame is gone. Kill it before anything propagates;
+        # the caller's `finally` then drops it from _LIVE, which is only true once
+        # it is dead.
+        _kill_process_group(process)
+        with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+            process.wait(timeout=5)
+        stop.set()
+        for name, reader in zip(("stdout", "stderr"), readers, strict=True):
+            if reader not in started:
+                with contextlib.suppress(ValueError, OSError):
+                    streams[name].close()
+        if not isinstance(exc, Exception):
+            raise
+        return CommandResult(
+            stderr=f"could not start output readers: {type(exc).__name__}", returncode=127
+        )
 
     timed_out = False
     try:
@@ -380,29 +434,41 @@ def _collect(process, timeout: float) -> CommandResult:
     # `wait` reaps the child; joining the readers is what stops a half-read
     # pipe from being reported as empty output on a command that did produce
     # some before it was killed. A reader still alive after the grace is held
-    # open by a background child of the shell, and only killing the group
-    # releases it.
-    for reader in readers:
-        reader.join(timeout=ORPHAN_GRACE_SECONDS)
+    # open by a background child of the shell, and killing the group releases it.
+    # One that is still alive after that was started in another session; the
+    # stop event ends it, and it winds down on its own schedule after this
+    # returns.
+    _join_all(readers, ORPHAN_GRACE_SECONDS)
     if any(reader.is_alive() for reader in readers):
         _kill_process_group(process)
-        for reader in readers:
-            reader.join(timeout=READER_JOIN_SECONDS)
+        _join_all(readers, READER_JOIN_SECONDS)
+    if any(reader.is_alive() for reader in readers):
+        stop.set()
+        _join_all(readers, READER_STOP_SECONDS)
+
+    def dropped(name: str) -> int:
+        kept = len("".join(sinks[name]["parts"]).encode("utf-8", "replace"))
+        return max(0, sinks[name]["raw"] - kept)
 
     return CommandResult(
         stdout="".join(sinks["stdout"]["parts"]),
         stderr="".join(sinks["stderr"]["parts"]),
         returncode=returncode,
         timed_out=timed_out,
+        dropped_stdout=dropped("stdout"),
+        dropped_stderr=dropped("stderr"),
     )
 
 
-def truncate(text: str, limit: int = MAX_OUTPUT_BYTES) -> str:
+def truncate(text: str, limit: int = MAX_OUTPUT_BYTES, already_dropped: int = 0) -> str:
+    """Cap `text` at `limit` bytes. `already_dropped` is what an earlier stage
+    discarded; it is added to the marker so the count is of the whole stream.
+    """
     encoded = text.encode("utf-8", "replace")
-    if len(encoded) <= limit:
+    if len(encoded) <= limit and not already_dropped:
         return text
     kept = encoded[:limit].decode("utf-8", "ignore")
-    dropped = len(encoded) - limit
+    dropped = max(0, len(encoded) - limit) + already_dropped
     return f"{kept}\n... [truncated {dropped} more bytes -- redirect to a file to see all of it]"
 
 
@@ -415,19 +481,44 @@ def format_result(result, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> str:
     stderr = (getattr(result, "stderr", "") or "").rstrip()
     returncode = getattr(result, "returncode", 0)
 
-    streams = [stream for stream in (stdout, stderr) if stream]
-    body = truncate("\n".join(streams)) if streams else "(no output)"
+    # Each stream is capped on its own. A joint cap kept the first 64 KB of
+    # "stdout then stderr", so a command that filled stdout lost the stderr line
+    # that said why -- the one part worth reading. Whatever one stream does not
+    # use goes to the other.
+    out_bytes = len(stdout.encode("utf-8", "replace"))
+    err_bytes = len(stderr.encode("utf-8", "replace"))
+    half = MAX_OUTPUT_BYTES // 2
+    streams = []
+    if stdout or getattr(result, "dropped_stdout", 0):
+        streams.append(
+            truncate(
+                stdout,
+                max(half, MAX_OUTPUT_BYTES - err_bytes),
+                _dropped(result, "dropped_stdout"),
+            )
+        )
+    if stderr or getattr(result, "dropped_stderr", 0):
+        streams.append(
+            truncate(
+                stderr,
+                max(half, MAX_OUTPUT_BYTES - out_bytes),
+                _dropped(result, "dropped_stderr"),
+            )
+        )
+    body = "\n".join(streams) if streams else "(no output)"
 
-    # The marker is appended *after* truncation, never inside it. Both streams
-    # are capped independently upstream, so a command that floods stdout and
-    # stderr hands this twice the cap -- and a marker added before truncating
-    # would be the part cut off, losing the exit status on exactly the noisiest
-    # failures, which are the ones where it matters most.
+    # The marker is appended *after* truncation, never inside it, so the exit
+    # status survives on exactly the noisiest failures, where it matters most.
     if getattr(result, "timed_out", False):
         return f"{body}\n[timed out after {timeout:.0f}s -- process group killed]"
     if returncode:
         return f"{body}\n[exit {returncode}]"
     return body
+
+
+def _dropped(result, name: str) -> int:
+    value = getattr(result, name, 0)
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 # A `cd` line containing any of these is a compound command, not a directory.

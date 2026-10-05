@@ -4,9 +4,17 @@ present-but-down interface fails instantly with ENETUNREACH; an absent
 interface raises from if_nametoindex) -- see docs/SCRIPTS.md.
 """
 
+import errno
+import socket
 import time
 
-from netdnsmonitor.interface_probe import make_interface_prober
+import pytest
+
+from netdnsmonitor.interface_probe import (
+    default_bound_connect,
+    default_device_index,
+    make_interface_prober,
+)
 
 TARGETS = [("1.1.1.1", 443), ("8.8.8.8", 443)]
 
@@ -168,7 +176,7 @@ def test_the_injected_index_fn_reaches_the_default_connect():
     """With the default connect, the index lookup on the connect side has to
     be the same injected one probe() used, or a test pretending an adapter is
     absent gets the real interface table underneath it. An absent index
-    returns False before any socket is opened, so this touches no network.
+    returns None (not asked) before any socket is opened, so this touches no network.
     """
     from netdnsmonitor.interface_probe import default_bound_connect
 
@@ -178,7 +186,7 @@ def test_the_injected_index_fn_reaches_the_default_connect():
         seen.append(device)
         return None
 
-    assert default_bound_connect("en9", "1.1.1.1", 443, 1.0, index_fn=index_fn) is False
+    assert default_bound_connect("en9", "1.1.1.1", 443, 1.0, index_fn=index_fn) is None
     assert seen == ["en9"]
 
 
@@ -383,3 +391,77 @@ def test_bound_probes_refuse_hostname_lookup_before_resolving(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", unexpected_lookup)
     assert default_bound_connect("en0", "example.com", 443, 1, index_fn=lambda d: 1) is False
+
+
+def test_default_device_index_of_an_absent_interface_is_none():
+    assert default_device_index("nonexist0") is None
+
+
+def _fake_socket(monkeypatch, *, make=None, setsockopt=None, connect=None):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *a: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.1", 53))],
+    )
+
+    class FakeSocket:
+        def __init__(self, family, kind):
+            if make:
+                raise make
+
+        def setsockopt(self, *a):
+            if setsockopt:
+                raise setsockopt
+
+        def settimeout(self, t):
+            pass
+
+        def connect(self, address):
+            if connect:
+                raise connect
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(socket, "socket", FakeSocket)
+
+
+def test_interface_vanishing_before_the_bind_is_none_not_false(monkeypatch):
+    _fake_socket(monkeypatch, setsockopt=OSError(errno.ENXIO, "Device not configured"))
+    probe = make_interface_prober([("192.168.1.1", 53)], timeout=1.0, index_fn=lambda d: 7)
+    assert probe("en6") is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM, errno.EPERM, errno.EACCES],
+)
+def test_a_local_socket_failure_is_none_not_a_dead_link(monkeypatch, code):
+    _fake_socket(monkeypatch, make=OSError(code, "local"))
+    probe = make_interface_prober([("192.168.1.1", 53)], timeout=1.0, index_fn=lambda d: 7)
+    assert probe("en0") is None
+
+
+def test_a_connect_failure_through_the_interface_is_still_false(monkeypatch):
+    _fake_socket(monkeypatch, connect=OSError(errno.ENETUNREACH, "unreachable"))
+    probe = make_interface_prober([("192.168.1.1", 53)], timeout=1.0, index_fn=lambda d: 7)
+    assert probe("en0") is False
+
+
+def test_default_bound_connect_with_an_absent_index_is_none():
+    assert default_bound_connect("en9", "1.1.1.1", 443, 1.0, index_fn=lambda d: None) is None
+
+
+def test_none_from_connect_fn_is_not_an_attempt():
+    probe = make_interface_prober(
+        TARGETS, timeout=2.0, connect_fn=lambda d, h, p, t: None, index_fn=lambda d: 15
+    )
+    assert probe("en0") is None
+
+
+def test_one_none_does_not_hide_a_measured_failure():
+    answers = iter([None, False])
+    probe = make_interface_prober(
+        TARGETS, timeout=2.0, connect_fn=lambda d, h, p, t: next(answers), index_fn=lambda d: 15
+    )
+    assert probe("en0") is False

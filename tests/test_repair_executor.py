@@ -525,7 +525,7 @@ def test_subprocess_timeout_is_reported_not_raised():
 
     executor = make_repair_executor(run_fn=timing_out)
     outcome = executor(LadderStep("flush_dns_cache", "repair", needs_privilege=False))
-    assert outcome.startswith("failed")
+    assert outcome == f"failed: {DSCACHEUTIL} did not complete (TimeoutExpired)"
 
 
 def test_missing_binary_is_reported_not_raised():
@@ -534,7 +534,8 @@ def test_missing_binary_is_reported_not_raised():
 
     executor = make_repair_executor(run_fn=missing_binary)
     outcome = executor(LadderStep("check_interface_state", "check", needs_privilege=False))
-    assert "no such file" in outcome.lower()
+    # Class name only: an OSError message can carry a path or other detail.
+    assert outcome == f"failed: {SCUTIL} did not complete (FileNotFoundError)"
 
 
 def test_requests_explicit_utf8_decoding_instead_of_relying_on_locale():
@@ -646,3 +647,104 @@ def test_one_unreadable_route_family_is_partial_not_missing_routes():
     assert outcome.startswith("partial:")
     assert "IPv4 routes:\nfailed:" in outcome
     assert "IPv6 routes:\ndefault fe80::1 en0" in outcome
+
+
+def _step(name, kind="repair"):
+    return LadderStep(name, kind, needs_privilege=False)
+
+
+def _timing_out_on(binary, other_returncode=0, other_stdout=""):
+    import subprocess
+
+    def run_fn(args, **kwargs):
+        if args[0] == binary:
+            raise subprocess.TimeoutExpired(cmd=args, timeout=5)
+        return SimpleNamespace(returncode=other_returncode, stdout=other_stdout, stderr="")
+
+    return run_fn
+
+
+def test_a_hup_that_never_ran_is_not_reported_as_needing_privilege():
+    outcome = make_repair_executor(run_fn=_timing_out_on(KILLALL))(_step("flush_dns_cache"))
+    assert outcome == (
+        "partial: dscacheutil cache flushed; the mDNSResponder HUP did not complete "
+        "(TimeoutExpired)"
+    )
+    assert "requires elevated privilege" not in outcome
+    assert "Grant elevated permissions" not in outcome
+
+
+def test_a_hup_that_ran_and_was_refused_still_points_at_the_grant():
+    def run_fn(args, **kwargs):
+        if args[0] == KILLALL:
+            return SimpleNamespace(returncode=1, stdout="", stderr="not permitted")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    outcome = make_repair_executor(run_fn=run_fn)(_step("flush_dns_cache"))
+    assert "requires elevated privilege" in outcome and "Grant elevated" in outcome
+
+
+def test_a_check_that_timed_out_does_not_claim_an_exit_status():
+    outcome = make_repair_executor(run_fn=_timing_out_on(SCUTIL))(
+        _step("check_interface_state", "check")
+    )
+    assert outcome == f"failed: {SCUTIL} did not complete (TimeoutExpired)"
+    assert "exited" not in outcome
+
+
+def test_a_check_that_ran_and_failed_still_reports_its_exit_status():
+    run_fn, _ = fake_run_factory(returncode=2, stdout="", stderr="boom")
+    outcome = make_repair_executor(run_fn=run_fn)(_step("check_interface_state", "check"))
+    assert outcome == f"failed: {SCUTIL} --nwi exited 2 -- boom"
+
+
+def test_a_timed_out_sudo_ipconfig_is_unknown_not_failed():
+    def run_fn(args, **kwargs):
+        if args[0] == privileges.SUDO:
+            import subprocess
+
+            raise subprocess.TimeoutExpired(cmd=args, timeout=5)
+        return SimpleNamespace(returncode=0, stdout="lease_time (uint32): 0x1\n", stderr="")
+
+    ex = make_repair_executor(
+        run_fn=run_fn,
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en0",
+        dhcp_granted_fn=lambda i: True,
+    )
+    outcome = ex(_step("renew_dhcp_lease"))
+    assert outcome.startswith("unknown:")
+    assert "did not complete (TimeoutExpired)" in outcome
+    assert "may or may not have been sent" in outcome
+
+
+def test_the_granted_hup_outcome_says_a_hup_was_sent_not_that_it_restarted():
+    def run_fn(args, **kwargs):
+        if args[0] == KILLALL:
+            return SimpleNamespace(returncode=1, stdout="", stderr="not permitted")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    # The unprivileged HUP fails; the sudo one (also via KILLALL's argv tail) is
+    # distinguished by argv[0] == sudo.
+    def sudo_ok(args, **kwargs):
+        if args[0] == privileges.SUDO:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return run_fn(args, **kwargs)
+
+    outcome = make_repair_executor(run_fn=sudo_ok, is_granted_fn=lambda: True)(
+        _step("flush_dns_cache")
+    )
+    assert outcome == "ok (HUP sent to mDNSResponder using the granted privilege)"
+    assert "restarted" not in outcome
+
+
+def test_a_timed_out_getpacket_is_a_failed_read_not_a_missing_lease():
+    ex = make_repair_executor(
+        run_fn=_timing_out_on(privileges.IPCONFIG),
+        is_granted_fn=lambda: True,
+        primary_interface_fn=lambda: "en0",
+        dhcp_granted_fn=lambda i: True,
+    )
+    outcome = ex(_step("renew_dhcp_lease"))
+    assert outcome.startswith("failed: could not read the DHCP state of en0")
+    assert "TimeoutExpired" in outcome

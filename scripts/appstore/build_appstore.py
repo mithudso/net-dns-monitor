@@ -70,6 +70,7 @@ PACKAGING = REPO / "packaging" / "appstore"
 BUILD_ROOT = REPO / "build" / "appstore"
 APP_NAME = "Net-DNS-Monitor"
 PROBE_NAME = "sandbox_probe"
+DEFAULT_BUNDLE_ID = "com.net-dns-monitor.app"
 
 MACHO_MAGICS = {
     b"\xfe\xed\xfa\xce",
@@ -348,13 +349,30 @@ def upload_commands(pkg: Path) -> list[str]:
 # --- side-effecting steps ---------------------------------------------------
 
 
+def failure_message(cmd: Sequence[str], error: subprocess.CalledProcessError) -> str:
+    """A build failure that says what the tool said, not just a traceback."""
+    detail = error.stderr or b""
+    if isinstance(detail, bytes):
+        detail = detail.decode("utf-8", "replace")
+    tool = str(cmd[0]) if cmd else "command"
+    return f"{tool} exited {error.returncode}: {detail.strip() or '(no stderr captured)'}"
+
+
 def run(cmd: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
     print("+", " ".join(str(c) for c in cmd), flush=True)
-    return subprocess.run([str(c) for c in cmd], check=True, **kwargs)
+    try:
+        return subprocess.run([str(c) for c in cmd], check=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(failure_message(cmd, error)) from error
 
 
 def capture(cmd: Sequence[str]) -> str:
-    return subprocess.run([str(c) for c in cmd], check=True, capture_output=True, text=True).stdout
+    try:
+        return subprocess.run(
+            [str(c) for c in cmd], check=True, capture_output=True, text=True
+        ).stdout
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(failure_message(cmd, error)) from error
 
 
 def is_macho(path: Path) -> bool:
@@ -559,18 +577,70 @@ def set_info_plist(app: Path, updates: dict) -> None:
 
 
 def profile_application_identifier(profile: Path) -> str:
-    decoded = subprocess.run(
-        ["security", "cms", "-D", "-i", str(profile)], check=True, capture_output=True
-    ).stdout
+    cmd = ["security", "cms", "-D", "-i", str(profile)]
+    try:
+        decoded = subprocess.run(cmd, check=True, capture_output=True).stdout
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(failure_message(cmd, error)) from error
     data = plistlib.loads(decoded)
     ents = data.get("Entitlements", {})
     return ents.get("com.apple.application-identifier") or ents.get("application-identifier", "")
+
+
+def codesign_args(
+    kind: str,
+    path: Path,
+    bundle_id: str,
+    app_entitlements: Path,
+    helper_entitlements: Path,
+) -> tuple[Path | None, str | None]:
+    """(entitlements file, identifier) for one sign_plan entry.
+
+    Libraries and frameworks carry no entitlements; the probe helper gets the
+    app's (it must run sandboxed with the same grants) under its own identifier.
+    """
+    if kind == "helper" and path.name == PROBE_NAME:
+        return app_entitlements, probe_identifier(bundle_id)
+    if kind == "helper":
+        return helper_entitlements, None
+    if kind == "app":
+        return app_entitlements, None
+    return None, None
+
+
+def version_problem(value: str, label: str) -> str | None:
+    """App Store Connect accepts one to three dot-separated integers."""
+    if not re.fullmatch(r"\d+(\.\d+){0,2}", value or ""):
+        return f"{label} must be 1-3 dot-separated integers, got {value!r}"
+    return None
+
+
+def release_input_problem(args) -> str | None:
+    """Release inputs that would otherwise fail only after the py2app build."""
+    if not args.bundle_id:
+        return "a release build needs an explicit --bundle-id (no default is registered)"
+    for value, label in ((args.version, "--version"), (args.build_number, "--build-number")):
+        problem = version_problem(value, label)
+        if problem:
+            return problem
+    return None
+
+
+def profile_problem(found: str, team_id: str, bundle_id: str) -> str | None:
+    expected = f"{team_id}.{bundle_id}"
+    if found != expected:
+        return f"provisioning profile is for {found!r}, this build is {expected!r}"
+    return None
 
 
 def codesign(
     path: Path, identity: str, entitlements_file: Path | None, identifier: str | None = None
 ) -> None:
     cmd = ["codesign", "--force", "--sign", identity]
+    if identity != "-":
+        # The store rejects a signature with no secure timestamp; an ad-hoc
+        # identity cannot take one.
+        cmd.append("--timestamp")
     if identifier:
         cmd += ["--identifier", identifier]
     if entitlements_file is not None:
@@ -583,7 +653,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="mode", required=True)
     for name in ("adhoc", "release"):
         p = sub.add_parser(name)
-        p.add_argument("--bundle-id", default="com.net-dns-monitor.app")
+        p.add_argument("--bundle-id", default=None)
         p.add_argument("--version", default="1.0")
         p.add_argument("--build-number", default="1")
         p.add_argument("--copyright", default="")
@@ -610,9 +680,27 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if sys.platform != "darwin":
         raise SystemExit("App Store builds need macOS and Xcode")
+    # Only an ad-hoc build may fall back to a default; release demands --bundle-id.
+    if args.mode == "adhoc" and not args.bundle_id:
+        args.bundle_id = DEFAULT_BUNDLE_ID
     problem = privacy_policy_problem(args.privacy_policy_url, args.mode)
     if problem:
         raise SystemExit(problem)
+    team_id = getattr(args, "team_id", None)
+    if args.mode == "release":
+        problem = release_input_problem(args)
+        if problem:
+            raise SystemExit(problem)
+        # Fail on a bad team id or a mismatched profile before the slow build.
+        try:
+            entitlements({}, team_id, args.bundle_id)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        problem = profile_problem(
+            profile_application_identifier(args.profile), team_id, args.bundle_id
+        )
+        if problem:
+            raise SystemExit(problem)
 
     out = BUILD_ROOT / args.mode
     if out.exists():
@@ -662,16 +750,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("Info.plist is missing required keys: " + ", ".join(missing))
 
     base = plistlib.loads((PACKAGING / "entitlements.plist").read_bytes())
-    team_id = getattr(args, "team_id", None)
     app_entitlements = out / "app.entitlements"
     app_entitlements.write_bytes(plistlib.dumps(entitlements(base, team_id, args.bundle_id)))
     helper_entitlements = PACKAGING / "entitlements-helper.plist"
 
     if args.mode == "release":
-        expected = f"{team_id}.{args.bundle_id}"
-        found = profile_application_identifier(args.profile)
-        if found != expected:
-            raise SystemExit(f"provisioning profile is for {found!r}, this build is {expected!r}")
         shutil.copyfile(args.profile, app / "Contents" / "embedded.provisionprofile")
         identity = args.app_identity
     else:
@@ -680,14 +763,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     run(["xattr", "-cr", app])
 
     for path, kind in sign_plan(app, binaries, main_executable):
-        if kind == "helper" and path.name == PROBE_NAME:
-            codesign(path, identity, app_entitlements, probe_identifier(args.bundle_id))
-        elif kind == "helper":
-            codesign(path, identity, helper_entitlements)
-        elif kind == "app":
-            codesign(path, identity, app_entitlements)
-        else:
-            codesign(path, identity, None)
+        ents, identifier = codesign_args(
+            kind, path, args.bundle_id, app_entitlements, helper_entitlements
+        )
+        codesign(path, identity, ents, identifier)
 
     run(["codesign", "--verify", "--strict", "--deep", "--verbose=2", app])
     run(["codesign", "--display", "--entitlements", "-", "--xml", app])

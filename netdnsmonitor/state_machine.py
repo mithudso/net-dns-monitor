@@ -38,6 +38,19 @@ LogWatcher = Callable[[], list]
 # a noisy machine returns thousands of lines.
 MAX_OUTBOUND_LOG_LINES = 200
 MAX_OUTBOUND_LOG_LINE_CHARS = 300
+# Probe and ladder results are unbounded too: a ladder step's outcome is raw
+# command output such as `scutil --dns`. Each is capped after redaction.
+MAX_OUTBOUND_RESULT_CHARS = 20_000
+
+
+def _cap_chars(value):
+    """Keep a value as it is when it fits, else its text cut to the cap with a
+    marker, so the model is told the evidence is incomplete."""
+    text = str(value)
+    if len(text) <= MAX_OUTBOUND_RESULT_CHARS:
+        return value
+    omitted = len(text) - MAX_OUTBOUND_RESULT_CHARS
+    return f"{text[:MAX_OUTBOUND_RESULT_CHARS]}[{omitted} chars omitted]"
 
 
 class StateMachine:
@@ -115,13 +128,13 @@ class StateMachine:
             return f"failed: step raised {type(exc).__name__}"
 
     def _recheck(self) -> tuple:
-        """(classification, probe). A recheck that did not run proves nothing."""
+        """(classification, probe, ran). A recheck that did not run proves nothing."""
         try:
             probe = self.prober()
-            return classify(probe.get("external_reachable"), probe.get("dns_ok")), probe
+            return classify(probe.get("external_reachable"), probe.get("dns_ok")), probe, True
         except Exception:  # noqa: BLE001 - a recheck that did not run proves nothing
             # UNCLASSIFIED, not HEALTHY: an unknown must never read as resolved.
-            return Classification.UNCLASSIFIED, {}
+            return Classification.UNCLASSIFIED, {}, False
 
     def _read_log_excerpts(self) -> list:
         try:
@@ -160,9 +173,9 @@ class StateMachine:
             capped.insert(0, f"[{omitted} earlier log lines omitted]")
         return {
             "classification": classification.value,
-            "probe_results": redact(probe, self.sensitive_strings),
+            "probe_results": _cap_chars(redact(probe, self.sensitive_strings)),
             "log_excerpts": capped,
-            "ladder_results": redact(ladder_results, self.sensitive_strings),
+            "ladder_results": _cap_chars(redact(ladder_results, self.sensitive_strings)),
         }
 
     def _run_incident_pipeline(self, classification: Classification, probe: ProbeResult) -> dict:
@@ -186,7 +199,7 @@ class StateMachine:
                 repair_outcomes.append(f"{step.name}: {outcome}")
         repair_outcome = "; ".join(repair_outcomes) if repair_outcomes else None
 
-        recheck_classification, recheck_probe = self._recheck()
+        recheck_classification, recheck_probe, recheck_ran = self._recheck()
         # The same rule as tick(): a recheck that confirmed one field and did
         # not read the other is evidence of nothing. It can neither claim the
         # incident resolved (so the report carries recheck_ok=None, not True)
@@ -196,8 +209,13 @@ class StateMachine:
         recheck_inconclusive = recheck_classification == Classification.UNCLASSIFIED and any(
             recheck_probe.get(field) for field in ("external_reachable", "dns_ok")
         )
+        # A recheck that raised did not run: recheck_ok is None ("not probed"),
+        # not False, so the report does not word it as a failed probe. It still
+        # escalates, as before: nothing confirmed the incident is over.
         recheck_ok: Optional[bool] = (
-            None if recheck_inconclusive else recheck_classification == Classification.HEALTHY
+            None
+            if recheck_inconclusive or not recheck_ran
+            else recheck_classification == Classification.HEALTHY
         )
 
         log_excerpts = self._read_log_excerpts()

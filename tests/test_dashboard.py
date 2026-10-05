@@ -702,3 +702,35 @@ def test_log_pane_calls_are_harmless_without_the_log_column():
     window.set_search_query("dns")
     window.set_log_level_title("All levels")
     assert window.search_query() == ""
+
+
+def test_abandoned_lookups_are_not_counted_as_failing():
+    rows = flat(
+        dashboard_sections(
+            ping_stats=HEALTHY,
+            flap_state="healthy",
+            config=CONFIG,
+            resolution_findings=[
+                {"resolved": True},
+                {"resolved": False, "outcome": "abandoned"},
+                {"resolved": False, "outcome": "timeout"},
+            ],
+        )
+    )
+    assert rows["Resolution check"] == "1 of 3 domains failing, 1 not probed"
+
+
+def test_stale_ping_reading_is_not_shown_as_healthy():
+    cfg = {**CONFIG, "ping_interval_seconds": 5}
+    stale = {**HEALTHY, "age_seconds": 400}
+    rows = flat(dashboard_sections(ping_stats=stale, flap_state="healthy", config=cfg))
+    assert rows["Round trip"] == "no recent ping (last 400s ago)"
+    assert rows["Status"] != "healthy"
+
+
+def test_fresh_ping_reading_renders_as_today():
+    cfg = {**CONFIG, "ping_interval_seconds": 5}
+    fresh = {**HEALTHY, "age_seconds": 4}
+    rows = flat(dashboard_sections(ping_stats=fresh, flap_state="healthy", config=cfg))
+    assert rows["Status"] == "healthy"
+    assert "no recent ping" not in rows["Round trip"]

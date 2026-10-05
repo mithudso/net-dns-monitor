@@ -98,7 +98,6 @@ PY="$VENV_DIR/bin/python"
 # fails later inside pip with a resolver error that does not name the cause.
 "$PY" -c "import sys; sys.exit(0 if sys.version_info >= (3, $MIN_PYTHON_MINOR) else 1)" \
     || die "$VENV_DIR was created with Python older than 3.$MIN_PYTHON_MINOR -- remove it and re-run: rm -rf $VENV_DIR"
-"$PY" -m pip install --quiet --upgrade pip
 "$PY" -m pip install --quiet -r "$REPO_DIR/requirements.txt" -c "$CONSTRAINTS"
 ok "installed runtime dependencies"
 
@@ -191,7 +190,20 @@ else
 fi
 
 printf '\n'
-"$SERVICE_DST" status
+"$SERVICE_DST" status || true
+
+# `launchctl kickstart` returns when launchd accepts the request, not when a
+# process exists, so give it a few seconds. "Installed" below is only said when
+# launchd reports a pid; anything else is a failure the caller must see.
+INSTALL_PID=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    INSTALL_PID="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }')" || INSTALL_PID=""
+    [ -n "$INSTALL_PID" ] && break
+    sleep 1
+done
+if [ -z "$INSTALL_PID" ]; then
+    die "the LaunchAgent is installed but the app is not running. Check: $SERVICE_DST status ; $SERVICE_DST logs ; then try: $SERVICE_DST start"
+fi
 
 cat <<'DONE'
 

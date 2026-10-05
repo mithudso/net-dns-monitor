@@ -444,7 +444,8 @@ class FakePopup:
         self.items.extend(titles)
 
     def selectItemAtIndex_(self, index):
-        self.selected = index
+        # AppKit: -1 clears the selection.
+        self.selected = None if index < 0 else index
 
     def titleOfSelectedItem(self):
         return self.items[self.selected] if self.selected is not None else None
@@ -569,7 +570,7 @@ def test_failed_save_leaves_live_router_unchanged_and_refuses_start(tmp_path):
     ctrl.on_start(VALUES)
     assert router.started == 0
     assert router.lan_ip == "192.168.10.2"
-    assert "not saved: no config file path" in lines
+    assert any("not saved: no config file path" in line for line in lines)
 
 
 def test_disk_save_failure_refuses_router_start(tmp_path):
@@ -582,3 +583,75 @@ def test_disk_save_failure_refuses_router_start(tmp_path):
     ctrl.on_start(VALUES)
     assert router.started == 0
     assert router.lan_ip == "192.168.10.2"
+
+
+# --- audit fixes -----------------------------------------------------------
+
+
+def test_save_validates_router_values_even_when_router_is_disabled(tmp_path):
+    ctrl, lines = controller(tmp_path, router=FakeRouter())
+    bad = {**VALUES, "lan_ip": "$(reboot)", "lan_netmask": "x"}
+    assert ctrl.on_save_config(bad) is False
+    assert any(line.startswith("not saved: lan_ip") for line in lines)
+    assert not (tmp_path / "config.yaml").exists()
+
+
+def test_refused_start_does_not_mutate_live_router_or_config(tmp_path):
+    router = FakeRouter()
+    router.lan_ip = "192.168.10.2"
+    config = {"sensitive_strings": []}
+    ctrl, _ = controller(tmp_path, router=router, config=config)
+    ctrl.app._start_router_worker = lambda slot, label, work: False
+    ctrl.on_start(
+        {
+            **VALUES,
+            "lan_ip": "192.168.77.1",
+            "dhcp_start": "192.168.77.10",
+            "dhcp_end": "192.168.77.20",
+        }
+    )
+    assert router.lan_ip == "192.168.10.2"
+    assert router.started == 0
+    assert "lan_ip" not in config
+
+
+def test_accepted_start_applies_values_inside_the_worker(tmp_path):
+    router = FakeRouter()
+    ctrl, _ = controller(tmp_path, router=router)
+    seen = []
+
+    def starter(slot, label, work):
+        seen.append(getattr(router, "lan_ip", None))
+        work()
+        return True
+
+    ctrl.app._start_router_worker = starter
+    ctrl.on_start(VALUES)
+    assert seen == [None]
+    assert router.lan_ip == VALUES["lan_ip"]
+    assert router.started == 1
+
+
+def test_select_interface_with_no_match_clears_the_selection():
+    ctrl, _ = controller()
+    ctrl.interfaces = ["Wi-Fi (en0)", "USB LAN (en3)"]
+    popup = FakePopup()
+    popup.items = list(ctrl.interfaces)
+    popup.selected = 0
+    ctrl._select_interface(popup, "en9")
+    assert popup.titleOfSelectedItem() is None
+    ctrl._select_interface(popup, "en3")
+    assert popup.titleOfSelectedItem() == "USB LAN (en3)"
+
+
+def test_subprocess_calls_decode_utf8_with_replacement(tmp_path):
+    run = Runner()
+    ctrl, _ = controller(tmp_path, run_fn=run)
+    get_interfaces(run)
+    bootpd_status(run)
+    collect_diagnostics(run, "en3", "en0")
+    ctrl.on_ping("127.0.0.1")
+    assert run.calls
+    for _argv, kwargs in run.calls:
+        assert kwargs.get("encoding") == "utf-8"
+        assert kwargs.get("errors") == "replace"

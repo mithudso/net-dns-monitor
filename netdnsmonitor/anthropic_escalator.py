@@ -3,7 +3,7 @@ root-cause analysis, only reached when the offline ladder + repair + recheck
 still leaves the incident unresolved (see escalation.should_escalate).
 
 Uses Haiku 4.5 by default -- this is a bounded-text classification/diagnosis
-task, not one needing maximum reasoning depth -- and falls back to Sonnet 5
+task, not one needing maximum reasoning depth -- and falls back to Sonnet 5.5
 for the unclassified case, where the offline ladder itself couldn't produce
 a clean signal and the harder case likely benefits from stronger reasoning.
 
@@ -16,7 +16,7 @@ whether or not this succeeds.
 from typing import Callable, Optional
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
-FALLBACK_MODEL = "claude-sonnet-5"
+FALLBACK_MODEL = "claude-sonnet-5-5"
 
 # This call runs on the rumps run loop (app.tick -> state_machine.tick ->
 # escalator), so an unbounded request would freeze the menu bar -- the same
@@ -88,11 +88,14 @@ def make_escalator(
                 messages=[{"role": "user", "content": prompt}],
                 timeout=timeout,
             )
-            # Inside the try on purpose: an empty `content` list raises
-            # IndexError and a non-text block raises AttributeError.
-            # state_machine._escalate would contain either, but only by class
-            # name; handling it here keeps the model name in the result.
-            analysis = response.content[0].text
+            # Inside the try on purpose: a malformed response raises here, and
+            # handling it keeps the model name in the result (state_machine
+            # _escalate would contain it, but only by class name).
+            # The first block can be a thinking block; join every text block.
+            analysis = "\n".join(
+                block.text for block in response.content if getattr(block, "type", None) == "text"
+            )
+            stop_reason = getattr(response, "stop_reason", None)
         except Exception as exc:  # noqa: BLE001 - report the failure, never crash the pipeline
             # Class name and status code only. SDK status errors carry the
             # response body in their message, and a proxy block page can echo
@@ -100,6 +103,14 @@ def make_escalator(
             code = getattr(exc, "status_code", None)
             error = type(exc).__name__ + (f" (HTTP {code})" if code else "")
             return {"error": error, "model": model}
+        # Fixed strings, never response text: a refusal or empty answer is not
+        # an analysis and must not be relayed to Slack as one.
+        if stop_reason == "refusal":
+            return {"error": "model declined", "model": model}
+        if not analysis.strip():
+            return {"error": "empty response", "model": model}
+        if stop_reason == "max_tokens":
+            analysis += " [truncated]"
         return {"model": model, "analysis": analysis}
 
     return escalator

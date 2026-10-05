@@ -52,11 +52,19 @@ ROUTER_STACK_DAEMON = "/Library/LaunchDaemons/com.custom.router.nat.plist"
 # the one start took. /var/run is root-only and cleared at boot, which is also
 # when the kernel forgets every reference.
 PF_TOKEN_FILE = "/var/run/netdnsmonitor_pf.token"
+# net.inet.ip.forwarding as it stood before the first start, so stop can put it
+# back instead of forcing 0 on a Mac that was forwarding for another reason
+# (VPN, internet sharing). Same lifetime reasoning as the token file.
+FORWARDING_FILE = "/var/run/netdnsmonitor_forwarding.prior"
 
 # Long enough for a human to answer the authentication dialog; the script itself
 # takes seconds. Unbounded, a caller on the main thread freezes the menu bar and
 # the monitoring timers for as long as the dialog sits unanswered.
 DEFAULT_TIMEOUT_SECONDS = 180.0
+
+# /31 and /32 have no host range for a DHCP pool; below /8 is not a LAN.
+MIN_PREFIX = 8
+MAX_PREFIX = 30
 
 _INTERFACE_RE = re.compile(r"[a-z]+[0-9]+")
 
@@ -64,6 +72,9 @@ _INTERFACE_RE = re.compile(r"[a-z]+[0-9]+")
 # Matched by marker, not by exit code: `set -e` exits with whatever code the
 # failing step returned, and 5 is an ordinary one (launchctl's I/O error).
 _READBACK_FAILURES = {
+    "NDM_START_PF_TOKEN": "pfctl -E gave no enable token, so pf may not be enabled",
+    "NDM_START_NAT_NOT_LOADED": f"no NAT rule is loaded in {PF_ANCHOR} after the load",
+    "NDM_START_BOOTPD_NOT_LOADED": "the bootpd launchd job is not loaded after the load",
     "NDM_NAT_STILL_LOADED": f"NAT rules are still loaded in {PF_ANCHOR} after the flush",
     "NDM_BOOTPD_STILL_LOADED": "the bootpd launchd job is still loaded after the unload",
 }
@@ -90,6 +101,20 @@ class RouterSettings:
     dhcp_end: str
 
 
+def _contiguous_netmask(text) -> bool:
+    """`ipaddress` reads `0.0.0.255` as a hostmask and quietly turns it into
+    /24, so a dotted value is checked to be ones-then-zeros before it is trusted.
+    """
+    text = str(text)
+    if "." not in text:
+        return True
+    try:
+        inverted = ~int(ipaddress.IPv4Address(text)) & 0xFFFFFFFF
+    except ValueError:
+        return False
+    return inverted & (inverted + 1) == 0
+
+
 def validate(wan_if, lan_if, lan_ip, lan_netmask, dhcp_start, dhcp_end) -> RouterSettings:
     """Return normalised settings, or raise ValueError naming the bad field."""
     for field, value in (("wan_interface", wan_if), ("lan_interface", lan_if)):
@@ -103,11 +128,22 @@ def validate(wan_if, lan_if, lan_ip, lan_netmask, dhcp_start, dhcp_end) -> Route
             addresses[field] = ipaddress.IPv4Address(str(value))
         except ValueError:
             raise ValueError(f"{field} {value!r} is not an IPv4 address") from None
+    if not _contiguous_netmask(lan_netmask):
+        raise ValueError(f"lan_netmask {lan_netmask!r} is not a netmask")
     try:
         interface = ipaddress.IPv4Interface(f"{addresses['lan_ip']}/{lan_netmask}")
     except ValueError:
         raise ValueError(f"lan_netmask {lan_netmask!r} is not a netmask") from None
     network = interface.network
+    lan = addresses["lan_ip"]
+    # The script runs `ifconfig <lan_if> <lan_ip>` as root and hands out leases
+    # on it; a loopback, link-local, public or /0 network is never a LAN.
+    if not lan.is_private or lan.is_loopback or lan.is_link_local or lan.is_unspecified:
+        raise ValueError(f"lan_ip {lan} is not a private LAN address")
+    if not MIN_PREFIX <= network.prefixlen <= MAX_PREFIX:
+        raise ValueError(
+            f"lan_netmask /{network.prefixlen} is outside /{MIN_PREFIX} to /{MAX_PREFIX}"
+        )
     reserved = {network.network_address, network.broadcast_address}
     if addresses["lan_ip"] in reserved:
         raise ValueError("lan_ip is a network or broadcast address")
@@ -190,7 +226,7 @@ def start_script(settings: RouterSettings) -> str:
             f"/sbin/pfctl -E 2>&1 | /usr/bin/sed -n 's/^Token : //p' > {PF_TOKEN_FILE}; fi",
             # The pipeline's status is sed's, so a failed enable shows up here
             # as a missing token rather than being passed over.
-            f"[ -s {PF_TOKEN_FILE} ]",
+            f"[ -s {PF_TOKEN_FILE} ] || {{ echo NDM_START_PF_TOKEN >&2; exit 7; }}",
             # Staged inside /etc (root-only) and renamed into place.
             "tmp=$(/usr/bin/mktemp /etc/.bootpd.plist.XXXXXX)",
             f'echo {plist} | /usr/bin/base64 -D > "$tmp"',
@@ -201,8 +237,14 @@ def start_script(settings: RouterSettings) -> str:
             f"/bin/launchctl load -w {BOOTPS_DAEMON}",
             # Read back before anything is reported as started: `launchctl load`
             # can exit 0 without loading, and an anchor can be loaded empty.
-            f"/sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null | /usr/bin/grep -q 'nat on'",
-            f"/bin/launchctl print system/{BOOTPD_LABEL} >/dev/null 2>&1",
+            f"/sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null | /usr/bin/grep -q 'nat on' "
+            "|| { echo NDM_START_NAT_NOT_LOADED >&2; exit 5; }",
+            f"/bin/launchctl print system/{BOOTPD_LABEL} >/dev/null 2>&1 "
+            "|| { echo NDM_START_BOOTPD_NOT_LOADED >&2; exit 6; }",
+            # Only the first start records it: a restart would otherwise record
+            # the 1 this app set and restore that on stop.
+            f"if [ ! -s {FORWARDING_FILE} ]; then "
+            f"/usr/sbin/sysctl -n net.inet.ip.forwarding > {FORWARDING_FILE}; fi",
             # Last, so a step that fails above never leaves the Mac forwarding
             # packets with no NAT or DHCP behind it.
             "/usr/sbin/sysctl -w net.inet.ip.forwarding=1",
@@ -219,7 +261,11 @@ def stop_script() -> str:
             # `|| true`: the read-back below decides, not this exit code, which
             # may be non-zero for an anchor that was never loaded.
             f"/sbin/pfctl -a {PF_ANCHOR} -F all || true",
-            "/usr/sbin/sysctl -w net.inet.ip.forwarding=0",
+            # Restores the recorded value; with no record, forwarding is left
+            # as found rather than guessed. Only 0 or 1 is ever written back.
+            f"if [ -s {FORWARDING_FILE} ]; then prior=$(/bin/cat {FORWARDING_FILE}); "
+            'case "$prior" in 0|1) /usr/sbin/sysctl -w net.inet.ip.forwarding="$prior";; esac; '
+            f"/bin/rm -f {FORWARDING_FILE}; fi",
             # Releases only the reference start took; pf stays on if anything
             # else on the machine still holds one. `|| true`: a token from
             # before a `pfctl -d` is already void, and must not block the stop.
@@ -236,6 +282,18 @@ def stop_script() -> str:
     )
 
 
+def _path_present(path: str) -> bool:
+    """False only when the path is known to be absent. `os.path.exists` turns
+    every OSError (a permission error included) into False, which would read as
+    "the router/ daemon is not installed" and let the two stacks collide.
+    """
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
 class Router:
     def __init__(
         self,
@@ -246,8 +304,9 @@ class Router:
         dhcp_start=DEFAULTS["dhcp_start"],
         dhcp_end=DEFAULTS["dhcp_end"],
         run_fn: RunFn = subprocess.run,
-        exists_fn: Callable[[str], bool] = os.path.exists,
+        exists_fn: Callable[[str], bool] = _path_present,
         timeout: Optional[float] = DEFAULT_TIMEOUT_SECONDS,
+        primary_interface_fn: Callable[[], Optional[str]] = lambda: None,
     ):
         # Not validated here: the app constructs this at launch, and a bad config
         # value must not crash the app. `start` validates, and so catches values
@@ -261,6 +320,7 @@ class Router:
         self.run_fn = run_fn
         self.exists_fn = exists_fn
         self.timeout = timeout
+        self.primary_interface_fn = primary_interface_fn
         # The menu and the router window each run start/stop on their own
         # worker; two root scripts interleaving on pf and bootpd is worse than
         # either one. Non-blocking: a second caller is told, not queued behind a
@@ -300,6 +360,16 @@ class Router:
             settings = self.settings()
         except ValueError as exc:
             return f"refused: {exc}"
+        # `ifconfig <lan_if> <lan_ip>` replaces the interface's address, so a LAN
+        # interface that carries the default route would cut this Mac off. None
+        # means unknown (no route, a VPN, a failed lookup) and does not refuse.
+        try:
+            primary = self.primary_interface_fn()
+        except Exception as exc:  # noqa: BLE001 - a failed lookup must not stop or crash a start
+            log.warning("primary interface lookup failed (%s)", type(exc).__name__)
+            primary = None
+        if primary is not None and primary == settings.lan_if:
+            return f"refused: lan_interface {settings.lan_if} carries this Mac's default route"
         log.info("Starting router/DHCP: WAN=%s, LAN=%s", settings.wan_if, settings.lan_if)
         outcome = self._run_admin(start_script(settings))
         if outcome.startswith("ok"):
@@ -325,7 +395,10 @@ class Router:
         log.info("Stopping router/DHCP")
         outcome = self._run_admin(stop_script())
         if outcome.startswith("ok"):
-            return f"ok: router stopped (read back: {PF_ANCHOR} empty, bootpd job unloaded)"
+            return (
+                f"ok: router stopped (read back: {PF_ANCHOR} empty, bootpd job unloaded); "
+                "the LAN interface address set at start is not restored"
+            )
         return outcome
 
     def _run_admin(self, script: str) -> str:

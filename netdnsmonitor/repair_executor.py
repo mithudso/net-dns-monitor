@@ -9,7 +9,8 @@ see privileges.py, which is also where the reasoning about how narrow that grant
 is lives:
 
 * `flush_dns_cache` always clears the cache (`dscacheutil` needs no privilege)
-  and, with the grant, also restarts mDNSResponder. Without it, the cache is
+  and, with the grant, also sends mDNSResponder a HUP (a signal; the result is
+  not read back, so "restarted" would claim more than was observed). Without it, the cache is
   still cleared and the outcome says so, and says how to fix it.
 * `renew_dhcp_lease` runs with the grant and reports NEEDS_PRIVILEGE without it.
   It first confirms the interface holds a DHCP lease, because `ipconfig set`
@@ -91,7 +92,14 @@ def make_repair_executor(
                 args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
             )
         except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
-            return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
+            # returncode None means the command did not run to completion (timed
+            # out, binary missing). A made-up exit status 1 read as "ran and was
+            # refused", which sent a HUP timeout to the grant button. The class
+            # name only: the exception text can carry paths.
+            return SimpleNamespace(returncode=None, stdout="", stderr=type(exc).__name__)
+
+    def did_not_complete(result: object) -> bool:
+        return result.returncode is None
 
     def report_command(args: list[str]) -> str:
         """A check step's finding: the tool's output, or an explicit failure.
@@ -101,6 +109,8 @@ def make_repair_executor(
         when the truth was that the tool did not run.
         """
         result = run(args)
+        if did_not_complete(result):
+            return f"failed: {args[0]} did not complete ({result.stderr})"
         output = result.stdout.strip() or result.stderr.strip()
         if result.returncode != 0:
             return f"failed: {' '.join(args)} exited {result.returncode} -- {output or 'no output'}"
@@ -110,11 +120,20 @@ def make_repair_executor(
         if unavailable_fn is not None:
             return unavailable_fn("flushing the DNS cache")
         flush = run([DSCACHEUTIL, "-flushcache"])
+        if did_not_complete(flush):
+            return f"failed: {DSCACHEUTIL} did not complete ({flush.stderr})"
         if flush.returncode != 0:
             return f"failed: {flush.stderr.strip()}"
         hup = run(list(privileges.MDNS_HUP))
         if hup.returncode == 0:
             return "ok"
+        if did_not_complete(hup):
+            # Nothing was refused, so the grant is not the fix and the hint
+            # would be wrong.
+            return (
+                "partial: dscacheutil cache flushed; the mDNSResponder HUP did not "
+                f"complete ({hup.stderr})"
+            )
         # dscacheutil succeeds unprivileged, but mDNSResponder is owned by
         # another user (root/_mdnsresponder) -- signaling it without elevated
         # privilege reliably fails. Report what actually happened rather than a
@@ -122,12 +141,17 @@ def make_repair_executor(
         if is_granted_fn():
             elevated = run([privileges.SUDO, "-n", *privileges.MDNS_HUP])
             if elevated.returncode == 0:
-                return "ok (mDNSResponder restarted using the granted privilege)"
+                return "ok (HUP sent to mDNSResponder using the granted privilege)"
+            if did_not_complete(elevated):
+                return (
+                    "partial: cache flushed; the HUP sent through the granted sudo rule "
+                    f"did not complete ({elevated.stderr})"
+                )
             # The grant exists but did not work: the rule may not match, or
             # sudoers.d may not be included. Distinguished from "no grant"
             # because the fix is completely different.
             return (
-                "partial: cache flushed, but the granted sudo rule did not restart "
+                "partial: cache flushed, but the granted sudo rule did not signal "
                 f"mDNSResponder ({elevated.stderr.strip()})"
             )
         return (
@@ -175,6 +199,12 @@ def make_repair_executor(
         # interface that already holds a lease. `getpacket` is an unprivileged
         # read that prints nothing when DHCP is not active or has no lease.
         packet = run([privileges.IPCONFIG, "getpacket", interface])
+        if did_not_complete(packet):
+            return (
+                f"failed: could not read the DHCP state of {interface} (ipconfig getpacket "
+                f"did not complete ({packet.stderr})), so it is unknown whether renewing "
+                "would replace a configuration set by hand. Nothing was changed."
+            )
         if packet.returncode != 0:
             # A failed read is not evidence of a manual configuration; saying
             # "not using DHCP" here would be a guess.
@@ -191,6 +221,13 @@ def make_repair_executor(
                 "Nothing was changed."
             )
         result = run([privileges.SUDO, "-n", privileges.IPCONFIG, "set", interface, "DHCP"])
+        if did_not_complete(result):
+            # The request may have reached ipconfig before the timeout, so
+            # neither "ok" nor "failed" is something that was observed.
+            return (
+                f"unknown: ipconfig set {interface} DHCP did not complete ({result.stderr}); "
+                "the lease request may or may not have been sent"
+            )
         if result.returncode != 0:
             return f"failed: ipconfig set {interface} DHCP -- {result.stderr.strip()}"
         return f"ok: re-requested a DHCP lease on {interface}"

@@ -7,8 +7,9 @@ Six timers, six different cadences, deliberately not merged:
 
   poll_interval_seconds (30)       incident detection. TCP reachability + DNS
                                    through the anti-flap gate; the only path
-                                   that runs repairs, escalates, or writes a
-                                   report.
+                                   that automatically runs repairs, escalates,
+                                   or writes a report. (The dashboard buttons
+                                   run single steps on request.)
   ping_interval_seconds (5)        liveness heartbeat. One ICMP ping plus a
                                    throughput reading; drives the menu bar
                                    stats, the Dock tile, and the alert.
@@ -115,6 +116,9 @@ from netdnsmonitor.router_window import (
     get_interfaces,
 )
 from netdnsmonitor.settings_window import (
+    FIELDS as SETTINGS_FIELDS,
+)
+from netdnsmonitor.settings_window import (
     NEEDS_RESTART,
     SERVICE_RESTART_HINT,
     STORE_RESTART_HINT,
@@ -131,7 +135,13 @@ from netdnsmonitor.status import (
     build_status_report,
     build_title,
     format_stats,
+    resolution_counts,
     status_state,
+)
+
+# The router's settings that are not named router_*.
+ROUTER_SETTING_KEYS = frozenset(
+    {"wan_interface", "lan_interface", "lan_ip", "lan_netmask", "dhcp_start", "dhcp_end"}
 )
 
 OPEN_BIN = "/usr/bin/open"
@@ -262,15 +272,24 @@ def open_url_with_workspace(url: str) -> bool:
     return bool(NSWorkspace.sharedWorkspace().openURL_(ns_url))
 
 
-def missing_key_text(capabilities: Capabilities) -> str:
+def missing_key_text(capabilities: Capabilities, keychain_status: Optional[int] = None) -> str:
+    """Why escalation was skipped. `keychain_status` is the OSStatus of a Keychain
+    read that failed for a reason other than "no such item": without it a locked
+    or denied Keychain reads as a key that was never saved, and someone re-enters
+    a key that is already there.
+    """
     if capabilities.is_app_store:
         # A sandboxed app launched from Finder never sees a shell's exports, so the
         # Keychain is the only place a key can come from in this build.
-        return (
+        text = (
             "ANTHROPIC_API_KEY not set; skipped LLM escalation (save a key in the Keychain "
             f"from the menu: {CREDENTIALS_MENU} > {CREDENTIAL_ITEMS[0][0]})"
         )
-    return "ANTHROPIC_API_KEY not set; skipped LLM escalation"
+    else:
+        text = "ANTHROPIC_API_KEY not set; skipped LLM escalation"
+    if keychain_status is not None:
+        text += f" (Keychain unreadable, OSStatus {keychain_status})"
+    return text
 
 
 def build_escalator(
@@ -288,7 +307,10 @@ def build_escalator(
     if key:
         escalator = make_escalator(client=default_client(api_key=key))
     else:
-        message = missing_key_text(capabilities)
+        read_problem = getattr(credential_store, "read_problem", None)
+        message = missing_key_text(
+            capabilities, read_problem("ANTHROPIC_API_KEY") if callable(read_problem) else None
+        )
 
         def escalator(bundle: dict) -> dict:
             return {"error": message}
@@ -655,6 +677,7 @@ def ping_heartbeat(
     """
     hosts = heartbeat_hosts(config)
     failures = []
+    measured = False
     fn = ping_once if ping_fn is None else ping_fn
     deadline = clock() + config["ping_timeout_seconds"]
     for i, host in enumerate(hosts):
@@ -664,11 +687,35 @@ def ping_heartbeat(
             continue
         # A blackholing first target must leave time to ask the others. Fast
         # failures return their unused slice to the remaining targets.
-        result = fn(host, timeout_seconds=remaining / (len(hosts) - i))
+        try:
+            result = fn(host, timeout_seconds=remaining / (len(hosts) - i))
+        except ValueError as exc:
+            # ping_once refuses a host that could be read as a ping option.
+            # load_config refuses the same hosts, but a caller can pass a config
+            # it never validated; without this the raise skipped every later host
+            # and, in _run_ping, the whole reading. The refusal text names the
+            # problem, not a credential.
+            failures.append(f"{host}: {exc}")
+            continue
         if result["ok"]:
             return {**result, "host": host}
+        # Exit 68 sends no echo request; only a host that was actually pinged
+        # makes this reading evidence about the network path.
+        measured = measured or result.get("probed") is not False
         failures.append(f"{host}: {result['error'] or 'no reply'}")
-    return {"ok": False, "rtt_ms": None, "error": "; ".join(failures), "host": None}
+    reading = {"ok": False, "rtt_ms": None, "error": "; ".join(failures), "host": None}
+    if not measured:
+        reading["probed"] = False
+    return reading
+
+
+def recheck_text(recheck_ok: Optional[bool]) -> str:
+    """None is a re-probe that could not tell (a load-bearing field was not
+    probed), which is not evidence the network is still failing.
+    """
+    if recheck_ok is None:
+        return "inconclusive (the re-probe could not confirm either way)"
+    return "healthy again" if recheck_ok else "still failing"
 
 
 def config_error_text(exc: BaseException) -> str:
@@ -800,6 +847,8 @@ class NetDnsMonitorApp(rumps.App):
         # Set by the tick guard below. Initialised here because `tick` only
         # assigns it on a failure, and `:status` reads it on every call.
         self.last_tick_error = None
+        # Consecutive ticks that raised, reset by a clean one. See `tick`.
+        self._tick_failures = 0
         self.resolution_job = build_resolution_job(self.config)
         self.ping_job = build_ping_job(self.config)
         self.last_classification = None
@@ -907,7 +956,8 @@ class NetDnsMonitorApp(rumps.App):
         # Whether this app's own sudoers rule is listed. None until probed, which
         # status_rows reads as "follow privileges_granted".
         self.privileges_file_rule_listed: Optional[bool] = None
-        self.dhcp_interfaces: list[str] = []
+        # None: the last `ifconfig -l` failed, which is not the same as no interface.
+        self.dhcp_interfaces: Optional[list[str]] = []
         # What the installed grant covers, which is not the same set as the
         # interfaces the machine has -- see privileges.granted_interfaces.
         self.granted_interfaces: list[str] = []
@@ -987,6 +1037,7 @@ class NetDnsMonitorApp(rumps.App):
                 lan_netmask=self.config["lan_netmask"],
                 dhcp_start=self.config["dhcp_start"],
                 dhcp_end=self.config["dhcp_end"],
+                primary_interface_fn=privileges.primary_interface,
             )
 
     # --- launch-time UI setup ----------------------------------------------
@@ -1069,7 +1120,7 @@ class NetDnsMonitorApp(rumps.App):
         try:
             self._peer_tick()
         except Exception as exc:  # noqa: BLE001 - record it; a lost sweep is not fatal
-            self.last_tick_error = f"{type(exc).__name__}: {exc}"
+            self.last_tick_error = type(exc).__name__
             traceback.print_exc()
 
     def _peer_tick(self):
@@ -1164,14 +1215,26 @@ class NetDnsMonitorApp(rumps.App):
         # alert, which the gate never offers again. So every tick is guarded.
         try:
             self._tick()
+            self._tick_failures = 0
         except Exception as exc:  # noqa: BLE001 - the rest of the tick must still run
-            self.last_tick_error = f"{type(exc).__name__}: {exc}"
+            # Class name only: CLAUDE.md #4. The traceback still goes to stderr.
+            self.last_tick_error = type(exc).__name__
+            traceback.print_exc()
+            self._tick_failures += 1
             try:
                 # The recovery path must not raise either, or the guard has
                 # merely moved the crash one frame out.
-                self.title = build_title(
-                    self.state_machine.flap_gate.state, self.last_classification
-                )
+                if self._tick_failures >= self.config["failure_threshold"]:
+                    # A probe that raises every run never reaches the flap gate,
+                    # so the gate stays "healthy" and the title would say so for
+                    # as long as the failure lasts. After the same number of
+                    # consecutive failures that declares an incident, say that
+                    # detection itself is not working.
+                    self.title = "⚪ Net/DNS: check failing"
+                else:
+                    self.title = build_title(
+                        self.state_machine.flap_gate.state, self.last_classification
+                    )
             except Exception:  # noqa: BLE001
                 self.title = "⚪ Net/DNS: check failed"
 
@@ -1256,7 +1319,7 @@ class NetDnsMonitorApp(rumps.App):
             forensic_log.RECHECK,
             "flap_gate",
             reason="Re-probe after the ladder, so 'repaired' means something was measured",
-            result="healthy again" if report.get("recheck_ok") else "still failing",
+            result=recheck_text(report.get("recheck_ok")),
         )
         escalation = report.get("escalation")
         if escalation:
@@ -1353,11 +1416,14 @@ class NetDnsMonitorApp(rumps.App):
         try:
             result, counters = self.ping_job()
             self._ping_results.put((result, counters, time.monotonic()))
-        except Exception:  # noqa: BLE001 - must surface, not kill the heartbeat
+        except Exception as exc:  # noqa: BLE001 - must surface, not kill the thread
             # ping_once and read_interface_counters both swallow their own
-            # failures, so reaching here means something unforeseen. Without
-            # this the heartbeat would stop for the rest of the process's life
-            # while the menu bar kept displaying the last good reading.
+            # failures, so reaching here means something unforeseen. The next
+            # ping_tick starts a fresh thread, so the heartbeat itself survives;
+            # what this prevents is a silent gap -- no reading is queued, so the
+            # menu bar keeps showing the last good one. No reading is invented:
+            # a failed heartbeat job is not a measured outage.
+            self.last_tick_error = f"ping heartbeat failed: {type(exc).__name__}"
             traceback.print_exc()
 
     def _drain_ping_results(self):
@@ -1380,6 +1446,9 @@ class NetDnsMonitorApp(rumps.App):
                 "down_bps": down_bps,
                 "up_bps": up_bps,
                 "down": snapshot["down"],
+                # Wall clock, so the dashboard can say a reading has gone stale
+                # when the ping worker stops producing them.
+                "at": time.time(),
             }
             host = heartbeat_label(self.config)
             if snapshot["down"]:
@@ -1464,7 +1533,8 @@ class NetDnsMonitorApp(rumps.App):
         resolution_failed = resolution_total = None
         if findings:
             resolution_total = len(findings)
-            resolution_failed = sum(1 for finding in findings if not finding.get("resolved"))
+            # An abandoned lookup (the batch deadline ran out) is not a failure.
+            resolution_failed, _not_probed = resolution_counts(findings)
 
         ping = self.ping_stats
         ping_down = ping["down"]
@@ -1848,40 +1918,6 @@ class NetDnsMonitorApp(rumps.App):
         )
         self._privilege_status_thread.start()
 
-    def _privilege_snapshot(
-        self,
-        granted_commands: list,
-        *,
-        message: Optional[str] = None,
-        interfaces: Optional[list] = None,
-        probed: bool = False,
-    ) -> dict:
-        """What a privilege worker hands back to the drain.
-
-        One `sudo -l` listing answers both questions -- is the DNS restart
-        granted, and which interfaces are covered -- so nothing here pays for a
-        second subprocess. "Granted" is asked of `privileges.is_granted_from`
-        rather than by matching the joined argv against the listing: exact
-        matching reports a blanket `NOPASSWD: ALL` rule as "not granted" in the
-        window while the repairs run under it.
-
-        `interfaces=None` re-enumerates the machine. Only the launch/window probe
-        passes `probed=True`, and it is the only caller that reads the routing
-        table; a grant or revoke has no reason to, and omitting "primary" and
-        "probed" is what lets the drain keep its last known answers.
-        """
-        snapshot = {
-            "granted": privileges.is_granted_from(granted_commands),
-            "interfaces": privileges.dhcp_interfaces() if interfaces is None else interfaces,
-            "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
-        }
-        if message is not None:
-            snapshot["message"] = message
-        if probed:
-            snapshot["primary"] = privileges.primary_interface()
-            snapshot["probed"] = True
-        return snapshot
-
     def _privilege_failure(self, verb: str) -> dict:
         """A grant or revoke that raised: keep the status as it was and say so."""
         return {
@@ -1965,6 +2001,16 @@ class NetDnsMonitorApp(rumps.App):
             )
             return
 
+        if self.dhcp_interfaces is None:
+            # The interface probe failed. Granting [] would be refused as "no
+            # Ethernet or Wi-Fi interface found", which blames the hardware for a
+            # failed `ifconfig -l`.
+            self._refresh_privilege_status()
+            self._append_output(
+                "Could not list this Mac's network interfaces, so there is nothing "
+                "safe to authorise yet -- try again in a moment.\n"
+            )
+            return
         interfaces = list(self.dhcp_interfaces)
         self._append_output("\n" + privileges.explanation(interfaces) + "\n")
         self._privilege_thread = threading.Thread(
@@ -1986,13 +2032,24 @@ class NetDnsMonitorApp(rumps.App):
             # in a rule that grants root commands.
             outcome = privileges.grant(pwd.getpwuid(os.getuid()).pw_name, interfaces)
             granted_commands = privileges.granted_commands_now()
+            message = outcome["message"]
+            if outcome.get("ok") and not (
+                privileges.covers(granted_commands, privileges.MDNS_HUP)
+                or privileges.own_rule_listed(granted_commands)
+            ):
+                # privileges.grant reports that the file was installed. Whether
+                # sudo honours it is a separate fact, read back from the listing.
+                message = (
+                    "The file was written, but sudo does not list this app's rule, "
+                    "so nothing is granted."
+                )
             self._privilege_results.put(
                 {
                     "granted": privileges.covers(granted_commands, privileges.MDNS_HUP),
                     "file_rule_listed": privileges.own_rule_listed(granted_commands),
                     "interfaces": privileges.dhcp_interfaces(),
                     "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
-                    "message": outcome["message"],
+                    "message": message,
                 }
             )
         except Exception:  # noqa: BLE001 - never raise out of a worker
@@ -2033,7 +2090,7 @@ class NetDnsMonitorApp(rumps.App):
         try:
             self._ui_tick()
         except Exception as exc:  # noqa: BLE001 - record it; a lost repaint is not fatal
-            self.last_tick_error = f"{type(exc).__name__}: {exc}"
+            self.last_tick_error = type(exc).__name__
             traceback.print_exc()
 
     def _ui_tick(self):
@@ -2105,15 +2162,39 @@ class NetDnsMonitorApp(rumps.App):
         # The store build ships no service script to restart it with.
         return STORE_RESTART_HINT if self.capabilities.is_app_store else SERVICE_RESTART_HINT
 
+    def hidden_setting_keys(self) -> frozenset:
+        """Settings whose feature this build cannot run, so the window omits them.
+
+        A switch that cannot take effect (the router needs `capabilities.router`
+        at launch, so a restart does not enable it either) is a promise the app
+        cannot keep. Derived from the field list, so a field added later under one
+        of these prefixes is hidden without touching this.
+        """
+        caps = self.capabilities
+        hidden: set = set()
+        for key, _label, _kind in SETTINGS_FIELDS:
+            router = key.startswith("router_") or key in ROUTER_SETTING_KEYS
+            if (
+                (router and not caps.router)
+                or (key.startswith("failover_") and not caps.network_order_write)
+                or (key.startswith("log_view_") and not caps.unified_log)
+                or (key == "auto_open_console" and not caps.shell_console)
+            ):
+                hidden.add(key)
+        return frozenset(hidden)
+
     def open_settings(self):
         if self._settings is None:
             options = {}
+            hidden = self.hidden_setting_keys()
+            if hidden:
+                options["hidden_keys"] = hidden
             if self.capabilities.is_app_store:
                 # Its config sits in the sandbox container, not at ~/.config.
-                options = {
-                    "config_path_display": self.config_path,
-                    "restart_hint": self._settings_restart_hint(),
-                }
+                options.update(
+                    config_path_display=self.config_path,
+                    restart_hint=self._settings_restart_hint(),
+                )
             self._settings = SettingsWindow(on_save=self._save_settings, **options)
         # The file, not the running config: restart-only keys keep their launch
         # values in self.config, and the window edits what is on disk.
@@ -2152,7 +2233,16 @@ class NetDnsMonitorApp(rumps.App):
                 self._settings.load(fresh)
             return "Reloaded from disk."
 
-        updates = collect(values)  # raises ValueError, which the window reports
+        hidden = self.hidden_setting_keys()
+        # Whatever the window sent, a hidden key is never written: the file would
+        # then carry a switch this build ignores, and the note would promise it.
+        updates = {
+            key: value
+            for key, value in collect(
+                values, current_config=self.config
+            ).items()  # raises ValueError, which the window reports
+            if key not in hidden
+        }
         previous = dict(self.config)
         result = save_config(self.config_path, updates)
         self._apply_live_config(self._load_config(self.config_path))
@@ -2201,6 +2291,12 @@ class NetDnsMonitorApp(rumps.App):
             )
         )
 
+    def _ping_stats_with_age(self) -> dict:
+        stats = dict(self.ping_stats)
+        if stats.get("at") is not None:
+            stats["age_seconds"] = max(0.0, time.time() - stats["at"])
+        return stats
+
     def _refresh_dashboard(self, force: bool = False):
         if self._dashboard is None:
             return
@@ -2214,7 +2310,7 @@ class NetDnsMonitorApp(rumps.App):
         episode = self.forensic.episode
         text = render_dashboard_text(
             dashboard_sections(
-                ping_stats=self.ping_stats,
+                ping_stats=self._ping_stats_with_age(),
                 flap_state=flap_gate.state,
                 consecutive_failures=flap_gate.consecutive_failures,
                 config=self.config,
@@ -2406,10 +2502,25 @@ class NetDnsMonitorApp(rumps.App):
         # Per step, never around a loop: tick() waits for this lock on the run
         # loop during an incident, so holding it across a whole ladder would
         # freeze the window and every timer for all of it.
-        with self.state_machine.lock:
-            outcome = self.state_machine.repair_executor(step)
+        outcome = self._run_step(step)
         events.append({"detail": step.name, "reason": step.reason, "result": outcome})
         return [f"why: {step.reason}", f"result: {outcome}"]
+
+    def _run_step(self, step, classification: Optional[str] = None) -> str:
+        """One manual ladder step under the lock, failing as data.
+
+        The executor is not guaranteed to swallow everything. Without this a raise
+        in step N discarded the output and forensic events of steps 1..N-1, which
+        had really run. Class name only: CLAUDE.md #4.
+        """
+        try:
+            with self.state_machine.lock:
+                if classification is None:
+                    return self.state_machine.repair_executor(step)
+                return self.state_machine.repair_executor(step, classification)
+        except Exception as exc:  # noqa: BLE001 - keep the steps that already ran
+            traceback.print_exc()
+            return f"failed: step raised {type(exc).__name__}"
 
     def _prewarm_dns(self, events: list) -> list:
         """Resolve the 50 most-queried names so their answers are already cached.
@@ -2453,7 +2564,14 @@ class NetDnsMonitorApp(rumps.App):
         )[:5]
 
         lines = [f"prewarmed {resolved}/{len(findings)} of the top {len(domains)} queried names"]
-        failed = [f["domain"] for f in findings if not f.get("resolved")]
+        failing, not_probed = resolution_counts(findings)
+        failed = [
+            f["domain"]
+            for f in findings
+            if not f.get("resolved") and f.get("outcome") != "abandoned"
+        ]
+        if failed or not_probed:
+            lines.append(f"{failing} failing, {not_probed} not probed (the deadline ran out)")
         if failed:
             lines.append(f"did not resolve: {', '.join(failed[:10])}")
         if slowest:
@@ -2464,7 +2582,8 @@ class NetDnsMonitorApp(rumps.App):
                 "detail": f"prewarm_dns ({len(domains)} names)",
                 "reason": "Resolve the most-queried names so their answers are "
                 "already cached when something asks for them.",
-                "result": f"{resolved}/{len(findings)} resolved",
+                "result": f"{resolved}/{len(findings)} resolved, "
+                f"{failing} failing, {not_probed} not probed",
             }
         )
         return lines
@@ -2496,8 +2615,7 @@ class NetDnsMonitorApp(rumps.App):
             # Per step, for the reason given in _single_step. The classification
             # goes with it: without one the failover step assumes "network",
             # and a DNS fault on a DNS-only trigger list read as "not a trigger".
-            with self.state_machine.lock:
-                outcome = self.state_machine.repair_executor(step, classification.value)
+            outcome = self._run_step(step, classification.value)
             lines.append(f"[{step.kind}] {step.name}")
             lines.append(f"    why: {step.reason}")
             lines.append(f"    result: {outcome}")
@@ -2519,7 +2637,8 @@ class NetDnsMonitorApp(rumps.App):
         main thread needs the outcome in order to draw anything, so the result
         is published straight onto `last_notification_results`. Nothing in the
         app reads that attribute -- `:status` does not report delivery -- so it
-        exists for the tests and for anyone attaching a debugger. `notifier`
+        exists for the tests and for anyone attaching a debugger; failures are
+        also printed to stderr. `notifier`
         returns a list of per-channel results and does not raise -- a delivery
         failure is recorded and swallowed inside it, because a Slack outage must
         not stop the report being saved.
@@ -2532,6 +2651,23 @@ class NetDnsMonitorApp(rumps.App):
                 self.last_notification_results = [
                     {"channel": "unknown", "ok": False, "error": type(exc).__name__}
                 ]
+            # Nothing else reads the results, so without these lines a Slack or
+            # SMTP failure at the moment of an outage left no trace anywhere. The
+            # error strings are credential-free by contract (notifications.py).
+            results = self.last_notification_results
+            if not results:
+                print(
+                    "[notify] no channel delivered: none is configured or enabled",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            for result in results or []:
+                if isinstance(result, dict) and result.get("error"):
+                    print(
+                        f"[notify] {result.get('channel', 'unknown')}: {result['error']}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
         try:
             # Kept on the instance like `_ping_thread` and `_resolution_thread`,
@@ -2563,14 +2699,6 @@ class NetDnsMonitorApp(rumps.App):
                     result=event["result"],
                 )
             self._append_output(text)
-            if action_id.startswith("router_"):
-                # The Router items live on the menu bar, not the dashboard, so the
-                # pane this was just appended to may not exist. A status that was
-                # earned at an admin dialog must not vanish into a closed window.
-                try:
-                    rumps.notification("Net/DNS Monitor", "Router", text.strip().splitlines()[0])
-                except Exception:  # noqa: BLE001 - the pane already has it
-                    traceback.print_exc()
 
     def _append_output(self, text: str):
         if self._dashboard is not None:
@@ -2724,6 +2852,11 @@ class NetDnsMonitorApp(rumps.App):
         elif name == "SLACK_WEBHOOK_URL":
             if not config.get("slack_enabled"):
                 return "slack_enabled is turned on"
+            webhook = self.credentials.get(name) or ""
+            if not str(webhook).startswith("https://"):
+                # make_slack_notifier refuses every send for another scheme, so
+                # "in use now" would promise an alert that cannot come.
+                return "the URL must start with https:// (Slack alerts refuse any other scheme)"
         elif name == "SMTP_PASSWORD":
             if not config.get("email_enabled"):
                 return "email_enabled is turned on"
@@ -3005,7 +3138,9 @@ class NetDnsMonitorApp(rumps.App):
         try:
             # as_uri() percent-encodes: the default reports_dir sits under
             # "Application Support", and a raw space makes an invalid file URL.
-            opened = bool(self.url_opener(pathlib.Path(path).as_uri()))
+            # resolve() first: as_uri() raises ValueError on a relative path, and
+            # a relative reports_dir is what save_report returns for one.
+            opened = bool(self.url_opener(pathlib.Path(path).resolve().as_uri()))
         except Exception as exc:  # noqa: BLE001 - class name only, never raised into the menu
             opened = False
             detail = f" ({type(exc).__name__})"

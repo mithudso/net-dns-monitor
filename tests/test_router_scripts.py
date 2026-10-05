@@ -48,7 +48,7 @@ def test_the_daemon_runs_a_root_owned_copy_not_the_checkout():
     assert program == ["/Library/PrivilegedHelperTools/net-dns-monitor/enable_nat.sh"]
     code = _code_lines(INSTALL)
     assert "install -o root -g wheel -m 755" in code
-    assert "SCRIPT_PATH}" not in code
+    assert "SOURCE_PATH}" not in code
 
 
 def test_the_install_script_stages_nothing_in_tmp():

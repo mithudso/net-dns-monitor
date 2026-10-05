@@ -389,3 +389,121 @@ def test_a_raising_runner_does_not_strand_the_lock():
 def test_reserved_or_router_addresses_cannot_be_leased(updates):
     with pytest.raises(ValueError):
         validate(**{**GOOD, **updates})
+
+
+# --- audit fixes -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"lan_netmask": "0.0.0.0"},
+        {"lan_netmask": "0"},
+        {"lan_netmask": "31"},
+        {"lan_netmask": "7"},
+        {"lan_netmask": "0.0.0.255"},
+        {"lan_ip": "127.0.0.1", "dhcp_start": "127.0.0.100", "dhcp_end": "127.0.0.200"},
+        {"lan_ip": "8.8.8.1", "dhcp_start": "8.8.8.100", "dhcp_end": "8.8.8.200"},
+        {"lan_ip": "169.254.1.1", "dhcp_start": "169.254.1.100", "dhcp_end": "169.254.1.200"},
+    ],
+)
+def test_absurd_lan_networks_are_refused(updates):
+    with pytest.raises(ValueError):
+        validate(**{**GOOD, **updates})
+
+
+@pytest.mark.parametrize("mask", ["255.0.0.0", "255.255.255.252", "30", "8"])
+def test_private_networks_at_the_prefix_limits_are_accepted(mask):
+    settings = validate(
+        **{
+            **GOOD,
+            "lan_ip": "10.0.0.1",
+            "lan_netmask": mask,
+            "dhcp_start": "10.0.0.2",
+            "dhcp_end": "10.0.0.2",
+        }
+    )
+    assert settings.lan_ip == "10.0.0.1"
+
+
+def test_a_permission_error_on_the_daemon_path_is_a_conflict(monkeypatch):
+    def denied(path):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(router_module.os, "lstat", denied)
+    assert Router(**GOOD)._conflict() is True
+
+
+def test_a_missing_daemon_path_is_not_a_conflict(tmp_path, monkeypatch):
+    monkeypatch.setattr(router_module, "ROUTER_STACK_DAEMON", str(tmp_path / "absent.plist"))
+    assert Router(**GOOD)._conflict() is False
+
+
+def test_start_refuses_when_lan_is_the_default_route_interface():
+    run = Recorder()
+    router = Router(
+        **GOOD, run_fn=run, exists_fn=lambda p: False, primary_interface_fn=lambda: "en0"
+    )
+    outcome = router.start()
+    assert outcome == "refused: lan_interface en0 carries this Mac's default route"
+    assert run.calls == []
+
+
+@pytest.mark.parametrize("primary", [None, "en3", "utun4"])
+def test_start_proceeds_when_the_default_route_is_elsewhere_or_unknown(primary):
+    run = Recorder()
+    router = Router(
+        **GOOD, run_fn=run, exists_fn=lambda p: False, primary_interface_fn=lambda: primary
+    )
+    assert router.start().startswith("ok:")
+
+
+def test_start_proceeds_when_the_primary_interface_lookup_raises():
+    def boom():
+        raise RuntimeError("lookup")
+
+    run = Recorder()
+    router = Router(**GOOD, run_fn=run, exists_fn=lambda p: False, primary_interface_fn=boom)
+    assert router.start().startswith("ok:")
+
+
+def test_start_records_prior_forwarding_once_and_stop_restores_it():
+    start = start_script(validate(**GOOD))
+    record = start.index(f"sysctl -n net.inet.ip.forwarding > {router_module.FORWARDING_FILE}")
+    assert "if [ ! -s " + router_module.FORWARDING_FILE in start[record - 80 : record]
+    assert record < start.index("net.inet.ip.forwarding=1")
+    stop = stop_script()
+    assert "net.inet.ip.forwarding=0" not in stop
+    assert 'net.inet.ip.forwarding="$prior"' in stop
+    assert f"rm -f {router_module.FORWARDING_FILE}" in stop
+
+
+def test_stop_message_says_the_lan_address_is_not_restored():
+    assert "LAN interface address" in make_router().stop()
+    assert "not restored" in make_router().stop()
+
+
+@pytest.mark.parametrize(
+    "marker, text",
+    [
+        ("NDM_START_PF_TOKEN", "enable token"),
+        ("NDM_START_NAT_NOT_LOADED", "no NAT rule"),
+        ("NDM_START_BOOTPD_NOT_LOADED", "bootpd launchd job is not loaded"),
+    ],
+)
+def test_start_readback_markers_map_to_fixed_text(marker, text):
+    outcome = make_router(Recorder(returncode=1, stderr=f"x {marker} (5)")).start()
+    assert text in outcome
+    assert outcome.startswith("failed: exit 5")
+
+
+def test_start_script_prints_a_marker_for_each_readback():
+    start = start_script(validate(**GOOD))
+    for marker in ("NDM_START_PF_TOKEN", "NDM_START_NAT_NOT_LOADED", "NDM_START_BOOTPD_NOT_LOADED"):
+        assert f"echo {marker} >&2" in start
+
+
+@pytest.mark.parametrize("script", [start_script(validate(**GOOD)), stop_script()])
+def test_the_root_scripts_parse_as_posix_sh(script):
+    result = subprocess.run(["/bin/sh", "-n", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

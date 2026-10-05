@@ -505,3 +505,44 @@ def test_a_sensitive_string_matching_a_bundle_key_cannot_cost_the_report():
     # The evidence under the fixed keys is still redacted.
     assert sent["log_excerpts"] == ["[REDACTED] from a [REDACTED] line"]
     assert sent["ladder_results"]
+
+
+def test_a_raising_recheck_reports_recheck_ok_none_and_still_escalates():
+    """A recheck that did not run is "not probed" (None), not a failed probe
+    (False). The escalation behaviour is unchanged."""
+    probes = iter([FAILING, FAILING])
+    escalator = FakeEscalator()
+
+    def prober():
+        try:
+            return next(probes)
+        except StopIteration:
+            raise OSError("probe exploded") from None
+
+    sm = StateMachine(prober=prober, repair_executor=FakeRepairExecutor(), escalator=escalator)
+    sm.tick()
+    report = sm.tick()
+
+    assert report["recheck_ok"] is None
+    assert report["resolved"] is False
+    assert "inconclusive" in report["summary"].lower()
+    assert len(escalator.received_bundles) == 1
+
+
+def test_outbound_bundle_caps_probe_and_ladder_results_after_redaction():
+    from netdnsmonitor.state_machine import MAX_OUTBOUND_RESULT_CHARS
+
+    sm, _, _, _ = make_sm([])
+    sm.sensitive_strings = ["hunter2"]
+    big_probe = {"blob": "x" * (MAX_OUTBOUND_RESULT_CHARS * 3), "secret": "hunter2"}
+    big_ladder = [{"name": "s", "outcome": "y" * (MAX_OUTBOUND_RESULT_CHARS * 3)}]
+    from netdnsmonitor.classifier import Classification
+
+    bundle = sm._outbound_bundle(Classification.DNS, big_probe, [], big_ladder)
+
+    for key in ("probe_results", "ladder_results"):
+        text = bundle[key]
+        assert isinstance(text, str)
+        assert len(text) < MAX_OUTBOUND_RESULT_CHARS + 100
+        assert "chars omitted]" in text
+    assert "hunter2" not in str(bundle)

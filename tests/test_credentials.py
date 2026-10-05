@@ -177,3 +177,95 @@ def test_a_keychain_read_that_raises_reads_as_missing():
 def test_source_agrees_with_get_on_undecodable_bytes():
     creds, _ = store(keychain=FakeKeychain({"SMTP_PASSWORD": b"\xff\xfe"}))
     assert creds.source("SMTP_PASSWORD") is None
+
+
+class _Raising(FakeKeychain):
+    def __init__(self, add_exc=None, update_exc=None, delete_exc=None, **kw):
+        super().__init__(**kw)
+        self.add_exc, self.update_exc, self.delete_exc = add_exc, update_exc, delete_exc
+
+    def add(self, account, value):
+        if self.add_exc:
+            raise self.add_exc(value.decode())  # a message that carries the secret
+        return super().add(account, value)
+
+    def update(self, account, value):
+        if self.update_exc:
+            raise self.update_exc(value.decode())
+        return super().update(account, value)
+
+    def delete(self, account):
+        if self.delete_exc:
+            raise self.delete_exc("bridge")
+        return super().delete(account)
+
+
+def _store(kc, env=None):
+    return CredentialStore(env=env or {}, backend_factory=lambda: kc)
+
+
+@pytest.mark.parametrize("status", [-25308, -25293, -128])  # locked, auth failed, cancelled
+def test_an_unreadable_keychain_item_is_not_reported_as_not_set(status):
+    creds = _store(FakeKeychain(items={"SMTP_PASSWORD": b"x"}, fail_status=status))
+    assert creds.describe()["SMTP_PASSWORD"] == f"unreadable (OSStatus {status})"
+    assert creds.read_problem("SMTP_PASSWORD") == status
+    assert creds.get("SMTP_PASSWORD") is None
+
+
+def test_item_not_found_is_not_a_read_problem():
+    creds = _store(FakeKeychain())
+    assert creds.describe()["SMTP_PASSWORD"] == "not set"
+    assert creds.read_problem("SMTP_PASSWORD") is None
+
+
+def test_read_problem_is_none_after_a_good_read_and_without_a_backend():
+    kc = FakeKeychain(items={"SMTP_PASSWORD": b"x"})
+    creds = _store(kc)
+    assert creds.get("SMTP_PASSWORD") == "x"
+    assert creds.read_problem("SMTP_PASSWORD") is None
+    nobackend = CredentialStore(env={}, backend_factory=None)
+    assert nobackend.read_problem("SMTP_PASSWORD") is None
+
+
+def test_read_problem_follows_the_latest_read():
+    kc = FakeKeychain(items={"SMTP_PASSWORD": b"x"}, fail_status=-25308)
+    creds = _store(kc)
+    creds.get("SMTP_PASSWORD")
+    assert creds.read_problem("SMTP_PASSWORD") == -25308
+    kc.fail_status = None
+    creds.get("SMTP_PASSWORD")
+    assert creds.read_problem("SMTP_PASSWORD") is None
+
+
+def test_set_reports_a_raising_backend_by_class_and_never_echoes_the_value():
+    out = _store(_Raising(add_exc=RuntimeError)).set("SMTP_PASSWORD", "hunter2")
+    assert out == "failed: the Keychain write raised RuntimeError"
+    assert "hunter2" not in out
+
+
+def test_set_reports_a_raising_update_after_a_duplicate():
+    kc = _Raising(items={"SMTP_PASSWORD": b"old"}, update_exc=ValueError)
+    out = _store(kc).set("SMTP_PASSWORD", "hunter2")
+    assert out == "failed: the Keychain write raised ValueError"
+
+
+def test_delete_reports_a_raising_backend_by_class():
+    out = _store(_Raising(delete_exc=RuntimeError)).delete("SMTP_PASSWORD")
+    assert out == "failed: the Keychain delete raised RuntimeError"
+
+
+def test_duplicate_then_failed_update_reports_the_update_status():
+    class Kc(FakeKeychain):
+        def update(self, account, value):
+            return -25293
+
+    out = _store(Kc(items={"SMTP_PASSWORD": b"old"})).set("SMTP_PASSWORD", "new")
+    assert out == "failed: Keychain returned OSStatus -25293"
+
+
+def test_delete_with_a_nonzero_status_reports_it():
+    class Kc(FakeKeychain):
+        def delete(self, account):
+            return -25293
+
+    assert _store(Kc()).delete("SMTP_PASSWORD") == "failed: Keychain returned OSStatus -25293"

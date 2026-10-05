@@ -1,10 +1,12 @@
 """Where the app's three credentials come from.
 
 The direct-download build reads ANTHROPIC_API_KEY, SLACK_WEBHOOK_URL and
-SMTP_PASSWORD from the environment, because scripts/start.sh launches it from a
-shell that exports them. A Mac App Store build is launched by LaunchServices
-inside the App Sandbox and never sees that shell, so the same lookup finds
-nothing and every credentialed feature quietly turns off. The Keychain is the
+SMTP_PASSWORD from the environment, which is set when the app is run directly
+from a shell that exports them (python -m netdnsmonitor.app, or the CLI).
+scripts/start.sh launches it through `open -n`, which does not pass the shell's
+environment on. A Mac App Store build is launched by LaunchServices inside the
+App Sandbox and never sees any shell, so the same lookup finds nothing and
+every credentialed feature quietly turns off. The Keychain is the
 place a sandboxed app is allowed to keep a secret.
 
 Lookup order is environment first, then Keychain. Environment first keeps the
@@ -123,6 +125,9 @@ class CredentialStore:
         self._factory = backend_factory
         self._backend: Optional[KeychainBackend] = None
         self._backend_failed = False
+        # Last non-benign OSStatus per credential, so "locked or denied" is not
+        # shown as "not set" -- the fix for the two is opposite.
+        self._read_status: dict[str, int] = {}
 
     def _keychain(self) -> Optional[KeychainBackend]:
         # Built lazily and once: loading the Security bundle costs a few ms, and
@@ -145,6 +150,7 @@ class CredentialStore:
         # nothing could use it. A read that raises (a PyObjC bridge error) means
         # "not set", as a backend that failed to build already does -- this runs
         # inside app construction, where an exception kills the launch.
+        self._read_status.pop(name, None)
         backend = self._keychain()
         if backend is None:
             return None
@@ -152,12 +158,22 @@ class CredentialStore:
             status, value = backend.read(name)
         except Exception:  # noqa: BLE001 - a failed lookup is "not set", never a crash
             return None
+        if status not in (0, ERR_SEC_ITEM_NOT_FOUND):
+            self._read_status[name] = status
         if status != 0 or not value:
             return None
         try:
             return value.decode("utf-8")
         except UnicodeDecodeError:
             return None
+
+    def read_problem(self, name: str) -> Optional[int]:
+        """The OSStatus of the last Keychain read of `name` when it failed for a
+        reason other than the item being absent (locked keychain, access denied,
+        prompt cancelled); None otherwise. Reflects the latest `get`/`source`.
+        """
+        self._check(name)
+        return self._read_status.get(name)
 
     def source(self, name: str) -> Optional[str]:
         self._check(name)
@@ -180,9 +196,12 @@ class CredentialStore:
         if backend is None:
             return "failed: the Keychain is not available in this process"
         encoded = value.encode("utf-8")
-        status = backend.add(name, encoded)
-        if status == ERR_SEC_DUPLICATE_ITEM:
-            status = backend.update(name, encoded)
+        try:
+            status = backend.add(name, encoded)
+            if status == ERR_SEC_DUPLICATE_ITEM:
+                status = backend.update(name, encoded)
+        except Exception as exc:  # noqa: BLE001 - class name only: the message may hold the value
+            return f"failed: the Keychain write raised {type(exc).__name__}"
         if status != 0:
             return f"failed: Keychain returned OSStatus {status}"
         return f"ok: {name} saved to the Keychain"
@@ -192,7 +211,10 @@ class CredentialStore:
         backend = self._keychain()
         if backend is None:
             return "failed: the Keychain is not available in this process"
-        status = backend.delete(name)
+        try:
+            status = backend.delete(name)
+        except Exception as exc:  # noqa: BLE001 - class name only
+            return f"failed: the Keychain delete raised {type(exc).__name__}"
         if status == ERR_SEC_ITEM_NOT_FOUND:
             return f"ok: {name} was not in the Keychain"
         if status != 0:
@@ -202,7 +224,14 @@ class CredentialStore:
     def describe(self) -> dict[str, str]:
         """Presence only, for status panes. Never the value."""
         labels = {"environment": "set (environment)", "keychain": "set (Keychain)"}
-        return {name: labels.get(self.source(name) or "", "not set") for name in NAMES}
+        out = {}
+        for name in NAMES:
+            label = labels.get(self.source(name) or "")
+            if label is None:
+                problem = self.read_problem(name)
+                label = "not set" if problem is None else f"unreadable (OSStatus {problem})"
+            out[name] = label
+        return out
 
     def as_env(self) -> Mapping[str, str]:
         """A read-only mapping view for code that takes an `env` dict.

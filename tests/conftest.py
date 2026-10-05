@@ -33,6 +33,22 @@ def isolate_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_notifications(monkeypatch):
+    """Keep the test suite out of Notification Centre.
+
+    App wiring tests drive fake ping failures through the real `alert` module,
+    and `rumps.notification` posts a real "network failed" banner from the
+    pytest process -- indistinguishable from the menu bar app reporting a real
+    outage. The osascript fallback runs only when `rumps.notification` raises,
+    and the tests that make it raise inject their own `run_fn`. Tests that
+    assert on notifications patch their own fake over this one.
+    """
+    import rumps
+
+    monkeypatch.setattr(rumps, "notification", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
 def no_real_dock_icon(monkeypatch):
     """Keep the test suite off the real Dock.
 

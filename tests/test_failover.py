@@ -5,12 +5,14 @@ actually rewrites, so the read-back verification is exercised for real.
 
 import json
 import os
+import subprocess
 import threading
 import time
 from types import SimpleNamespace
 
 import pytest
 
+import netdnsmonitor.failover as failover_module
 from netdnsmonitor.failover import (
     FailoverStore,
     NetworkFailover,
@@ -1728,3 +1730,109 @@ def test_exact_failback_restore_reports_third_head_honestly(store):
     assert "restored the original service order" in outcome
     assert "failed back to preferred 'AX88179B'" not in outcome
     assert "Thunderbolt Bridge" in outcome
+
+
+# --- audit regressions -------------------------------------------------------
+
+
+def test_oversized_integer_in_state_file_must_not_raise(tmp_path):
+    path = tmp_path / "failover.json"
+    path.write_text('{"last_switch_at": 1' + "0" * 400 + "}")
+    state = FailoverStore(str(path))
+    assert state.last_switch_at is None
+
+
+def test_oversized_integer_in_switch_times_is_dropped(tmp_path):
+    path = tmp_path / "failover.json"
+    path.write_text('{"switch_times": [1' + "0" * 400 + ", 5.0]}")
+    assert FailoverStore(str(path)).switch_times == [5.0]
+
+
+def test_deeply_nested_state_file_must_not_raise(tmp_path):
+    path = tmp_path / "failover.json"
+    path.write_text("[" * 200000)
+    FailoverStore(str(path))
+
+
+def test_a_timeout_is_not_called_a_privilege_refusal_when_a_service_name_says_administrator(
+    monkeypatch,
+):
+    name = "Administrator iPhone"
+    runner = FakeRunner(order=["Wi-Fi", name])
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["networksetup", "-ordernetworkservices"]:
+            raise subprocess.TimeoutExpired(args, 5)
+        return runner(args)
+
+    monkeypatch.setattr(failover_module.subprocess, "run", fake_run)
+    services = parse_service_order(runner(["networksetup", "-listnetworkserviceorder"]).stdout)
+    out = apply_service_order(default_run, services, [name, "Wi-Fi"])
+    assert not out.startswith("NEEDS_PRIVILEGE"), out
+    assert "Administrator" not in out
+    assert "TimeoutExpired" in out
+
+
+def test_default_run_failure_carries_the_class_name_only(monkeypatch):
+    def boom(args, **kwargs):
+        raise OSError("secret-token-in-argv " + " ".join(args))
+
+    monkeypatch.setattr(failover_module.subprocess, "run", boom)
+    result = default_run(["networksetup", "-x", "hunter2"])
+    assert result.stderr == "OSError"
+
+
+def test_a_cli_switch_made_mid_attempt_keeps_its_pause(tmp_path):
+    path = str(tmp_path / "failover.json")
+    runner = FakeRunner()
+    cli = build(FailoverStore(path), runner, prober=lambda d: True)
+    fired = []
+
+    def prober(dev):
+        # The app's ladder is mid-probe when `netdns failover backup` runs.
+        if not fired:
+            fired.append(1)
+            assert cli.switch_now("backup").startswith("ok:")
+        return {"en6": False, "en0": True}.get(dev)
+
+    app = build(FailoverStore(path), runner, prober=prober)
+    app.attempt_failover("network")
+    with open(path) as f:
+        assert json.load(f)["failback_paused"] is True
+
+
+def test_manual_switch_prefers_an_unprobed_backup_over_one_whose_probe_failed(store):
+    prober = lambda dev: {"en6": False, "en0": False, "en11": None}.get(dev)  # noqa: E731
+    failover = build(
+        store,
+        FakeRunner(),
+        prober=prober,
+        backup_services=["Wi-Fi", "iPhone USB"],
+        backup_service=None,
+    )
+    runner = failover.run_fn
+    out = failover.switch_now("backup")
+    assert runner.order[0] == "iPhone USB", out
+    assert "not verified reachable" in out
+
+
+def test_manual_switch_to_a_backup_whose_probe_failed_says_so(store):
+    runner = FakeRunner()
+    failover = build(store, runner, prober=lambda dev: False)
+    out = failover.switch_now("backup")
+    assert out.startswith("ok:")
+    assert "its probe failed" in out
+
+
+def test_apply_service_order_sends_the_argv_that_order_argv_built(monkeypatch):
+    runner = FakeRunner(order=["Wi-Fi", "Other"])
+    services = parse_service_order(runner(["networksetup", "-listnetworkserviceorder"]).stdout)
+    marker = ["networksetup", "-ordernetworkservices", "Other", "Wi-Fi", "--marker"]
+    monkeypatch.setattr(failover_module, "order_argv", lambda s, o: marker)
+    apply_service_order(runner, services, ["Other", "Wi-Fi"])
+    assert marker in runner.calls
+
+
+def test_snapshot_records_when_it_was_taken(store):
+    failover = build(store, FakeRunner(), time_fn=lambda: 1_234_567.0)
+    assert failover.snapshot()["taken_at"] == 1_234_567.0

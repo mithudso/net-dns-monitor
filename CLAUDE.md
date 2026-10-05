@@ -50,7 +50,7 @@ report, because someone will act on it.
 3. **The engine does not touch the network — the injected callable does.** Every side
    effect (probe, subprocess, LLM call, SMTP, webhook) enters as a parameter with a real
    default. That is what makes the whole decision surface testable offline; the test
-   suite opens no sockets. Do not import `socket`/`subprocess` into a decision module.
+   suite opens no sockets beyond loopback (UDP in `test_peer_net.py`). Do not import `socket`/`subprocess` into a decision module.
    `failover_policy.py` and `service_order.py` are decision modules and must stay clean.
 4. **No secret in a return value, a report, or an error string.** The Slack webhook URL
    *is* a credential, and `urllib`'s exception text can embed the full request URL.
@@ -94,13 +94,15 @@ report, because someone will act on it.
 ## Commands — before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2212 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2521 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
 `tests/conftest.py` stubs the privilege probe (`sudo -n -k -l`, `ifconfig -l`,
 `route -n get default`) and the `log show` readers that app wiring would otherwise
-start. `test_privileges`, `test_system_log` and `test_log_watcher` are exempt, because
+start. Another autouse fixture stubs `rumps.notification`: app wiring tests drive fake
+outages through the real `alert` module, and an unstubbed run posts real "network
+failed" banners that look exactly like the app reporting a real outage. `test_privileges`, `test_system_log` and `test_log_watcher` are exempt, because
 they test those functions and inject their own runners.
 
 `scripts/check_docs.py --collect-tests` checks retrieval-index paths and the
@@ -192,7 +194,7 @@ comment that is wrong about why is as expensive as code that is wrong.
   (root:wheel, 0440). It gives the user `NOPASSWD` for two complete commands:
   `/usr/bin/killall -HUP mDNSResponder`, and `/usr/sbin/ipconfig set <interface> DHCP`
   for each interface enumerated at grant time. With the grant, `flush_dns_cache`
-  restarts mDNSResponder and `renew_dhcp_lease` runs through `sudo -n`. Without it,
+  sends mDNSResponder a HUP and `renew_dhcp_lease` runs through `sudo -n`. Without it,
   the flush reports `partial` and the renewal reports `NEEDS_PRIVILEGE`.
   `toggle_network_service` is never automated and returns `NOT_AUTOMATED`. Fakes cover
   all of this. `switch_to_backup_network` does not use the grant: it is genuinely

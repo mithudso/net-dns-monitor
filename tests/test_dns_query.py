@@ -125,7 +125,7 @@ def test_unusable_reply_from_one_public_resolver_allows_the_next():
 def test_an_overlong_whole_dns_name_is_not_sent():
     sends = []
     domain = ".".join(["x" * 63] * 4)
-    assert query_public_dns(domain, send_recv_fn=lambda p, *a: sends.append(p) or b"") is False
+    assert query_public_dns(domain, send_recv_fn=lambda p, *a: sends.append(p) or b"") is None
     assert sends == []
 
 
@@ -234,7 +234,7 @@ def test_runt_datagram_shorter_than_a_dns_header_is_rejected():
     assert query_public_dns("example.com", send_recv_fn=lambda *a: b"\x00" * 5) is None
 
 
-def test_undecodable_domain_returns_false_instead_of_raising():
+def test_unrepresentable_domain_is_not_probed_instead_of_raising():
     """`domain` is a constructor default in repair_executor, not a constant, so
     an unencodable name is one config change away. `_encode_query` raises
     UnicodeEncodeError on non-ASCII and ValueError on an over-long label;
@@ -246,9 +246,21 @@ def test_undecodable_domain_returns_false_instead_of_raising():
         sends.append(packet)
         return _response(packet, 0)
 
-    assert query_public_dns("münchen.de", send_recv_fn=capture) is False
-    assert query_public_dns("a" * 256 + ".com", send_recv_fn=capture) is False
+    # A name that cannot be sent was never tested: None, not "did not resolve".
+    assert query_public_dns("a" * 256 + ".com", send_recv_fn=capture) is None
+    assert query_public_dns("a..com", send_recv_fn=capture) is None
     assert sends == []  # never reached the wire
+
+
+def test_a_unicode_name_is_sent_as_its_idna_labels():
+    sends = []
+
+    def capture(packet, server, port, timeout):
+        sends.append(packet)
+        return _response(packet, 0)
+
+    assert query_public_dns("münchen.de", send_recv_fn=capture) is True
+    assert b"xn--mnchen-3ya" in sends[0]
 
 
 def test_a_label_over_63_bytes_is_refused_before_it_reaches_the_wire():
@@ -262,8 +274,8 @@ def test_a_label_over_63_bytes_is_refused_before_it_reaches_the_wire():
         sends.append(packet)
         return _response(packet, 0)
 
-    assert query_public_dns("a" * 200 + ".com", send_recv_fn=capture) is False
-    assert query_public_dns("a" * 64 + ".com", send_recv_fn=capture) is False
+    assert query_public_dns("a" * 200 + ".com", send_recv_fn=capture) is None
+    assert query_public_dns("a" * 64 + ".com", send_recv_fn=capture) is None
     assert sends == []
     assert query_public_dns("a" * 63 + ".com", send_recv_fn=capture) is True
 
@@ -299,3 +311,99 @@ def test_any_is_none_only_when_no_resolver_replied():
         raise OSError("no route to host")
 
     assert query_public_dns_any("example.com", send_recv_fn=send_recv) is None
+
+
+@pytest.mark.parametrize("rcode", [2, 5])  # SERVFAIL, REFUSED
+def test_other_nonzero_rcodes_are_a_valid_negative_answer(rcode):
+    # A resolver that answered SERVFAIL or REFUSED did reply; the name did not
+    # resolve through it. That is False, not None.
+    reply = lambda packet, *a: _response(packet, rcode)
+    assert query_public_dns("example.com", send_recv_fn=reply) is False
+
+
+def test_a_truncated_reply_is_unknown():
+    reply = lambda packet, *a: _wire_reply(packet, flags=0x8380)
+    assert query_public_dns("example.com", send_recv_fn=reply) is None
+
+
+class _FakeSocket:
+    """A connected UDP socket that hands back queued datagrams."""
+
+    def __init__(self, on_send):
+        self.on_send = on_send
+        self.queue = []
+        self.timeouts = []
+        self.closed = False
+
+    def settimeout(self, seconds):
+        self.timeouts.append(seconds)
+
+    def connect(self, address):
+        self.address = address
+
+    def send(self, packet):
+        self.queue = self.on_send(packet)
+
+    def recv(self, size):
+        if not self.queue:
+            raise TimeoutError("timed out")
+        return self.queue.pop(0)
+
+    def close(self):
+        self.closed = True
+
+
+def _install_socket(monkeypatch, on_send):
+    from types import SimpleNamespace
+
+    from netdnsmonitor import dns_query
+
+    made = []
+
+    def factory(*args):
+        made.append(_FakeSocket(on_send))
+        return made[-1]
+
+    monkeypatch.setattr(
+        dns_query,
+        "socket",
+        SimpleNamespace(
+            getaddrinfo=lambda *a: [(2, 2, 17, "", ("1.1.1.1", 53))],
+            socket=factory,
+            SOCK_DGRAM=2,
+        ),
+    )
+    return made
+
+
+def test_default_transport_ignores_a_wrong_txid_datagram_and_keeps_waiting(monkeypatch):
+    def on_send(packet):
+        good = _response(packet, 0)
+        bad = bytes([good[0] ^ 0xFF]) + good[1:]
+        return [bad, good]
+
+    made = _install_socket(monkeypatch, on_send)
+    assert query_public_dns("example.com") is True
+    assert made[0].closed
+
+
+def test_default_transport_with_only_wrong_txid_datagrams_is_unknown(monkeypatch):
+    def on_send(packet):
+        good = _response(packet, 0)
+        return [bytes([good[0] ^ 0xFF]) + good[1:]]
+
+    made = _install_socket(monkeypatch, on_send)
+    assert query_public_dns("example.com") is None
+    assert made[0].closed
+
+
+def test_default_transport_silence_is_unknown_and_closes_the_socket(monkeypatch):
+    made = _install_socket(monkeypatch, lambda packet: [])
+    assert query_public_dns("example.com") is None
+    assert made[0].closed
+
+
+def test_default_transport_bounds_each_wait_by_the_remaining_deadline(monkeypatch):
+    made = _install_socket(monkeypatch, lambda packet: [_response(packet, 0)])
+    assert query_public_dns("example.com", timeout=2.0) is True
+    assert 0 < made[0].timeouts[0] <= 2.0

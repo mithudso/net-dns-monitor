@@ -6,15 +6,18 @@ section).
 """
 
 import copy
+import difflib
 import ipaddress
 import math
 import os
 import re
+import warnings
 from collections.abc import Mapping
 from typing import Optional
 
 import yaml
 
+from netdnsmonitor.classifier import Classification
 from netdnsmonitor.system_log import DEFAULT_NOISE_PATTERNS
 
 DEFAULT_CONFIG = {
@@ -217,11 +220,6 @@ DEFAULT_CONFIG = {
     # outright -- the list order only breaks ties.
     "failover_backup_service": None,
     "failover_backup_services": [],
-    # Throughput measurement. Set the host to "" to turn it off, in which case
-    # ranking falls back to reachability and configured order rather than
-    # inventing numbers. The default endpoint serves an exact byte count over
-    # plain HTTPS with no account or redirect, which is what makes it usable
-    # from an interface-bound socket.
     # What the interface prober aims at, when that must differ from
     # `external_targets`. Empty means "use external_targets". See
     # failover.failover_probe_targets for why the two are separable.
@@ -229,6 +227,11 @@ DEFAULT_CONFIG = {
     # One deadline is spent across ALL failover probe targets, so the budget is
     # a function of how many are listed. 0 means "use probe_timeout_seconds".
     "failover_probe_timeout_seconds": 0,
+    # Throughput measurement. Set the host to "" to turn it off, in which case
+    # ranking falls back to reachability and configured order rather than
+    # inventing numbers. The default endpoint serves an exact byte count over
+    # plain HTTPS with no account or redirect, which is what makes it usable
+    # from an interface-bound socket.
     "failover_speedtest_host": "speed.cloudflare.com",
     "failover_speedtest_path": "/__down?bytes=2000000",
     "failover_speedtest_port": 443,
@@ -331,6 +334,8 @@ POSITIVE_KEYS = (
     "log_view_timeout_seconds",
     "notify_timeout_seconds",
     "failover_speedtest_timeout_seconds",
+    # A cap of 0 or less would make every throughput sample empty.
+    "failover_speedtest_max_bytes",
     # ThreadPoolExecutor(max_workers=0) raises ValueError, so every resolution
     # batch failed.
     "resolution_max_workers",
@@ -364,6 +369,24 @@ NUMBER_KEYS = (
     "failover_max_switches_per_hour",
 )
 
+# Counts that reach a deque maxlen, a slice or a list index. A float there
+# raises TypeError (deque(maxlen=12.5), rows[:400.5]) and, for log_view_max_entries,
+# 0 raises IndexError in LogBuffer.add -- so each needs a whole number, with the
+# minimum below. 0 is meaningful for the "limit" keys (show/announce nothing, no
+# learning), so only the keys that size a buffer must be at least 1.
+INT_KEYS = {
+    "log_view_max_entries": 1,
+    "ping_loss_window": 1,
+    "log_view_row_limit": 0,
+    "log_view_announce_limit": 0,
+    "history_max_samples": 0,
+    "max_learned_domains": 0,
+}
+
+# Keys that were once configurable and are retired. A user file that still
+# carries one is stale, not mistaken, so it is not reported as unknown.
+RETIRED_KEYS = frozenset({"resolution_lookback", "resolution_top_n"})
+
 # router.py interpolates these into a shell script that runs with administrator
 # rights, so anything but an address or an interface name is refused before it
 # can get there. Checked only while router_enabled is on: nothing reads them
@@ -396,6 +419,56 @@ def _is_number(value) -> bool:
 
 def _is_text(value) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def host_problem(host) -> Optional[str]:
+    """Why `host` cannot be handed to ping as an argument, or None if it can.
+
+    The one predicate ping_once and the config share, so a value the config
+    accepts is never one the heartbeat then refuses on every tick. `--` is not
+    relied on to protect the argv; refusing a leading "-" is the guard.
+    """
+    if not isinstance(host, str) or not host:
+        return f"expected a host name or address, got {host!r}"
+    if host[0] == "-":
+        return f"a host name cannot start with '-', got {host!r}"
+    if " " in host or not host.isprintable():
+        return f"a host name cannot contain whitespace or unprintable characters, got {host!r}"
+    return None
+
+
+def domain_problem(name) -> Optional[str]:
+    """Why `name` cannot be resolved as a DNS name, or None if it can.
+
+    getaddrinfo raises UnicodeError for a name the IDNA codec cannot encode
+    (an empty label, a label over 63 characters), and TypeError for a
+    non-string. Either would surface on every tick, and a probe error is not
+    evidence of a DNS outage. A URL or user@host can never resolve, which reads
+    as a permanent DNS failure on a healthy network.
+    """
+    if not isinstance(name, str):
+        return f"expected a domain name, got {name!r}"
+    if not name.strip() or name != name.strip():
+        return f"a domain name cannot be blank or padded with whitespace, got {name!r}"
+    if any(ch in name for ch in "/:@"):
+        return f"expected a bare domain name, not a URL or address, got {name!r}"
+    if len(name) > 253:
+        return "a domain name is at most 253 characters"
+    try:
+        name.encode("idna")
+    except UnicodeError:
+        return f"not a valid domain name (empty or over-long label), got {name!r}"
+    return None
+
+
+def min_learn_interval(poll_seconds: float) -> float:
+    """Shortest sensible domain_learn_interval_seconds for a poll interval.
+
+    At or below the poll interval a dead domain is re-added on every tick, so
+    the flap gate's success counter never resets and one dead name latches a
+    permanent false incident. Pruning needs clean ticks in between, hence 2x.
+    """
+    return float(poll_seconds) * 2
 
 
 def target_problem(entry) -> Optional[str]:
@@ -528,28 +601,36 @@ def validate_config(config: dict) -> None:
         if key in config and not _is_number(config[key]):
             raise ConfigError(key, f"config key '{key}' must be a number, got {config[key]!r}")
 
+    for key in INT_KEYS:
+        if key not in config:
+            continue
+        value = config[key]
+        minimum = INT_KEYS[key]
+        if not (_is_number(value) and float(value).is_integer() and value >= minimum):
+            raise ConfigError(
+                key,
+                f"config key '{key}' must be a whole number of at least {minimum}, got {value!r}",
+            )
+
+    # `failover_enabled: "false"` is a non-empty string and so truthy: it arms
+    # automatic failover. None is not False either, so a null is refused too.
+    for key, default in DEFAULT_CONFIG.items():
+        if isinstance(default, bool) and key in config and not isinstance(config[key], bool):
+            raise ConfigError(key, f"config key '{key}' must be true or false, got {config[key]!r}")
+
     # Blank is not "don't ping": `ping ""` cannot resolve the host and exits 68,
     # so every heartbeat is a lost ping and the alert fires on a healthy network.
-    v6 = config.get("ping_host_v6")
-    if v6 is not None and not isinstance(v6, str):
-        raise ConfigError(
-            "ping_host_v6",
-            f"config key 'ping_host_v6' must be an IPv6 address, or blank to turn it off, got {v6!r}",
-        )
-    if "ping_host" in config and not _is_text(config["ping_host"]):
-        raise ConfigError(
-            "ping_host",
-            f"config key 'ping_host' must be a host name or address, got {config['ping_host']!r}",
-        )
-    if (
-        "ping_fallback_host" in config
-        and config["ping_fallback_host"] is not None
-        and not isinstance(config["ping_fallback_host"], str)
-    ):
-        raise ConfigError(
-            "ping_fallback_host",
-            f"config key 'ping_fallback_host' must be a host name or address, or blank to turn it off, got {config['ping_fallback_host']!r}",
-        )
+    # A value ping_once would refuse makes every heartbeat raise, so the
+    # heartbeat dies silently. v6 and the fallback may be blank (off).
+    for key in ("ping_host", "ping_host_v6", "ping_fallback_host"):
+        if key not in config:
+            continue
+        value = config[key]
+        if key != "ping_host" and (value is None or value == ""):
+            continue
+        problem = host_problem(value)
+        if problem is not None:
+            raise ConfigError(key, f"config key '{key}': {problem}")
 
     # `reports_dir:` with nothing after it loads as None, and expanduser(None)
     # raises TypeError, which names no key. A blank path is refused too: it
@@ -564,6 +645,16 @@ def validate_config(config: dict) -> None:
                 key, f"config key '{key}' must be a port from 1 to 65535, got {config[key]!r}"
             )
 
+    if "domains" in config and isinstance(config["domains"], (list, tuple)):
+        for item in config["domains"]:
+            problem = domain_problem(item)
+            if problem is not None:
+                raise ConfigError("domains", f"config key 'domains': {problem}")
+    if config.get("control_domain") is not None:
+        problem = domain_problem(config["control_domain"])
+        if problem is not None and config["control_domain"] != "":
+            raise ConfigError("control_domain", f"config key 'control_domain': {problem}")
+
     # With no configured domain and no control domain, the DNS probe has no name
     # to resolve until one is learned. dns_ok is then None, classify() returns
     # UNCLASSIFIED, and the state machine counts that as a failing tick -- a
@@ -576,6 +667,17 @@ def validate_config(config: dict) -> None:
             "empty: with no name to resolve, every check reads as unclassified "
             "and latches a permanent incident. Set control_domain or add a domain.",
         )
+
+    triggers = config.get("failover_trigger_classifications")
+    if isinstance(triggers, (list, tuple)):
+        allowed = {c.value for c in Classification} - {Classification.HEALTHY.value}
+        for item in triggers:
+            if item not in allowed:
+                raise ConfigError(
+                    "failover_trigger_classifications",
+                    f"config key 'failover_trigger_classifications': {item!r} is not "
+                    f"one of {sorted(allowed)}",
+                )
 
     if config.get("router_enabled"):
         for key in ROUTER_ADDRESS_KEYS:
@@ -606,6 +708,7 @@ def load_config(path: str, default_overrides: Optional[Mapping[str, object]] = N
     # Applied under the user's file, so a build-specific default never
     # overrides what someone actually set.
     config.update(default_overrides or {})
+    user_keys: list = []
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
             user_config = yaml.safe_load(f) or {}
@@ -621,6 +724,7 @@ def load_config(path: str, default_overrides: Optional[Mapping[str, object]] = N
                 f"pairs, got a top-level {type(user_config).__name__}"
             )
         config.update(user_config)
+        user_keys = [k for k in user_config if isinstance(k, str)]
 
     normalize_config(config)
     try:
@@ -632,12 +736,35 @@ def load_config(path: str, default_overrides: Optional[Mapping[str, object]] = N
 
     for path_key in PATH_KEYS:
         config[path_key] = os.path.expanduser(config[path_key])
+        # A relative path lands wherever the app was launched from -- the Dock
+        # launches with "/" as the working directory -- and `$HOME` is not
+        # expanded, so it would create a literal "$HOME" directory.
+        if not os.path.isabs(config[path_key]):
+            raise ConfigError(
+                path_key,
+                f"config key '{path_key}' must be an absolute path or start with ~, "
+                f"got {config[path_key]!r} (in {path})",
+            )
+
+    # Names only, never values: sensitive_strings is a likely typo target and
+    # its value is the secret.
+    unknown = sorted(set(user_keys) - set(DEFAULT_CONFIG) - RETIRED_KEYS)
+    if unknown:
+        hints = []
+        for key in unknown:
+            close = difflib.get_close_matches(key, list(DEFAULT_CONFIG), n=1)
+            hints.append(f"{key} (did you mean {close[0]}?)" if close else key)
+        warnings.warn(
+            f"config file {path} has unknown keys, ignored: " + ", ".join(hints),
+            UserWarning,
+            stacklevel=2,
+        )
 
     # A learn interval at or below the poll interval re-adds a dead domain on
     # every tick, so the flap gate's success counter can never reset and one
     # dead name latches a permanent false incident. Pruning needs clean ticks
     # in between, so the interval is clamped to give it some.
-    min_interval = float(config["poll_interval_seconds"]) * 2
+    min_interval = min_learn_interval(config["poll_interval_seconds"])
     if float(config["domain_learn_interval_seconds"]) < min_interval:
         config["domain_learn_interval_seconds"] = min_interval
     return config

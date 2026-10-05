@@ -39,7 +39,12 @@ def parse_service_order(text: str) -> list[NetworkService]:
     which callers must treat as "unknown" -- never as "no services".
     """
     services: list[NetworkService] = []
-    lines = text.splitlines()
+    # Not str.splitlines(): it also breaks on U+2028, U+0085, \x0b and others,
+    # which a service name may legally contain. A name cut at one of those
+    # still passes the permutation guard (both sides come through this parse)
+    # while the argv omits the real service -- and that deletes it. Only the
+    # newline networksetup prints separates entries.
+    lines = [line.removesuffix("\r") for line in text.replace("\r\n", "\n").split("\n")]
     for index, line in enumerate(lines):
         match = _ENTRY_RE.match(line)
         if not match:

@@ -43,6 +43,7 @@ from netdnsmonitor.config import (
     DEFAULT_CONFIG,
     PATH_KEYS,
     ConfigError,
+    min_learn_interval,
     normalize_config,
     target_problem,
     validate_config,
@@ -380,7 +381,13 @@ def parse_field(kind: str, text: str, label: str = ""):
         return targets
     if kind == "int":
         try:
-            value = int(float(text))
+            as_float = float(text)
+            # "5.9" used to become 5 silently. A fraction is a typo or a
+            # misunderstanding of the unit; saving a different number than the
+            # one typed hides it.
+            if as_float != int(as_float):
+                raise ValueError(text)
+            value = int(as_float)
         except (ValueError, OverflowError):
             # OverflowError is not hypothetical: float("inf") parses fine and
             # int() then refuses it, and that exception is not a ValueError -- so
@@ -406,7 +413,14 @@ def parse_field(kind: str, text: str, label: str = ""):
     return text
 
 
-def collect(values: dict) -> dict:
+# Keys whose consumers treat 0 as "off by accident": a zero threshold or window
+# would divide, never fire, or fire on nothing. Zero stays legal elsewhere.
+MIN_ONE = frozenset(
+    {"failure_threshold", "success_threshold", "ping_failure_threshold", "ping_loss_window"}
+)
+
+
+def collect(values: dict, current_config: Optional[dict] = None) -> dict:
     """Parse a {key: text} mapping into typed config values.
 
     Every field is parsed before anything is written, so one bad value means
@@ -416,6 +430,25 @@ def collect(values: dict) -> dict:
     for key, label, kind in FIELDS:
         if key in values:
             parsed[key] = parse_field(kind, values[key], label)
+            if key in MIN_ONE and parsed[key] < 1:
+                raise ValueError(
+                    f"{label}: expected a whole number of 1 or more, got {values[key]!r}"
+                )
+    if "domain_learn_interval_seconds" in parsed:
+        # load_config raises a too-short interval to 2 x poll without a word, so
+        # the file would keep a number the app never uses. Refuse it here, judged
+        # against the poll in the same submission, else the running config's.
+        poll = parsed.get("poll_interval_seconds")
+        if poll is None:
+            poll = (current_config or {}).get(
+                "poll_interval_seconds", DEFAULT_CONFIG["poll_interval_seconds"]
+            )
+        floor = min_learn_interval(poll)
+        if parsed["domain_learn_interval_seconds"] < floor:
+            raise ValueError(
+                f"{LABELS.get('domain_learn_interval_seconds', 'domain_learn_interval_seconds')}: "
+                f"must be at least {floor:g} seconds (twice the poll interval)"
+            )
     # The checks load_config applies, on the fields that were sent. A value it
     # would refuse has to be refused here, before a file the app cannot start
     # from is written.
@@ -624,6 +657,7 @@ class SettingsWindow:
         on_save: Callable[[dict], str],
         config_path_display: Optional[str] = None,
         restart_hint: Optional[str] = None,
+        hidden_keys: frozenset = frozenset(),
     ):
         import AppKit
 
@@ -631,12 +665,19 @@ class SettingsWindow:
 
         self.on_save = on_save
         self.fields = {}
+        # Features the current build cannot run are not offered. A hidden key
+        # has no field, so collect never sees it and save never writes it.
+        self.hidden_keys = frozenset(hidden_keys)
+        visible_groups = [
+            (g, [f for f in fields if f[0] not in self.hidden_keys]) for g, fields in GROUPS
+        ]
+        visible_groups = [(g, fields) for g, fields in visible_groups if fields]
         # Field text as of the last load(), so a save can say which keys changed.
         self._loaded: dict[str, str] = {}
         self._target = _make_button_target(self._handle)
 
-        rows = sum(len(fields) for _g, fields in GROUPS)
-        content_height = rows * ROW_HEIGHT + len(GROUPS) * GROUP_GAP + 20
+        rows = sum(len(fields) for _g, fields in visible_groups)
+        content_height = rows * ROW_HEIGHT + len(visible_groups) * GROUP_GAP + 20
         visible_height = min(620, content_height)
 
         self.window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -675,7 +716,7 @@ class SettingsWindow:
         )
 
         y = content_height - 10
-        for group, fields in GROUPS:
+        for group, fields in visible_groups:
             y -= GROUP_GAP
             document.addSubview_(
                 _label(AppKit, AppKit.NSMakeRect(8, y, LABEL_WIDTH, 18), group.upper(), 10.0)

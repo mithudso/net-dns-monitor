@@ -7,7 +7,8 @@ YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
-fail() { echo -e "${RED}[FAIL]${NC} $1"; }
+FAILURES=0
+fail() { echo -e "${RED}[FAIL]${NC} $1"; FAILURES=$((FAILURES + 1)); }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
 echo "========================================="
@@ -69,10 +70,15 @@ else
 fi
 
 if PF_NAT="$(sudo -n pfctl -a com.apple/custom_nat -s nat 2>/dev/null)"; then
-    if grep -q "nat on" <<<"$PF_NAT"; then
-        pass "Custom NAT rules found in com.apple/custom_nat"
+    # The rule must name the interface that is the default route now: a rule
+    # for an interface that is no longer upstream matches nothing.
+    WAN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' || true)"
+    if [ -z "$WAN" ]; then
+        warn "No default route: cannot tell which interface NAT should name"
+    elif grep -q "nat on $WAN " <<<"$PF_NAT"; then
+        pass "Custom NAT rule in com.apple/custom_nat names the current upstream ($WAN)"
     else
-        fail "Custom NAT rules NOT found. Run the pfctl NAT injection command."
+        fail "No NAT rule for the current upstream ($WAN) in com.apple/custom_nat. Re-run enable_nat.sh."
     fi
 else
     warn "NAT anchor not checked (needs root: rerun with sudo)"
@@ -94,7 +100,9 @@ fi
 
 # Test resolution via Unbound directly. `dig +short` prints ";; connection timed
 # out" on stdout when nothing answers, so non-empty output alone is not an answer.
-if UNBOUND_TEST="$(dig @192.168.4.1 google.com +short +time=2 +tries=1)" \
+if ! command -v dig >/dev/null 2>&1; then
+    warn "dig not installed or not on PATH: Unbound resolution not tested"
+elif UNBOUND_TEST="$(dig @192.168.4.1 google.com +short +time=2 +tries=1)" \
     && [ -n "$UNBOUND_TEST" ] && ! grep -q '^;' <<<"$UNBOUND_TEST"; then
     pass "Unbound DNS (192.168.4.1:53) answered a query"
 else
@@ -121,4 +129,8 @@ else
 fi
 
 echo "========================================="
+if [ "$FAILURES" -gt 0 ]; then
+    echo "Diagnostics complete: $FAILURES check(s) FAILED."
+    exit 1
+fi
 echo "Diagnostics complete."

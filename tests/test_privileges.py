@@ -84,9 +84,82 @@ def test_only_ethernet_and_wifi_interfaces_are_considered():
     assert dhcp_interfaces(recorder(ok(IFCONFIG_L))) == ["en0", "en9", "en1"]
 
 
-def test_a_failed_interface_listing_yields_nothing_rather_than_raising():
-    assert dhcp_interfaces(recorder(ok(IFCONFIG_L, returncode=1))) == []
-    assert dhcp_interfaces(recorder(OSError("no ifconfig"))) == []
+def test_a_failed_interface_listing_is_not_probed_rather_than_empty():
+    # None is "could not list"; [] is "listed, found no Ethernet or Wi-Fi".
+    assert dhcp_interfaces(recorder(ok(IFCONFIG_L, returncode=1))) is None
+    assert dhcp_interfaces(recorder(OSError("no ifconfig"))) is None
+    assert dhcp_interfaces(recorder(ok("lo0 utun0\n"))) == []
+
+
+def test_grant_says_it_could_not_list_interfaces_when_the_probe_failed():
+    run_fn = recorder(ok())
+    result = grant("mitch.hudson", None, run_fn=run_fn)
+    assert result["ok"] is False and result["cancelled"] is False
+    assert "could not list" in result["message"].lower()
+    assert "no ethernet or wi-fi interface was found" not in result["message"].lower()
+    assert run_fn.calls == []
+
+
+def test_non_ascii_digits_are_not_an_interface_name():
+    with pytest.raises(ValueError, match="refusing to write"):
+        sudoers_body("mitch", ["en\u0663"])
+    assert granted_interfaces_from(["/usr/sbin/ipconfig set en\u0663 DHCP"]) == []
+    assert dhcp_interfaces(recorder(ok("en\u0663 en0\n"))) == ["en0"]
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        "    (root) /bin/ls, (_postgres) NOPASSWD: ALL\n",
+        "    (root) NOPASSWD: ALL, !/usr/bin/killall\n",
+        "    (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder, !/usr/bin/killall\n",
+    ],
+)
+def test_a_listing_that_carries_a_second_runas_or_a_negation_is_not_a_grant(listing):
+    assert is_granted_from(parse_granted_commands(listing)) is False
+
+
+def test_a_plain_root_nopasswd_rule_is_still_parsed_after_the_stricter_rules():
+    listing = "    (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder\n"
+    assert is_granted_from(parse_granted_commands(listing)) is True
+
+
+def _includedir_pattern():
+    return _install_script(sudoers_body("mitch", ["en0"])).split("grep -Eq '")[1].split("'")[0]
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("#includedir /private/etc/sudoers.d\n", True),
+        ("#includedir /etc/sudoers.d\n", True),
+        ("@includedir /etc/sudoers.d/\n", True),
+        ("#includedir /etc/sudoers.d.disabled\n", False),
+        ("#includedir /etc/sudoers.dx\n", False),
+        ("#includedir /etc/sudoers.d/extra\n", False),
+    ],
+)
+def test_the_includedir_guard_matches_only_the_sudoers_d_directory(tmp_path, line, expected):
+    import subprocess
+
+    main = tmp_path / "sudoers"
+    main.write_text(line)
+    rc = subprocess.run(["/usr/bin/grep", "-Eq", _includedir_pattern(), str(main)]).returncode
+    assert (rc == 0) is expected
+
+
+def test_the_staging_file_is_removed_if_the_script_fails_after_mktemp():
+    script = _install_script(sudoers_body("mitch", ["en0"]))
+    assert "trap" in script and "EXIT" in script
+    assert script.index("mktemp") < script.index("trap")
+    assert script.index("trap") < script.index("base64 -D")
+
+
+def test_the_install_script_is_valid_shell():
+    import subprocess
+
+    script = _install_script(sudoers_body("mitch", ["en0"]))
+    assert subprocess.run(["/bin/sh", "-n", "-c", script]).returncode == 0
 
 
 def test_the_primary_interface_comes_from_the_default_route():
@@ -250,7 +323,14 @@ def test_a_truncated_decode_is_refused_before_visudo_sees_it():
 def test_the_script_never_edits_the_main_sudoers_file():
     script = _install_script(sudoers_body("mitch.hudson", ["en0"]))
     assert "> /etc/sudoers" not in script
-    assert "/bin/mv $tmp /etc/sudoers\n" not in script
+    # Every write goes to the one staged path or the one rule file; the previous
+    # assertion looked for an `mv $tmp ...` spelling the script never used, so it
+    # could not fail.
+    import re
+
+    destinations = re.findall(r'/bin/mv "\$tmp" (\S+)', script)
+    assert destinations == [SUDOERS_PATH]
+    assert not re.search(r"(>|mv\s+\S+)\s*/etc/sudoers(\s|;|$)", script)
     assert script.count(SUDOERS_PATH) == 1
 
 

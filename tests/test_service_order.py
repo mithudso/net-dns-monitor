@@ -190,3 +190,29 @@ def test_order_argv_is_built_only_from_an_intact_order():
     assert order_argv(services, order) == ["networksetup", "-ordernetworkservices", *order]
     assert order_argv(services, order[:-1]) is None
     assert order_argv([], ["Wi-Fi"]) is None
+
+
+def test_service_name_with_unicode_line_separator_is_not_truncated():
+    # str.splitlines() also breaks on U+2028 and friends, which would cut the
+    # name short; the truncated name still passes the permutation guard.
+    real = "Foo Bar"
+    services = parse_service_order(f"(1) {real}\n(2) Wi-Fi\n")
+    assert [s.name for s in services] == [real, "Wi-Fi"]
+
+
+def test_guard_cannot_pass_an_argv_that_omits_a_real_service():
+    for sep in (" ", " ", "\x85", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e"):
+        real = f"Foo{sep}Bar"
+        services = parse_service_order(f"(1) {real}\n(2) Wi-Fi\n")
+        argv = order_argv(services, promote(services, "Wi-Fi"))
+        assert argv is None or real in argv, repr(sep)
+
+
+def test_crlf_listing_parses_without_a_trailing_carriage_return():
+    services = parse_service_order("(1) Wi-Fi\r\n(Hardware Port: Wi-Fi, Device: en0)\r\n")
+    assert [(s.name, s.device) for s in services] == [("Wi-Fi", "en0")]
+
+
+def test_is_order_intact_rejects_a_same_length_substitution():
+    services = parse_service_order("(1) A\n(2) B\n(*) C\n")
+    assert is_order_intact(services, ["A", "B", "Ethernet"]) is False

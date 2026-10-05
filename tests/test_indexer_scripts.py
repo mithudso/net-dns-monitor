@@ -10,6 +10,8 @@ import importlib
 import os
 import sys
 
+import pytest
+
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
 
 
@@ -27,11 +29,16 @@ mcp_server = load("mcp_server")
 
 
 class FakeCollection:
-    def __init__(self):
+    def __init__(self, existing=()):
         self.calls = []
+        self.existing = list(existing)
 
-    def delete(self, where):
-        self.calls.append(("delete", where))
+    def get(self, where):
+        self.calls.append(("get", where))
+        return {"ids": self.existing}
+
+    def delete(self, where=None, ids=None):
+        self.calls.append(("delete", where if ids is None else ids))
 
     def upsert(self, documents, metadatas, ids):
         self.calls.append(("upsert", ids, metadatas))
@@ -90,15 +97,51 @@ def test_the_same_file_has_one_source_key_however_it_is_spelled(tmp_path):
 # --- writing the collection ------------------------------------------------------
 
 
-def test_index_deletes_old_chunks_before_upserting(tmp_path):
+def test_index_upserts_before_deleting_only_stale_ids(tmp_path):
     f = tmp_path / "doc.md"
     f.write_text("hello")
-    collection = FakeCollection()
+    collection = FakeCollection(existing=["doc.md_chunk_0", "doc.md_chunk_1", "doc.md_chunk_2"])
     indexer.index_file(str(f), collection, root=str(tmp_path))
-    assert collection.calls[0] == ("delete", {"source": "doc.md"})
-    assert collection.calls[1][0] == "upsert"
-    assert collection.calls[1][1] == ["doc.md_chunk_0"]
-    assert collection.calls[1][2] == [{"source": "doc.md"}]
+    kinds = [c[0] for c in collection.calls]
+    assert kinds == ["upsert", "get", "delete"]
+    assert collection.calls[0][1] == ["doc.md_chunk_0"]
+    assert collection.calls[0][2] == [{"source": "doc.md"}]
+    assert collection.calls[2] == ("delete", ["doc.md_chunk_1", "doc.md_chunk_2"])
+
+
+def test_a_failed_upsert_deletes_nothing(tmp_path):
+    f = tmp_path / "doc.md"
+    f.write_text("hello")
+
+    class Failing(FakeCollection):
+        def upsert(self, documents, metadatas, ids):
+            raise RuntimeError("embedding service down")
+
+    collection = Failing(existing=["doc.md_chunk_0"])
+    with pytest.raises(RuntimeError):
+        indexer.index_file(str(f), collection, root=str(tmp_path))
+    assert [c for c in collection.calls if c[0] == "delete"] == []
+
+
+def test_secret_looking_names_and_tool_state_are_not_indexed(tmp_path):
+    root = str(tmp_path)
+    for rel in (
+        ".remember/now.md",
+        ".stele/state.json",
+        ".mypy_cache/a.json",
+        ".tox/x.py",
+        "venv/lib/x.py",
+        "env/lib/x.py",
+        "htmlcov/i.json",
+        ".hypothesis/x.json",
+        "lib/site-packages/x.py",
+        "config/secrets.json",
+        "api_token.txt",
+        "credentials.json",
+        "prod.env.json",
+    ):
+        assert not indexer.should_index(str(tmp_path / rel), root), rel
+    assert indexer.should_index(str(tmp_path / "netdnsmonitor" / "app.py"), root)
 
 
 def test_remove_deletes_by_source(tmp_path):
@@ -233,3 +276,116 @@ def test_self_test_reports_a_listing_failure_by_class_name(capsys):
     err = capsys.readouterr().err
     assert "RuntimeError" in err
     assert "/Users/someone" not in err
+
+
+def test_a_bad_n_results_or_failed_query_is_reported_by_class_name():
+    assert "ValueError" in mcp_server.search("q", "many", FakeCollection)
+
+    class Boom(FakeCollection):
+        def query(self, query_texts, n_results):
+            raise ConnectionError("http://localhost:11434 refused")
+
+    out = mcp_server.search("q", 3, Boom)
+    assert "ConnectionError" in out
+    assert "11434" not in out
+
+
+class FakeTimer:
+    made = []
+
+    def __init__(self, delay, fn, args=()):
+        self.delay, self.fn, self.args = delay, fn, args
+        self.cancelled = False
+        self.daemon = False
+        FakeTimer.made.append(self)
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        self.cancelled = True
+
+    def fire(self):
+        if not self.cancelled:
+            self.fn(*self.args)
+
+
+def test_a_burst_of_events_for_one_path_runs_once():
+    FakeTimer.made = []
+    handled = []
+    c = watcher.EventCoalescer(lambda *e: handled.append(e), 1.0, FakeTimer)
+    c.add("created", "/r/a.py", "", False)
+    c.add("modified", "/r/a.py", "", False)
+    c.add("modified", "/r/a.py", "", False)
+    c.add("modified", "/r/b.py", "", False)
+    for timer in FakeTimer.made:
+        timer.fire()
+    assert handled == [("modified", "/r/a.py", "", False), ("modified", "/r/b.py", "", False)]
+    assert [t.delay for t in FakeTimer.made] == [1.0] * 4
+
+
+def test_a_handler_error_does_not_escape_the_timer(capsys):
+    FakeTimer.made = []
+
+    def boom(*e):
+        raise RuntimeError("secret detail")
+
+    c = watcher.EventCoalescer(boom, 1.0, FakeTimer)
+    c.add("modified", "/r/a.py", "", False)
+    FakeTimer.made[0].fire()
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err and "secret detail" not in err
+
+
+def test_a_later_event_does_not_swallow_a_pending_move():
+    FakeTimer.made = []
+    handled = []
+    c = watcher.EventCoalescer(lambda *e: handled.append(e), 1.0, FakeTimer)
+    c.add("moved", "/r/a.py", "/r/b.py", False)
+    c.add("created", "/r/a.py", "", False)
+    for timer in FakeTimer.made:
+        timer.fire()
+    assert ("moved", "/r/a.py", "/r/b.py", False) in handled
+    assert ("created", "/r/a.py", "", False) in handled
+
+
+def test_flushes_for_different_paths_never_run_the_indexer_concurrently():
+    import threading
+    import time
+
+    running = []
+    peak = []
+
+    def handle(*event):
+        running.append(1)
+        peak.append(len(running))
+        time.sleep(0.02)
+        running.pop()
+
+    timers = []
+
+    class ThreadTimer:
+        def __init__(self, delay, fn, args=()):
+            self.thread = threading.Thread(target=fn, args=args)
+            timers.append(self)
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            pass
+
+    c = watcher.EventCoalescer(handle, 1.0, ThreadTimer)
+    for i in range(5):
+        c.add("modified", f"/r/{i}.py", "", False)
+    for t in timers:
+        t.thread.start()
+    for t in timers:
+        t.thread.join()
+    assert max(peak) == 1
+
+
+def test_source_files_named_after_credentials_are_still_indexed(tmp_path):
+    root = str(tmp_path)
+    for rel in ("netdnsmonitor/credentials.py", "tests/test_credentials.py", "tokenizer.py"):
+        assert indexer.should_index(str(tmp_path / rel), root), rel

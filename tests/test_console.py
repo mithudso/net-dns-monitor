@@ -17,6 +17,7 @@ import time
 from netdnsmonitor import console
 from netdnsmonitor.console import (
     CLEAR,
+    ClearSignal,
     CommandResult,
     ConsoleState,
     child_env,
@@ -363,10 +364,16 @@ def test_multibyte_output_is_not_cut_into_invalid_utf8():
     assert "truncated" in capped  # decoded without raising, which is the point
 
 
-def test_a_long_command_result_is_truncated_on_the_way_through_handle():
-    runner = recording_runner(CommandResult(stdout="y" * (200 * 1024)))
-    text, _ = handle("cat big", ConsoleState(cwd="/tmp"), runner)
+def test_a_long_command_result_is_truncated_on_the_way_through_handle(tmp_path):
+    # The real runner, not a fake: the runner is what caps the stream, so a fake
+    # result hands format_result the whole stream and proves nothing about the pair.
+    text, _ = handle(
+        "head -c 300000 /dev/zero | tr '\\0' y",
+        ConsoleState(cwd=str(tmp_path)),
+        run_command,
+    )
     assert "truncated" in text
+    assert len(text.encode()) < console.MAX_OUTPUT_BYTES + 300
 
 
 # --- the real runner --------------------------------------------------------
@@ -568,3 +575,90 @@ def test_a_bad_cwd_is_an_error_message_not_a_crash(tmp_path):
     result = run_command("echo hi", cwd=str(doomed), timeout=5)
     assert result.returncode != 0
     assert result.stderr
+
+
+# --- findings from the optimizer pass ---------------------------------------
+
+
+def test_flood_output_says_it_was_truncated(tmp_path):
+    result = run_command("yes abcdefghijklmnopqrstuvwxyz | head -c 2000000", str(tmp_path), 20)
+    assert result.dropped_stdout > 1_000_000
+    text = format_result(result)
+    assert "truncated" in text
+    assert len(text.encode()) < console.MAX_OUTPUT_BYTES + 300
+
+
+def test_a_result_that_dropped_bytes_upstream_is_marked_even_when_short():
+    text = format_result(CommandResult(stdout="kept", dropped_stdout=5000))
+    assert "truncated 5000 more bytes" in text
+
+
+def test_stderr_reason_survives_a_capped_stdout(tmp_path):
+    result = run_command(
+        "head -c 100000 /dev/zero | tr '\\0' a; echo 'dig: connection refused' >&2; exit 9",
+        str(tmp_path),
+        20,
+    )
+    text = format_result(result)
+    assert "connection refused" in text
+    assert "[exit 9]" in text
+
+
+def test_both_streams_flooding_each_keep_a_share():
+    text = format_result(CommandResult(stdout="o" * 200_000, stderr="e" * 200_000, returncode=1))
+    assert "o" * 1000 in text and "e" * 1000 in text
+    assert len(text.encode()) < console.MAX_OUTPUT_BYTES + 500
+
+
+def test_reader_start_failure_does_not_leak_the_child(tmp_path, monkeypatch):
+    real = threading.Thread
+    calls = {"n": 0}
+    groups = []
+    real_popen = console.subprocess.Popen
+
+    class Flaky(real):
+        def start(self):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("can't start new thread")
+            return super().start()
+
+    def recording_popen(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        groups.append(process.pid)
+        return process
+
+    monkeypatch.setattr(console.threading, "Thread", Flaky)
+    monkeypatch.setattr(console.subprocess, "Popen", recording_popen)
+    try:
+        result = run_command("sleep 25", str(tmp_path), 1.0)
+    finally:
+        monkeypatch.setattr(console.threading, "Thread", real)
+        for pgid in groups:
+            if not group_is_gone(pgid, within=0.0):
+                with contextlib.suppress(OSError):
+                    os.killpg(pgid, signal.SIGKILL)
+    assert result.returncode == 127
+    assert "RuntimeError" in result.stderr and "thread" not in result.stderr
+    assert group_is_gone(groups[0])
+    with console._LIVE_LOCK:
+        assert groups[0] not in console._LIVE
+
+
+def test_command_output_equal_to_the_sentinel_does_not_clear_the_window(tmp_path):
+    for output in ("__CLEAR__\n", "__CLEAR__"):
+        runner = lambda command, cwd, timeout, o=output: CommandResult(stdout=o)  # noqa: E731
+        text, _ = handle("curl -s http://host/x", ConsoleState(cwd=str(tmp_path)), runner)
+        assert not isinstance(text, ClearSignal)
+    text, _ = handle(":clear", ConsoleState(cwd=str(tmp_path)))
+    assert isinstance(text, ClearSignal)
+
+
+def test_a_session_escaping_child_does_not_hold_the_console_line(tmp_path):
+    started = time.monotonic()
+    run_command("echo hi; perl -MPOSIX -e 'setsid(); sleep 12' &", str(tmp_path), 20)
+    assert time.monotonic() - started < 3
+
+
+def test_the_help_text_does_not_hard_code_a_test_count():
+    assert "187" not in console.SCRIPTS_HELP

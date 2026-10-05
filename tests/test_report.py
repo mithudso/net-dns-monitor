@@ -127,3 +127,12 @@ def test_render_markdown_survives_a_step_without_kind_or_reason():
     md = render_markdown(build_report(**_base_kwargs()))
     assert "### flush_dns_cache" in md
     assert "ok" in md
+
+
+def test_none_recheck_is_reported_as_inconclusive_not_unresolved():
+    report = build_report(**_base_kwargs(recheck_ok=None))
+    assert report["recheck_ok"] is None
+    assert report["resolved"] is False
+    assert "inconclusive" in report["summary"].lower()
+    assert "unresolved" not in report["summary"].lower()
+    assert "inconclusive" in render_markdown(report).lower()

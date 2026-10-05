@@ -14,19 +14,20 @@ EXPECTED_TOOLS = frozenset({"search_codebase"})
 
 
 def search(query: str, n_results: int, open_fn=open_collection) -> str:
-    # A query with n_results <= 0 raises inside chroma; clamp rather than
-    # let a tool argument take the server down.
-    n_results = max(1, min(int(n_results), MAX_RESULTS))
     try:
+        # A query with n_results <= 0 raises inside chroma; clamp rather than
+        # let a tool argument take the server down. int() sits inside the try
+        # because a client can send a non-numeric value.
+        n_results = max(1, min(int(n_results), MAX_RESULTS))
         collection = open_fn()
+        results = collection.query(query_texts=[query], n_results=n_results)
     except Exception as e:  # noqa: BLE001 - a missing index is a finding, not a crash
-        # Class name only: the exception text can carry the database path.
+        # Class name only: the exception text can carry the database path, and
+        # a failed Ollama embedding call can carry its URL.
         return (
-            f"Could not open the code index ({type(e).__name__}). "
-            "If it has never been built, run scripts/semantic_indexer.py."
+            f"Code search failed ({type(e).__name__}). "
+            "If the index has never been built, run scripts/semantic_indexer.py."
         )
-
-    results = collection.query(query_texts=[query], n_results=n_results)
     if not results["documents"] or not results["documents"][0]:
         return "No relevant code found."
 

@@ -65,7 +65,7 @@ import time
 import traceback
 from typing import Callable, Optional
 
-from netdnsmonitor.peers import PeerRegistry, sanitise
+from netdnsmonitor.peers import PeerRegistry, as_tristate, sanitise
 
 PROTOCOL = "ndm-peer/1"
 ANNOUNCE = "announce"
@@ -148,23 +148,9 @@ def parse_message(payload: bytes) -> Optional[dict]:
         "host": sanitise(message.get("host")),
         "status": sanitise(message.get("status"), 32),
         # Absent means "did not say", which is not the same as False.
-        "external_reachable": _tristate(message.get("ext")),
-        "dns_ok": _tristate(message.get("dns")),
+        "external_reachable": as_tristate(message.get("ext")),
+        "dns_ok": as_tristate(message.get("dns")),
     }
-
-
-def _tristate(value):
-    """None when absent, a real bool otherwise.
-
-    Coerced rather than passed through: this comes off the network, and a JSON
-    string "false" is truthy in Python -- which would invert a fault-localization
-    verdict and send someone to reboot the wrong thing.
-    """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "yes", "1")
-    return bool(value)
 
 
 def broadcast_addresses(run_fn: Callable = subprocess.run) -> list:

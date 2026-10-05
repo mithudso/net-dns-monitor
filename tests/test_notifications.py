@@ -403,3 +403,27 @@ def test_slack_rejection_cannot_echo_webhook_credential():
     assert "error" in result
     assert secret not in str(result)
     assert "private/token" not in str(result)
+
+
+def test_format_notification_is_three_way_on_recheck():
+    assert "Healthy on recheck: True" in format_notification({"recheck_ok": True, "resolved": True})
+    assert "Healthy on recheck: False" in format_notification(
+        {"recheck_ok": False, "resolved": False}
+    )
+    text = format_notification({"recheck_ok": None, "resolved": False})
+    assert "Healthy on recheck: False" not in text
+    assert "inconclusive" in text
+
+
+def test_slack_notifier_closes_the_http_error_response():
+    closed = []
+
+    class Err(urllib.error.HTTPError):
+        def close(self):
+            closed.append(True)
+
+    def post_fn(*_):
+        raise Err("https://hooks.slack.test/x", 500, "boom", {}, None)
+
+    make_slack_notifier("https://hooks.slack.test/x", post_fn=post_fn)("hello")
+    assert closed == [True]

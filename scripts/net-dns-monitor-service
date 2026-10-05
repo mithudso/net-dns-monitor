@@ -43,6 +43,10 @@
 
 set -euo pipefail
 
+# Every path below, including the rm -rf in replace_installed_bundle, is built
+# from $HOME. Empty, it would resolve to /Applications and /Library.
+[ -n "${HOME:-}" ] || { printf 'error: HOME is not set\n' >&2; exit 1; }
+
 LABEL="com.mitchhudson.net-dns-monitor"
 SERVICE="gui/$(id -u)/$LABEL"
 
@@ -112,7 +116,9 @@ audit() {
 # --- state inspection ------------------------------------------------------
 
 # PID of the launchd-managed app, or nothing. launchd is the only authority
-# here: `launchctl list <label>` prints a "PID" key only while the job runs.
+# here. `launchctl print` against $SERVICE, the same domain is_loaded and every
+# kickstart use, shows a "pid = N" line only while the job runs. `launchctl list
+# <label>` was the other source, which left two functions querying different views.
 #
 # Deliberately not `pgrep -f netdnsmonitor`: -f scans whole command lines, so
 # any unrelated process that merely mentions the app (an editor, a grep, an
@@ -121,8 +127,8 @@ audit() {
 # for real while writing this.
 running_pid() {
     local out
-    out=$(launchctl list "$LABEL" 2>/dev/null) || return 0
-    printf '%s\n' "$out" | awk -F' = ' '/"PID"/ { gsub(/[^0-9]/, "", $2); print $2; exit }'
+    out=$(launchctl print "$SERVICE" 2>/dev/null) || return 0
+    printf '%s\n' "$out" | awk '$1 == "pid" && $2 == "=" { gsub(/[^0-9]/, "", $3); print $3; exit }'
 }
 
 # Exact-name match, so this cannot suffer the argv false positive above.
@@ -166,7 +172,10 @@ wait_for_pid() {
 
 write_plist() {
     mkdir -p "$(dirname "$PLIST")"
-    cat >"$PLIST" <<PLIST_EOF
+    # Written beside the target and linted before the move, so a failed lint
+    # leaves the working plist alone instead of replacing it with a broken one.
+    local staged="$PLIST.new"
+    cat >"$staged" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -248,7 +257,11 @@ write_plist() {
 </dict>
 </plist>
 PLIST_EOF
-    plutil -lint "$PLIST" >/dev/null || die "generated plist is malformed: $PLIST"
+    if ! plutil -lint "$staged" >/dev/null; then
+        rm -f "$staged"
+        die "generated plist is malformed; $PLIST was not changed"
+    fi
+    mv -f "$staged" "$PLIST"
 }
 
 # bootout fails when the job isn't loaded and bootstrap fails when it already
@@ -323,6 +336,10 @@ cmd_install() {
         say "  -> $INSTALLED_APP"
         replace_installed_bundle
         record_source_bundle
+    elif [ -n "${NDM_SOURCE_BUNDLE:-}" ]; then
+        # An explicit path that does not exist is a typo or a deleted build, and
+        # silently keeping the old bundle would report success for the wrong thing.
+        die "NDM_SOURCE_BUNDLE is set but is not a directory: $NDM_SOURCE_BUNDLE"
     elif [ -x "$EXEC" ]; then
         warn "note: build output not found at $SOURCE_BUNDLE ($SOURCE_BUNDLE_ORIGIN)"
         warn "      keeping the already-installed bundle at $INSTALLED_APP"
@@ -367,9 +384,22 @@ cmd_stop() {
     # whatever we kill.
     rm -f "$FLAG"
     launchctl kill SIGTERM "$SERVICE" 2>/dev/null || true
-    audit "stop: supervision disabled by request"
-    say "Supervision disabled. The app will stay stopped, including across"
-    say "login, until: $0 start"
+    # SIGTERM is a request. Wait for the process to go so the report below is
+    # about what happened, not about what was asked.
+    local waited=0
+    while [ -n "$(running_pid)" ] && [ "$waited" -lt 10 ]; do
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+    if [ -n "$(running_pid)" ]; then
+        audit "stop: supervision disabled but pid $(running_pid) still running after ${waited}s"
+        warn "Supervision disabled, but the app (pid $(running_pid)) is still running after ${waited}s."
+        warn "It will not be restarted when it exits. To end it now: kill $(running_pid)"
+    else
+        audit "stop: supervision disabled by request"
+        say "Supervision disabled. The app will stay stopped, including across"
+        say "login, until: $0 start"
+    fi
     say ""
     cmd_status
 }
@@ -457,7 +487,14 @@ cmd_update() {
     replace_installed_bundle
     record_source_bundle
     audit "update: re-copied bundle from $SOURCE_BUNDLE"
-    cmd_restart
+    # cmd_restart re-creates the flag, which would undo a deliberate `stop`.
+    if is_supervised; then
+        cmd_restart
+    else
+        say "Bundle replaced. Supervision is off (stopped on purpose), so the app was not started; '$0 start' runs the new build."
+        say ""
+        cmd_status
+    fi
 }
 
 # Age of a file in whole seconds, or nothing if it doesn't exist.
@@ -502,7 +539,13 @@ cmd_status() {
     pid="$(running_pid)"
 
     say "net-dns-monitor"
-    say "  supervised   : $(is_supervised && echo "yes (flag present)" || echo "NO -- stopped on purpose; '$0 start' to resume")"
+    if [ ! -f "$PLIST" ]; then
+        say "  supervised   : not installed -- run: $0 install"
+    elif is_supervised; then
+        say "  supervised   : yes (flag present)"
+    else
+        say "  supervised   : NO -- stopped on purpose; '$0 start' to resume"
+    fi
     say "  agent loaded : $(is_loaded && echo yes || echo no)"
     if [ -n "$pid" ]; then
         say "  running      : yes (pid $pid)"
@@ -579,6 +622,10 @@ cmd_logs() {
 cmd_uninstall() {
     rm -f "$FLAG"
     launchctl bootout "$SERVICE" 2>/dev/null || true
+    if is_loaded; then
+        audit "uninstall: bootout did not unload the agent"
+        die "the agent is still loaded after bootout; the plist was left in place. Try: launchctl bootout $SERVICE"
+    fi
     rm -f "$PLIST"
     audit "uninstall: agent removed"
     say "Removed the LaunchAgent and disabled supervision."

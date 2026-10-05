@@ -14,6 +14,7 @@ route. The mechanism that does work is the IP_BOUND_IF socket option, which
 pins the socket to an interface index.
 """
 
+import errno
 import functools
 import ipaddress
 import socket
@@ -26,8 +27,17 @@ from typing import Callable, Optional
 IP_BOUND_IF = 25
 IPV6_BOUND_IF = 125
 
-BoundConnectFn = Callable[[str, str, int, float], bool]
+# None: the question was not asked (no such interface, or this process could not
+# open a socket); False: it was asked and nothing answered.
+BoundConnectFn = Callable[[str, str, int, float], Optional[bool]]
 DeviceIndexFn = Callable[[str], Optional[int]]
+
+# Failures that say something about this process or the interface table, not
+# about the path to the target. Reporting them as "unreachable" would send
+# someone after a dead link when the fault was a file-descriptor limit.
+_LOCAL_FAILURE_ERRNOS = frozenset(
+    {errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM, errno.EPERM, errno.EACCES}
+)
 
 
 def default_device_index(device: str) -> Optional[int]:
@@ -55,10 +65,14 @@ def default_bound_connect(
     port: int,
     timeout: float,
     index_fn: DeviceIndexFn = default_device_index,
-) -> bool:
+) -> Optional[bool]:
+    """True if the connect completed through `device`, False if it was tried and
+    failed, None if it could not be tried (the interface is absent or went away,
+    or this process could not open a socket).
+    """
     index = index_fn(device)
     if index is None:
-        return False
+        return None
     try:
         # The config accepts literals only: a hostname lookup here could block
         # outside the socket deadline and mistake a DNS fault for a dead link.
@@ -72,6 +86,7 @@ def default_bound_connect(
     except (OSError, OverflowError, TypeError, ValueError):
         return False
     candidates = [c for c in candidates if c[0] in (socket.AF_INET, socket.AF_INET6)]
+    asked = False
     for i, (family, kind, _proto, _canon, address) in enumerate(candidates):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -82,20 +97,30 @@ def default_bound_connect(
             else (socket.IPPROTO_IP, IP_BOUND_IF)
         )
         sock = None
+        stage_bound = False
         try:
             sock = socket.socket(family, kind)
             sock.setsockopt(level, option, index)
+            stage_bound = True
             # An unreachable candidate must not starve a working address of
             # the same target, just as one target must not starve the next.
             sock.settimeout(remaining / (len(candidates) - i))
             sock.connect(address)
             return True
-        except (OSError, OverflowError, TypeError, ValueError):
+        except OSError as exc:
+            # ENXIO from the bind is the interface vanishing between the index
+            # lookup and here: an unplugged adapter, not a dead link.
+            vanished = not stage_bound and exc.errno == errno.ENXIO
+            if not (vanished or exc.errno in _LOCAL_FAILURE_ERRNOS):
+                asked = True
+            continue
+        except (OverflowError, TypeError, ValueError):
+            asked = True
             continue
         finally:
             if sock is not None:
                 sock.close()
-    return False
+    return False if asked else None
 
 
 def make_interface_prober(
@@ -108,8 +133,9 @@ def make_interface_prober(
 
     True if any target answered through that interface, False if none did,
     None if the question could not be asked at all (no device configured, the
-    device is absent, there is nothing to probe against, or the timeout left
-    no budget to try even one target).
+    device is absent, there is nothing to probe against, the timeout left no
+    budget to try even one target, or every attempt failed locally -- the
+    interface vanished or this process could not open a socket).
     """
     # The injected index_fn has to reach the connect side too, or the default
     # connect consults the real interface table while probe() consulted the
@@ -152,9 +178,13 @@ def make_interface_prober(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            attempted = True
-            if connect_fn(device, host, port, remaining / (len(targets) - i)):
+            answer = connect_fn(device, host, port, remaining / (len(targets) - i))
+            if answer is True:
                 return True
+            # None is "not asked", the same as no budget: it must not turn into
+            # a measured failure.
+            if answer is not None:
+                attempted = True
         # No budget for even the first target is no reading at all, and False
         # would tell the report and the failover policy the link is dead.
         return False if attempted else None

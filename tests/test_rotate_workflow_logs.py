@@ -82,3 +82,20 @@ def test_main_exits_nonzero_when_a_journal_is_locked(tmp_path, capsys):
     (tmp_path / "prompts.md").write_text(HEADER)
     assert rotator.main(["--root", str(tmp_path), "--max-bytes", "10"]) == 1
     assert "prompts.md: refused" in capsys.readouterr().out
+
+
+def test_rotation_preserves_journal_mode_and_fsyncs(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    journal = tmp_path / "memory.md"
+    _journal(journal, 8)
+    journal.chmod(0o640)
+    synced = []
+    real = os.fsync
+    monkeypatch.setattr(rotator.os, "fsync", lambda fd: (synced.append(fd), real(fd))[1])
+    rotator.rotate(journal, tmp_path / "docs/archive", max_bytes=10, keep=3)
+    assert stat.S_IMODE(journal.stat().st_mode) == 0o640
+    archive = tmp_path / "docs/archive/memory-archive.md"
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o640
+    assert len(synced) == 2

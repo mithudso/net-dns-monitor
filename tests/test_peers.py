@@ -217,7 +217,7 @@ def test_the_registry_survives_a_listener_writing_while_the_timer_reads():
     """
     reg = make_registry(max_peers=200)
     for index in range(200):
-        reg.observe(f"seed-{index}", address="192.168.1.1")
+        reg.observe(f"seed-{index}", address=f"10.0.0.{index}")
 
     stop = threading.Event()
 
@@ -225,16 +225,16 @@ def test_the_registry_survives_a_listener_writing_while_the_timer_reads():
         counter = 0
         while not stop.is_set():
             counter += 1
-            reg.observe(f"churn-{counter}", address="192.168.1.1")
+            reg.observe(f"churn-{counter}", address=f"10.1.{counter % 200}.1")
 
     writer = threading.Thread(target=churn, daemon=True)
     writer.start()
     try:
         for _ in range(300):
-            # All 200 share one address, and localization_view keeps one entry
-            # per address; the point here is that it does not raise.
-            assert len(reg.localization_view()) == 1
-            assert len(reg.addresses_to_probe()) == 1
+            # The point is that the readers do not raise while the writer churns;
+            # one address per id keeps the per-address cap out of the way.
+            reg.localization_view()
+            reg.addresses_to_probe()
             assert sum(len(v) for v in reg.buckets().values()) == 200
     finally:
         stop.set()
@@ -659,3 +659,20 @@ def test_an_infinite_missed_healthcheck_count_does_not_break_record_load():
     registry = make_registry()
     registry.load({"peers": {"current": [{"id": "peer", "missed_healthchecks": float("inf")}]}})
     assert registry.peers["peer"]["missed_healthchecks"] == 0
+
+
+def test_record_load_treats_junk_health_as_unknown():
+    registry = make_registry()
+    registry.load(
+        {"peers": {"current": [{"id": "p", "external_reachable": "maybe", "dns_ok": float("nan")}]}}
+    )
+    assert registry.peers["p"]["external_reachable"] is None
+    assert registry.peers["p"]["dns_ok"] is None
+
+
+def test_load_record_survives_deeply_nested_json(tmp_path):
+    from netdnsmonitor.peers import load_record
+
+    path = tmp_path / "peers.json"
+    path.write_text("[" * 1_000_000 + "]" * 1_000_000)
+    assert load_record(str(path)) == {}

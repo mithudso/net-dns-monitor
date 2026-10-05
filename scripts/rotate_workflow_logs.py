@@ -10,6 +10,7 @@ and the newest --keep sections and appends the rest to
 import argparse
 import os
 import re
+import stat
 import sys
 import tempfile
 from itertools import pairwise
@@ -45,11 +46,21 @@ def split_sections(text: str) -> tuple[str, list[str]]:
     return text[: starts[0]], [text[a:b] for a, b in pairwise(bounds)]
 
 
-def _write_atomic(path: Path, text: str) -> None:
+def _write_atomic(path: Path, text: str, new_mode: int = 0o644) -> None:
+    """Replace `path` with `text`, keeping its mode (or `new_mode` if it is new).
+
+    mkstemp creates 0600, so a plain replace silently tightened a 0644 journal.
+    The data is fsynced before the rename: without it a crash can leave the
+    renamed file empty, and the archive-first ordering below would lose sections.
+    """
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else new_mode
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            os.fchmod(handle.fileno(), mode)
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -87,7 +98,12 @@ def rotate(
     )
     # Archive first, journal second: a crash between the two duplicates the
     # rotated sections in both files instead of losing them.
-    _write_atomic(archive, existing.rstrip("\n") + "\n\n" + "".join(old).strip("\n") + "\n")
+    journal_mode = stat.S_IMODE(path.stat().st_mode)
+    _write_atomic(
+        archive,
+        existing.rstrip("\n") + "\n\n" + "".join(old).strip("\n") + "\n",
+        new_mode=journal_mode,
+    )
     _write_atomic(path, header + "".join(recent))
     return f"{path.name}: archived {len(old)} sections to {archive}"
 

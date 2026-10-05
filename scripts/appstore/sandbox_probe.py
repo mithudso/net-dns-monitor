@@ -19,6 +19,7 @@ Results print as JSON and are also written to
 the sandbox resolves to the app's container.
 """
 
+import errno
 import json
 import os
 import pwd
@@ -51,12 +52,24 @@ READ_ONLY_COMMANDS = {
 }
 
 
+def _is_denial(exc: BaseException) -> bool:
+    """True only for what the sandbox itself says: EPERM / EACCES."""
+    return isinstance(exc, PermissionError) or (
+        isinstance(exc, OSError) and exc.errno in (errno.EPERM, errno.EACCES)
+    )
+
+
 def timed(fn):
     started = time.monotonic()
     try:
         result = fn()
     except Exception as exc:  # noqa: BLE001 - the probe records every failure as data
-        result = {"ok": False, "error": type(exc).__name__}
+        # A refusal by the sandbox is a measured False. An unreachable network, a
+        # timeout or a missing binary says nothing about the sandbox, so it is
+        # "not probed" (None), never a fail.
+        result = {"ok": False if _is_denial(exc) else None, "error": type(exc).__name__}
+        if isinstance(exc, OSError) and exc.errno is not None:
+            result["errno"] = exc.errno
     result["seconds"] = round(time.monotonic() - started, 3)
     return result
 
@@ -89,7 +102,8 @@ def udp_dns():
     from netdnsmonitor.dns_query import query_public_dns
 
     answer = query_public_dns("example.com")
-    return {"ok": answer is True, "answer": answer}
+    # query_public_dns: True answered, False definitive no answer, None not probed.
+    return {"ok": answer, "answer": answer}
 
 
 def https_request():
@@ -184,9 +198,12 @@ def keychain_round_trip():
     backend = make_keychain_backend(service="com.net-dns-monitor.sandbox-probe")
     account = "probe"
     backend.delete(account)
-    added = backend.add(account, b"probe-value")
-    status, value = backend.read(account)
-    deleted = backend.delete(account)
+    try:
+        added = backend.add(account, b"probe-value")
+        status, value = backend.read(account)
+    finally:
+        # The throwaway item must not outlive a failed read.
+        deleted = backend.delete(account)
     return {
         "ok": added == 0 and status == 0 and value == b"probe-value" and deleted == 0,
         "add_status": added,

@@ -74,6 +74,13 @@ def _neither_side(head: str) -> str:
     )
 
 
+def _unverified_note(candidate) -> str:
+    note = " -- WARNING: this path was not verified reachable"
+    if candidate.reachable is False:
+        note += "; its probe failed"
+    return note
+
+
 def _looks_like_privilege_error(text: str) -> bool:
     lowered = (text or "").lower()
     return any(marker in lowered for marker in _PRIVILEGE_MARKERS)
@@ -86,7 +93,13 @@ def _is_finite_number(value) -> bool:
     hourly window looks empty. Booleans are rejected for the same reason they
     are not timestamps, despite being ints.
     """
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        # json.load accepts an integer too large for a float; it is not a timestamp.
+        return False
 
 
 def default_run(args: list[str], timeout: float = 5) -> object:
@@ -118,7 +131,11 @@ def default_run(args: list[str], timeout: float = 5) -> object:
             timeout=timeout,
         )
     except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
-        return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
+        # The class name only: str(exc) of a TimeoutExpired embeds the whole
+        # argv, which carries service names, and the privilege-marker match on
+        # stderr would then read a name like "Administrator iPhone" as a
+        # refusal.
+        return SimpleNamespace(returncode=1, stdout="", stderr=type(exc).__name__)
 
 
 def apply_service_order(run_fn, services, new_order: list[str]) -> str:
@@ -154,7 +171,8 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
         )
     if [s.name for s in fresh] != [s.name for s in services]:
         return "failed: the service order changed during the check; nothing was applied"
-    result = run_fn(["networksetup", "-ordernetworkservices", *new_order])
+    # The argv the guard approved, not a second hand-built copy of it.
+    result = run_fn(argv)
     stderr = (getattr(result, "stderr", "") or "").strip()
     stdout = (getattr(result, "stdout", "") or "").strip()
     if getattr(result, "returncode", 1) != 0:
@@ -235,9 +253,11 @@ class FailoverStore:
         try:
             with open(self.path) as f:
                 data = json.load(f)
-        except (OSError, ValueError):
+        except (OSError, ValueError, OverflowError, RecursionError):
             # A missing or corrupt file must not stop monitoring; it only means
-            # the exact pre-failover order is unknown.
+            # the exact pre-failover order is unknown. Deep nesting raises
+            # RecursionError, which is not a ValueError, and this runs at app
+            # launch.
             return
         if not isinstance(data, dict):
             return
@@ -667,6 +687,9 @@ class NetworkFailover:
             "backups": backups,
             "chosen_backup": self.chosen_backup,
             "auto_enabled": self.auto_enabled,
+            # When this reading was taken, so a display of it can say how old
+            # it is.
+            "taken_at": self.time_fn(),
             # Only while a backup heads the order. A pause left on the preferred
             # side holds no failback back, so reporting it there would explain
             # a wait that is not happening. Read, not cleared: this also serves
@@ -893,15 +916,21 @@ class NetworkFailover:
                         "device, so there is nothing to probe; not switching"
                     )
                 if winner.reachable is not True:
-                    note_unverified = " -- WARNING: this path was not verified reachable"
+                    note_unverified = _unverified_note(winner)
             else:
                 winner = best_candidate(candidates)
             if winner is None and allow_unverified:
                 # A person asked for this. Refusing because nothing answered
                 # would make the button useless in exactly the situation it
                 # exists for -- but the outcome has to say the path is unproven.
-                winner = next((c for c in candidates if c.device is not None), None)
-                note_unverified = " -- WARNING: this path was not verified reachable"
+                # An unprobed path (None) ranks before one whose probe failed
+                # (False): the first is unknown, the second was measured dead.
+                with_device = [c for c in candidates if c.device is not None]
+                winner = next((c for c in with_device if c.reachable is None), None) or next(
+                    iter(with_device), None
+                )
+                if winner is not None:
+                    note_unverified = _unverified_note(winner)
         if winner is None:
             return "failed: no backup service is reachable"
 
@@ -910,18 +939,24 @@ class NetworkFailover:
         if new_order is None:
             return f"failed: backup service '{target}' disappeared mid-check"
 
+        # A `netdns failover backup` in another process may have saved its
+        # pause while this attempt was probing; the in-memory record predates
+        # it, and saving that record would overwrite the pause.
+        self.store.refresh()
         # Recorded before the change, so failback can restore it exactly. Only
         # from the preferred side, or when nothing is recorded yet: on a switch
         # from one backup to another, recording would make the first backup the
         # "original", and failback would restore it and call that preferred.
         if self.store.original_order is None or self._active_side(services) == PREFERRED:
             self.store.original_order = [s.name for s in services]
-        # The pause follows whoever made this switch: a manual one holds
-        # automatic failback off, an automatic one replaces any pause an
-        # earlier manual switch left. Saved before the write for the same
-        # reason as the order above: a write that lands but cannot be read back
-        # has still put the machine on the backup the user chose.
-        self.store.failback_paused = manual
+        # A manual switch holds automatic failback off, and that is saved before
+        # the write for the same reason as the order above: a write that lands
+        # but cannot be read back has still put the machine on the backup the
+        # user chose. An automatic failover replaces an earlier manual pause,
+        # but only once the write is confirmed (below) -- clearing it first
+        # would persist the clear for a switch that may never land.
+        if manual:
+            self.store.failback_paused = True
         self.store.save()
 
         # Enable before promoting. A disabled service sits in the order and is
@@ -954,6 +989,9 @@ class NetworkFailover:
                 outcome += f" ('{target}' was enabled first and is still on)"
             return outcome
         self.chosen_backup = target
+        if not manual and self.store.failback_paused:
+            self.store.failback_paused = False
+            self.store.save()
         speed = (
             f" at {winner.throughput_mbps:.1f} Mbps"
             if winner.throughput_mbps is not None

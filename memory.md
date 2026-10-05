@@ -166,3 +166,26 @@ offline tests use a fake FastMCP. Tests: 2212.
 
 Follow-up (v9): owner chose to close PR #28 and ignore `pydantic-core` in
 `.github/dependabot.yml`; it moves by hand with `pydantic` (KNOW-407).
+
+## v10 - 2026-10-05 - Code deep optimizer, second run
+
+Delta: 1
+
+Active task: TASK-408. Second code-deep-optimizer run. The v7 run grouped files
+into five bundles and deep-read 33 modules; this run fans out per file over a
+50-file triage set led by the files v7 did not deep-read. Three BLOCKED
+residuals (`_tick` pipeline, uncancellable resolver workers, stall_log
+seeding) stay out of scope. Snapshot of HEAD 6b1280c: /Users/mitch/.claude/skill-consolidation/backups/code-deep-optimizer-net-dns-monitor-20261005-000312.
+Verify gate: `ruff check .`, `ruff format --check .`, `pytest -q`,
+`scripts/check_docs.py --collect-tests`. Empirical mode off (no reserved
+held-out eval set). Remaining: collect findings, verify, fix, gate, report, ship.
+
+Completed (v10): 35 diagnostic units over 52 files, 10 fix agents over disjoint
+file sets, then a fresh review of the fix diff (round 2: 7 Medium, all fixed).
+Iteration 1 raised 8 High and 133 Medium rows (about 8 duplicates); all fixed or
+retracted except 6 BLOCKED owner decisions listed in
+`docs/code-deep-optimizer-2026-10-05.md`. Also fixed: the test suite posted real
+"network failed" notifications (conftest now stubs `rumps.notification`, KNOW-409).
+Verification: ruff clean, 2521 tests pass, check_docs passes, bash -n clean,
+notification leak recorder 0. Status CONVERGED (not CLEAN: BLOCKED rows remain).
+Remaining: commit, push, CI.

@@ -12,6 +12,8 @@ import pytest
 
 from netdnsmonitor.failover_policy import Candidate, best_candidate, rank_candidates
 from netdnsmonitor.throughput import (
+    CONNECT_SLACK_SECONDS,
+    MIN_SAMPLE_BYTES,
     default_measure,
     is_success_status,
     make_throughput_meter,
@@ -422,7 +424,7 @@ def test_no_literal_that_connects_is_unmeasured_not_zero():
 def test_a_single_literal_is_still_accepted():
     """Callers that pass one pre-resolved string keep working."""
     clock = FakeClock()
-    stream = FakeStream(clock, per_recv=0.1, script=[b"x" * 1000])
+    stream = FakeStream(clock, per_recv=0.1, script=[b"x" * (MIN_SAMPLE_BYTES + 1)])
     kwargs, sockets, _ = seams(clock, stream)
     assert default_measure("en12", address=V4, **kwargs) is not None
     assert sockets[0].connected_to == (V4, 443)
@@ -634,3 +636,54 @@ def test_measure_all_reports_a_slow_interface_as_unmeasured_not_a_wait():
 
 def test_measure_all_with_no_devices_is_empty():
     assert measure_all([], lambda d: 1.0, timeout=1.0, grace=0) == {}
+
+
+def test_a_zero_max_bytes_does_not_report_a_latency_derived_speed():
+    clock = FakeClock()
+    kwargs, _, _ = seams(clock, FakeStream(clock, per_recv=0.05))
+    assert default_measure("en12", address=[V4], max_bytes=0, **kwargs) is None
+
+
+def test_a_short_2xx_body_that_ends_is_not_a_speed_reading():
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.05, script=[b"x" * 100])  # then EOF
+    kwargs, _, _ = seams(clock, stream)
+    assert default_measure("en12", address=[V4], **kwargs) is None
+
+
+def test_an_empty_2xx_body_is_not_a_speed_reading():
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.05, script=[])
+    kwargs, _, _ = seams(clock, stream)
+    assert default_measure("en12", address=[V4], **kwargs) is None
+
+
+def test_a_full_length_body_that_ends_is_a_reading():
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=0.05, script=[b"x" * MIN_SAMPLE_BYTES])
+    kwargs, _, _ = seams(clock, stream)
+    assert default_measure("en12", address=[V4], **kwargs) is not None
+
+
+def test_a_body_cut_off_by_the_budget_is_still_a_reading():
+    clock = FakeClock()
+    stream = FakeStream(clock, per_recv=1.0, chunk=b"x" * 1000)
+    kwargs, _, _ = seams(clock, stream)
+    assert default_measure("en12", address=[V4], timeout=3.0, **kwargs) is not None
+
+
+def test_measure_all_does_not_benchmark_one_device_twice():
+    calls = []
+
+    def meter(device):
+        calls.append(device)
+        return 1.0
+
+    assert measure_all(["en5", "en5"], meter, timeout=1.0) == {"en5": 1.0}
+    assert calls == ["en5"]
+
+
+def test_measure_all_default_grace_is_the_connect_slack():
+    import inspect
+
+    assert inspect.signature(measure_all).parameters["grace"].default == CONNECT_SLACK_SECONDS

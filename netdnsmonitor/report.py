@@ -19,11 +19,20 @@ def build_report(
     log_excerpts: list[str],
     ladder_results: list[dict],
     repair_outcome: Optional[str],
-    recheck_ok: bool,
+    recheck_ok: Optional[bool],
     escalation: Optional[dict],
 ) -> dict:
+    # None means the recheck did not run or read only half the evidence. That is
+    # not a failed recheck, so it is worded as inconclusive; `resolved` stays
+    # False because nothing confirmed the incident ended.
     resolved = bool(recheck_ok)
-    resolution_word = "resolved" if resolved else "unresolved"
+    resolution_word = (
+        "inconclusive (the recheck did not confirm either way)"
+        if recheck_ok is None
+        else "resolved"
+        if resolved
+        else "unresolved"
+    )
     # An empty ladder is real, not hypothetical: ladder_for returns [] for
     # UNCLASSIFIED, and a summary saying a ladder ran would describe steps
     # that never happened to the person reading the report.
@@ -71,7 +80,7 @@ def render_markdown(report: dict) -> str:
         "",
         f"**Started:** {report['started_at']}",
         f"**Duration:** {report['duration_seconds']:.0f}s",
-        f"**Resolved:** {report['resolved']}",
+        f"**Resolved:** {'inconclusive' if report.get('recheck_ok', report['resolved']) is None else report['resolved']}",
         "",
         "## Classification",
         report["classification"],

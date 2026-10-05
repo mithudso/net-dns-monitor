@@ -256,3 +256,10 @@ def test_every_decision_carries_a_reason():
     ):
         assert decision.reason
         assert decision.action in (NONE, FAILOVER, FAILBACK)
+
+
+def test_cooldown_reason_says_switch_attempt_not_switch():
+    # last_switch_at is armed by refused writes too, so "switch" would claim
+    # a switch that never happened.
+    reason = failover_case(last_switch_at=NOW - 10).reason
+    assert "since the last switch attempt" in reason

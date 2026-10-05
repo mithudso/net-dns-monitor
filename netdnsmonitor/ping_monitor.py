@@ -48,7 +48,7 @@ class PingMonitor:
         self.alert_repeat_seconds = max(0, alert_repeat_seconds or 0)
         self.consecutive_failures = 0
         self.down = False
-        self._window: deque[bool] = deque(maxlen=max(1, loss_window))
+        self._window: deque[bool] = deque(maxlen=int(max(1, loss_window)))
         self._last_alert_at: Optional[float] = None
 
     def record(self, result: dict, now: float) -> dict:
@@ -57,6 +57,18 @@ class PingMonitor:
         Returns a snapshot: rtt_ms, loss_pct, down, alert, consecutive_failures,
         error. `alert` is true only on the tick the alert should actually fire.
         """
+        if result.get("probed") is False:
+            # No echo request was sent (the name did not resolve), so this is not
+            # a sample of the path: leave the loss window and the failure streak
+            # as they were, and never alert on it.
+            return {
+                "rtt_ms": None,
+                "loss_pct": self.loss_pct,
+                "down": self.down,
+                "alert": False,
+                "consecutive_failures": self.consecutive_failures,
+                "error": result.get("error"),
+            }
         ok = bool(result.get("ok"))
         self._window.append(ok)
 

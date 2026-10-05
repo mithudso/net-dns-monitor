@@ -37,6 +37,7 @@ from typing import Callable, Optional
 
 from netdnsmonitor.graphs import format_bits
 from netdnsmonitor.peers import BUCKETS
+from netdnsmonitor.status import resolution_counts
 
 WINDOW_TITLE = "Net-DNS-Monitor"
 
@@ -126,6 +127,7 @@ def dashboard_sections(
     config = config or {}
     findings = resolution_findings or []
 
+    stale_age = _stale_ping_age(ping_stats, config)
     rtt = ping_stats.get("rtt_ms")
     loss = ping_stats.get("loss_pct")
     down_bps = ping_stats.get("down_bps")
@@ -133,14 +135,24 @@ def dashboard_sections(
 
     network = [
         ("Ping target", str(config.get("ping_host", "unknown"))),
-        ("Round trip", "no reply" if ping_stats.get("down") else _rtt_text(rtt)),
+        (
+            "Round trip",
+            "no reply"
+            if ping_stats.get("down")
+            else f"no recent ping (last {stale_age:.0f}s ago)"
+            if stale_age is not None
+            else _rtt_text(rtt),
+        ),
         ("Packet loss", "not measured yet" if loss is None else f"{loss:.0f}%"),
         ("Download", _rate_text(down_bps)),
         ("Upload", _rate_text(up_bps)),
     ]
 
     monitor = [
-        ("Status", _status_text(flap_state, consecutive_failures, ping_stats)),
+        (
+            "Status",
+            _status_text(flap_state, consecutive_failures, ping_stats, stale_age is not None),
+        ),
         ("Consecutive probe failures", str(consecutive_failures)),
         ("Last incident classified as", last_classification or "no incident yet"),
         ("Last incident report", last_report_path or "none written yet"),
@@ -273,13 +285,33 @@ def _repeat_text(seconds: Optional[float]) -> str:
     return f"every {seconds}s"
 
 
-def _status_text(flap_state: str, consecutive_failures: int, ping_stats: dict) -> str:
+def _stale_ping_age(ping_stats: dict, config: dict) -> Optional[float]:
+    """Seconds since the last ping reading when it is older than 3 ping intervals.
+
+    The caller supplies `age_seconds`; without it, or without a configured
+    interval to judge it against, nothing is claimed stale. A stuck ping worker
+    otherwise leaves its last good reading on screen as "healthy" indefinitely.
+    """
+    age = ping_stats.get("age_seconds")
+    interval = config.get("ping_interval_seconds")
+    if not isinstance(age, (int, float)) or isinstance(age, bool):
+        return None
+    if not isinstance(interval, (int, float)) or isinstance(interval, bool) or interval <= 0:
+        return None
+    return age if age > 3 * interval else None
+
+
+def _status_text(
+    flap_state: str, consecutive_failures: int, ping_stats: dict, stale: bool = False
+) -> str:
     if ping_stats.get("down"):
         return "DOWN -- pings unanswered"
     if flap_state == "incident":
         return "incident declared"
     if consecutive_failures:
         return "flaky -- a probe is failing"
+    if stale:
+        return "not probed recently -- ping reading is stale"
     # ping_stats starts as NO_PING_YET, whose `down` is False, so without this
     # the window reads "healthy" before the first reply -- and for as long as
     # the ping worker keeps failing to produce one.
@@ -308,8 +340,11 @@ def _log_text(entries: int, errors: int, new_errors: int, error: Optional[str]) 
 def _resolution_text(findings: list) -> str:
     if not findings:
         return "no batch has run yet"
-    failed = sum(1 for f in findings if not f.get("resolved"))
-    return f"{failed} of {len(findings)} domains failing"
+    failed, not_probed = resolution_counts(findings)
+    text = f"{failed} of {len(findings)} domains failing"
+    if not_probed:
+        text += f", {not_probed} not probed"
+    return text
 
 
 def render_dashboard_text(sections: list) -> str:

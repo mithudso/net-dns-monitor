@@ -662,3 +662,188 @@ def test_a_non_text_ipv6_ping_host_is_refused(tmp_path):
     with pytest.raises(ConfigError) as caught:
         load_config(_write(tmp_path, "ping_host_v6: [1, 2]\n"))
     assert caught.value.key == "ping_host_v6"
+
+
+# --- audit fixes: values the app would misread -----------------------------
+
+
+def _write_cfg(tmp_path, text):
+    path = tmp_path / "config.yaml"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+BOOL_KEYS = sorted(k for k, v in DEFAULT_CONFIG.items() if isinstance(v, bool))
+
+
+def test_every_boolean_default_is_covered_by_the_bool_check():
+    # Parity: a new bool default must be refused when written as a string.
+    assert "failover_enabled" in BOOL_KEYS
+    for key in BOOL_KEYS:
+        with pytest.raises(ConfigError) as caught:
+            config_module.validate_config({key: "false"})
+        assert caught.value.key == key
+
+
+@pytest.mark.parametrize("value", ['"false"', '"no"', "n", "disabled", "1", "null"])
+def test_a_non_boolean_for_a_switch_is_refused(tmp_path, value):
+    # "false" is a non-empty string, so it is truthy: it would arm failover.
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write_cfg(tmp_path, f"failover_enabled: {value}\n"))
+    assert caught.value.key == "failover_enabled"
+
+
+def test_real_booleans_still_load(tmp_path):
+    cfg = load_config(_write_cfg(tmp_path, "failover_enabled: true\nslack_enabled: false\n"))
+    assert cfg["failover_enabled"] is True
+    assert cfg["slack_enabled"] is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'domains: ["example..com"]',
+        'domains: [".corp.example"]',
+        'domains: ["https://example.com"]',
+        'domains: ["user@example.com"]',
+        'domains: ["host:80"]',
+        'domains: [" "]',
+        'domains: [" example.com"]',
+        "domains: [12]",
+        "control_domain: 123",
+        'control_domain: "  "',
+    ],
+)
+def test_a_domain_that_cannot_be_looked_up_is_refused(tmp_path, line):
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write_cfg(tmp_path, line + "\n"))
+    assert caught.value.key in ("domains", "control_domain")
+
+
+def test_domain_problem_rejects_the_overlong_and_the_bad_label():
+    assert config_module.domain_problem("example.com") is None
+    assert config_module.domain_problem("bücher.example") is None
+    assert config_module.domain_problem("a" * 64 + ".com") is not None
+    assert config_module.domain_problem(".".join(["abcdefghi"] * 30)) is not None
+    assert config_module.domain_problem(None) is not None
+
+
+def test_null_control_domain_is_still_allowed_when_domains_exist(tmp_path):
+    cfg = load_config(_write_cfg(tmp_path, "domains: [example.com]\ncontrol_domain: null\n"))
+    assert cfg["control_domain"] is None
+
+
+def test_host_problem_matches_what_ping_once_refuses():
+    assert config_module.host_problem("8.8.8.8") is None
+    assert config_module.host_problem("2001:4860:4860::8888") is None
+    for bad in ("-c5", "bad host", "", "a\x00b", None, 5):
+        assert config_module.host_problem(bad) is not None, bad
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("ping_host", "8.8.8.8, 1.1.1.1"),
+        ("ping_host", "-c5"),
+        ("ping_host_v6", "bad host"),
+        ("ping_host_v6", "-6"),
+        ("ping_fallback_host", "1.1.1.1 "),
+    ],
+)
+def test_a_ping_host_that_ping_once_refuses_is_refused_at_load(tmp_path, key, value):
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write_cfg(tmp_path, yaml.safe_dump({key: value})))
+    assert caught.value.key == key
+
+
+def test_blank_v6_and_fallback_ping_hosts_still_turn_those_targets_off(tmp_path):
+    cfg = load_config(_write_cfg(tmp_path, 'ping_host_v6: ""\nping_fallback_host: null\n'))
+    assert cfg["ping_host_v6"] == ""
+    assert cfg["ping_fallback_host"] is None
+
+
+@pytest.mark.parametrize(
+    "line,key",
+    [
+        ("log_view_max_entries: 0", "log_view_max_entries"),
+        ("ping_loss_window: 0", "ping_loss_window"),
+        ("ping_loss_window: 12.5", "ping_loss_window"),
+        ("log_view_row_limit: 400.5", "log_view_row_limit"),
+        ("log_view_row_limit: -1", "log_view_row_limit"),
+        ("log_view_announce_limit: 1.5", "log_view_announce_limit"),
+        ("history_max_samples: 7.5", "history_max_samples"),
+        ("max_learned_domains: -1", "max_learned_domains"),
+        ("max_learned_domains: 2.5", "max_learned_domains"),
+    ],
+)
+def test_a_count_the_consumer_cannot_use_is_refused(tmp_path, line, key):
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write_cfg(tmp_path, line + "\n"))
+    assert caught.value.key == key
+
+
+def test_whole_number_floats_and_zero_where_zero_means_off_still_load(tmp_path):
+    cfg = load_config(
+        _write_cfg(
+            tmp_path, "max_learned_domains: 0\nlog_view_announce_limit: 0\nping_loss_window: 12\n"
+        )
+    )
+    assert cfg["max_learned_domains"] == 0
+    assert cfg["log_view_announce_limit"] == 0
+
+
+def test_a_misspelt_key_is_reported_by_name_not_value(tmp_path):
+    with pytest.warns(UserWarning, match="sensitive_string") as record:
+        load_config(_write_cfg(tmp_path, "sensitive_string: [hunter2]\n"))
+    text = " ".join(str(w.message) for w in record)
+    assert "hunter2" not in text
+    assert "sensitive_strings" in text  # close-match hint
+
+
+def test_retired_and_known_keys_do_not_warn(tmp_path):
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        load_config(_write_cfg(tmp_path, "resolution_lookback: 5m\nresolution_top_n: 50\n"))
+
+
+@pytest.mark.parametrize("line", ["reports_dir: reports", "history_path: $HOME/h.jsonl"])
+def test_a_path_that_is_not_absolute_after_expansion_is_refused(tmp_path, line):
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write_cfg(tmp_path, line + "\n"))
+    assert caught.value.key == line.split(":")[0]
+
+
+@pytest.mark.parametrize("value", ["[Network]", "[networks]", "[net]", "[healthy]"])
+def test_an_unknown_trigger_classification_is_refused(tmp_path, value):
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write_cfg(tmp_path, f"failover_trigger_classifications: {value}\n"))
+    assert caught.value.key == "failover_trigger_classifications"
+
+
+def test_known_trigger_classifications_load(tmp_path):
+    cfg = load_config(
+        _write_cfg(tmp_path, "failover_trigger_classifications: [network, dns, unclassified]\n")
+    )
+    assert cfg["failover_trigger_classifications"] == ["network", "dns", "unclassified"]
+
+
+@pytest.mark.parametrize("value", [0, -5])
+def test_a_speedtest_byte_cap_of_zero_or_less_is_refused(value):
+    with pytest.raises(ConfigError) as caught:
+        config_module.validate_config({"failover_speedtest_max_bytes": value})
+    assert caught.value.key == "failover_speedtest_max_bytes"
+
+
+def test_min_learn_interval_is_twice_the_poll_and_load_config_uses_it(tmp_path):
+    assert config_module.min_learn_interval(30) == 60.0
+    cfg = load_config(
+        _write_cfg(tmp_path, "poll_interval_seconds: 100\ndomain_learn_interval_seconds: 50\n")
+    )
+    assert cfg["domain_learn_interval_seconds"] == config_module.min_learn_interval(100)
+
+
+def test_the_shipped_example_config_loads():
+    example = pathlib.Path(__file__).resolve().parents[1] / "config.example.yaml"
+    assert load_config(str(example))["failover_enabled"] is False

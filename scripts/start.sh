@@ -59,11 +59,17 @@ source "$VENV_DIR/bin/activate"
 # bare `pip` then resolves to whichever one is next on PATH and installs into a
 # different interpreter. ensurepip gives such a venv its own.
 python -m pip --version >/dev/null 2>&1 || python -m ensurepip --upgrade >/dev/null
-python -m pip install -q -r "$REPO_DIR/requirements.txt" -c "$CONSTRAINTS"
-ok "venv ready, dependencies installed"
+# A failed install (offline, index outage) must not stop an app that is already
+# installed from starting; the import check below is the real gate.
+python -m pip install -q --retries 1 --timeout 5 -r "$REPO_DIR/requirements.txt" -c "$CONSTRAINTS" \
+    || info "pip install failed -- continuing with the installed set; the import check below decides"
+ok "venv ready"
 
 echo "== verifying components =="
 
+# The heredoc imports netdnsmonitor from the current directory, so it must run
+# from the repo no matter where the script was invoked.
+cd "$REPO_DIR"
 python - "$CONFIG_FILE" <<'PYEOF'
 import importlib
 import sys
@@ -142,7 +148,10 @@ ok "config present at $CONFIG_FILE"
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
     info "ANTHROPIC_API_KEY not set -- Claude escalation will be skipped (reports still saved)"
 else
-    ok "ANTHROPIC_API_KEY set, escalation enabled"
+    # `open -n` does not pass this shell's environment to the app, so a value
+    # here proves nothing about the app. It reads credentials from the
+    # Keychain (Settings -> credentials), or from launchd's own environment.
+    info "ANTHROPIC_API_KEY is set in this shell only -- the app launched below does not inherit it; store it in Settings -> credentials (Keychain) to enable Claude escalation"
 fi
 
 APP_BUNDLE="$REPO_DIR/dist/Net-DNS-Monitor.app"
@@ -174,7 +183,8 @@ if [[ "$NEEDS_BUILD" == "1" ]]; then
     info "building $APP_BUNDLE (py2app) -- this is slower than a plain launch, only happens when the bundle is missing or source has changed"
     # Pinned through constraints.txt, and installed even when some py2app is
     # already present, so an older one is moved to the pin rather than kept.
-    python -m pip install -q py2app -c "$CONSTRAINTS"
+    python -m pip install -q --retries 1 --timeout 5 py2app -c "$CONSTRAINTS" \
+        || info "py2app install failed -- continuing with the installed set; the build below decides"
     # py2app's intermediate build/ staging dir isn't safe to reuse across
     # runs (confirmed empirically: a second py2app invocation failed with
     # "[Errno 66] Directory not empty" against a stale one) -- clear it,

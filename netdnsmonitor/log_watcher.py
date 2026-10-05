@@ -69,7 +69,7 @@ def make_log_watcher(
             )
         except subprocess.TimeoutExpired:
             return no_evidence(f"timed out after {timeout}s (lookback {lookback})")
-        except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
+        except (subprocess.SubprocessError, OSError, ValueError, TypeError) as exc:
             return no_evidence(f"failed: {type(exc).__name__}")
         # getattr: this runs inside an incident tick, and a result object without
         # these attributes must not raise there.

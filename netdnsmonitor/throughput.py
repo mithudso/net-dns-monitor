@@ -43,6 +43,11 @@ DEFAULT_MAX_BYTES = 2_000_000
 # connect plus TLS on a slow hotspot can run a measurement slightly past its
 # budget, and cutting it off there would report a working link as unmeasured.
 CONNECT_SLACK_SECONDS = 1.0
+# A body that ends (EOF) before this many bytes is not a speed sample: the time
+# is dominated by round trips, so the ratio reads a fast link as slow and an
+# error or empty body as a number. A read cut off by the budget is different --
+# that is the link's pace and stays a measurement.
+MIN_SAMPLE_BYTES = 64 * 1024
 
 MeasureFn = Callable[..., Optional[float]]
 # One pre-resolved literal, or several (one per family, from resolve_addresses).
@@ -98,10 +103,10 @@ def resolve_addresses(
     result: list[list[str]] = []
 
     def lookup() -> None:
-        # IPv4 first. The backup path being measured may be v4-only (a phone
-        # hotspot usually is), and the resolver's first answer is often AAAA;
-        # connecting to that literal from a v4-only interface fails and reads
-        # as an interface that cannot be measured.
+        # One literal per family, in the order the resolver returned them. The
+        # backup path being measured may be v4-only (a phone hotspot usually
+        # is); the connect step tries each literal in turn, so a v6 literal
+        # that fails does not stop the v4 one from being used.
         try:
             infos = getaddrinfo_fn(host, None, proto=socket.IPPROTO_TCP)
         except OSError:
@@ -197,6 +202,10 @@ def default_measure(
     in order; when omitted the lookup happens here. Lookup, connect, TLS and
     transfer all share the one `timeout` budget.
     """
+    if max_bytes <= 0:
+        # Nothing would be read, so the only elapsed time is the first byte's
+        # latency, and bytes over that is not a speed.
+        return None
     index = device_index_fn(device)
     if index is None:
         return None
@@ -256,6 +265,7 @@ def default_measure(
             return None
 
         total = len(first)
+        ended = False
         while total < max_bytes and remaining() > 0:
             arm(stream)
             try:
@@ -267,9 +277,12 @@ def default_measure(
                 # a slow link as unmeasurable.
                 break
             if not chunk:
+                ended = True
                 break
             total += len(chunk)
 
+        if ended and total < MIN_SAMPLE_BYTES and total < max_bytes:
+            return None
         return mbps(total, clock() - started)
     except (OSError, ssl.SSLError, ValueError):
         return None
@@ -351,7 +364,7 @@ def measure_all(
     devices: list[str],
     meter: Callable[[Optional[str]], Optional[float]],
     timeout: float = DEFAULT_TIMEOUT,
-    grace: float = 1.0,
+    grace: float = CONNECT_SLACK_SECONDS,
     slack: Optional[float] = None,
 ) -> dict:
     """Benchmark several interfaces against ONE shared deadline.
@@ -369,6 +382,9 @@ def measure_all(
     """
     results: dict = {}
     workers = []
+    # One benchmark per interface: two at once would share the link and each
+    # read half the speed.
+    devices = list(dict.fromkeys(devices))
     for device in devices:
 
         def measure(device=device) -> None:

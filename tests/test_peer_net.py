@@ -724,3 +724,76 @@ def test_local_networks_is_none_when_ifconfig_cannot_be_read():
         raise OSError("no ifconfig here")
 
     assert local_networks(run_fn=failing_run) is None
+
+
+def test_unrecognised_state_value_is_unknown_not_a_definite_no():
+    """None is not False: junk `ext`/`dns` must stay unknown, never become a verdict."""
+    for junk in ("maybe", "unknown", "", "null", "partial", float("nan"), 2, [], {}):
+        payload = json.dumps(
+            {"proto": PROTOCOL, "t": ANNOUNCE, "id": "x", "ext": junk, "dns": junk}
+        )
+        parsed = parse_message(payload.encode())
+        assert parsed["external_reachable"] is None, junk
+        assert parsed["dns_ok"] is None, junk
+    for good, expected in (
+        (True, True),
+        (False, False),
+        ("yes", True),
+        ("no", False),
+        (1, True),
+        (0, False),
+    ):
+        payload = json.dumps({"proto": PROTOCOL, "t": ANNOUNCE, "id": "x", "ext": good})
+        assert parse_message(payload.encode())["external_reachable"] is expected, good
+
+
+def test_one_source_address_cannot_evict_every_known_peer():
+    net = PeerNetwork(
+        registry=PeerRegistry(self_id="me", max_peers=200),
+        host="mac",
+        bind_port=1,
+        local_networks_fn=lambda: None,
+    )
+    net._handle(
+        build_message(ANNOUNCE, "real-peer", "laptop", "incident", 1, False, True), "127.0.0.1"
+    )
+    for i in range(250):
+        net._handle(build_message(ANNOUNCE, f"fake{i}", "h", "healthy", 1, True, True), "127.0.0.9")
+    peers = net.registry.peers
+    assert "real-peer" in peers
+    assert sum(1 for p in peers.values() if p["address"] == "127.0.0.9") <= 4
+    # The newest id from the flooding address survives; the oldest was replaced.
+    assert "fake249" in peers
+    assert "fake0" not in peers
+
+
+def test_a_known_id_from_a_capped_address_still_refreshes():
+    net = PeerNetwork(
+        registry=PeerRegistry(self_id="me"), host="m", bind_port=1, local_networks_fn=lambda: None
+    )
+    for i in range(4):
+        net._handle(build_message(ANNOUNCE, f"p{i}", "h", "healthy", 1), "127.0.0.9")
+    net._handle(build_message(ANNOUNCE, "p0", "h", "incident", 1), "127.0.0.9")
+    assert net.registry.peers["p0"]["status"] == "incident"
+    assert len(net.registry.peers) == 4
+
+
+def test_a_newly_joined_subnet_is_accepted_after_the_miss_refresh_interval(monkeypatch):
+    from netdnsmonitor import peer_net
+
+    now = [1000.0]
+    monkeypatch.setattr(peer_net.time, "monotonic", lambda: now[0])
+    networks = [[ipaddress.IPv4Network("192.168.1.0/24")]]
+    net = PeerNetwork(
+        registry=PeerRegistry(self_id="me"),
+        host="h",
+        bind_port=1,
+        local_networks_fn=lambda: networks[0],
+    )
+    net._handle(build_message(ANNOUNCE, "a", "h", "healthy", 1), "192.168.1.9")
+    networks[0] = [ipaddress.IPv4Network("10.0.0.0/24")]
+    net._handle(build_message(ANNOUNCE, "b", "h", "healthy", 1), "10.0.0.7")
+    assert "b" not in net.registry.peers
+    now[0] += peer_net.LOCAL_NETWORKS_MISS_REFRESH_SECONDS
+    net._handle(build_message(ANNOUNCE, "b", "h", "healthy", 1), "10.0.0.7")
+    assert "b" in net.registry.peers

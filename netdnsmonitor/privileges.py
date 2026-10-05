@@ -102,8 +102,9 @@ IPCONFIG = "/usr/sbin/ipconfig"
 SUDO = "/usr/bin/sudo"
 OSASCRIPT = "/usr/bin/osascript"
 
-# The exact argv the grant permits, and the exact string `is_granted` looks for in the
-# `sudo -l` listing.
+# The exact argv the grant permits. `is_granted` asks `covers` whether the parsed
+# `sudo -l` listing permits it: this app's own line, a blanket `NOPASSWD: ALL`, or
+# the bare command all count. `own_rule_listed` is the exact-line check.
 #
 # Do not reintroduce a `sudo -l <command>` exit-status probe here. That was the original
 # implementation and it was wrong twice over -- `status_command` documents why, and
@@ -114,12 +115,15 @@ MDNS_HUP = (KILLALL, "-HUP", "mDNSResponder")
 # Only physical Ethernet and Wi-Fi interfaces. `ifconfig -l` also lists loopback,
 # utun tunnels, bridges, and awdl; a DHCP lease on any of those is meaningless.
 #
+# `[0-9]`, not `\d`: `\d` matches any Unicode digit, so "en\u0663" would pass and be
+# written into a file that grants root.
+#
 # `\Z`, not `$`: Python's `$` also matches immediately before a trailing newline,
-# so `^en\d+$` accepts "en0\n" -- which would emit a sudoers rule split across two
+# so `^en[0-9]+$` accepts "en0\n" -- which would emit a sudoers rule split across two
 # physical lines. visudo would reject the result, but this is the validation
 # boundary for a file that grants root, and it should not be relying on a
 # downstream check to catch input it claimed to have refused.
-_INTERFACE_RE = re.compile(r"^en\d+\Z")
+_INTERFACE_RE = re.compile(r"^en[0-9]+\Z")
 
 # macOS account names allow dots (mitch.hudson). Anything outside this set is
 # refused rather than escaped: this string is written into a file that grants
@@ -179,12 +183,15 @@ macOS will ask for your password or Touch ID. "Revoke elevated permissions"
 deletes the file and puts everything back."""
 
 
-def dhcp_interfaces(run_fn: RunFn = subprocess.run) -> list[str]:
+def dhcp_interfaces(run_fn: RunFn = subprocess.run) -> Optional[list[str]]:
     """The Ethernet and Wi-Fi interfaces on this machine, in `ifconfig -l` order.
 
     Enumerated so the sudoers file can name each one explicitly. A rule of
     `ipconfig set * DHCP` would be shorter and is exactly the kind of wildcard
     that turns a narrow grant into a broad one.
+
+    None means `ifconfig -l` could not be read; [] means it was read and listed no
+    Ethernet or Wi-Fi interface. Callers must not treat the two alike.
     """
     try:
         result = run_fn(
@@ -196,9 +203,9 @@ def dhcp_interfaces(run_fn: RunFn = subprocess.run) -> list[str]:
             timeout=5,
         )
     except (subprocess.SubprocessError, OSError, UnicodeError):
-        return []
+        return None
     if getattr(result, "returncode", 1) != 0:
-        return []
+        return None
     return [name for name in (result.stdout or "").split() if _INTERFACE_RE.match(name)]
 
 
@@ -316,7 +323,7 @@ def _install_script(body: str) -> str:
             # A file in sudoers.d that nothing includes is a grant that silently
             # does not work, which is worse than a refusal: the button would say
             # "granted" and the repairs would keep failing.
-            f"if ! /usr/bin/grep -Eq '^[@#]includedir[[:space:]]+/(private/)?etc/sudoers[.]d'"
+            f"if ! /usr/bin/grep -Eq '^[@#]includedir[[:space:]]+/(private/)?etc/sudoers[.]d/?[[:space:]]*$'"
             f" {SUDOERS_MAIN}; then echo {MISSING_INCLUDEDIR} >&2; exit 3; fi",
             f"/bin/mkdir -p {SUDOERS_DIR}",
             # Staged *inside* sudoers.d, not in a temp directory, and the mkdir
@@ -334,6 +341,11 @@ def _install_script(body: str) -> str:
             # contain a `.`, so even a staging file left behind by an interrupted
             # run is inert rather than half-active.
             f"tmp=$(/usr/bin/mktemp {SUDOERS_DIR}/.net-dns-monitor.tmp.XXXXXX)",
+            # `set -e` exits on any later failure (a failed decode, chown or mv)
+            # without reaching the explicit rm calls below. The file is inert (see
+            # the leading dot) but would accumulate; after a successful mv the
+            # path no longer exists and rm -f is a no-op.
+            "trap '/bin/rm -f \"$tmp\"' EXIT",
             f'echo {encoded} | /usr/bin/base64 -D > "$tmp"',
             '/usr/sbin/chown root:wheel "$tmp"',
             '/bin/chmod 0440 "$tmp"',
@@ -426,6 +438,11 @@ def _runs_as_root(head: str) -> bool:
     step. A later spec on the same line that carries its own runas column keeps
     that column in its text, so it never equals `ALL` or an exact command.
     """
+    # A second "(" means a later spec carries its own runas column, and the NOPASSWD
+    # tag then belongs to that one: `(root) /bin/ls, (_postgres) NOPASSWD: ALL`.
+    # Reading the first column would credit root with a passwordless rule it lacks.
+    if head.count("(") != 1:
+        return False
     match = _RUNAS_RE.match(head)
     if not match:
         return False
@@ -457,10 +474,14 @@ def parse_granted_commands(stdout: str) -> list[str]:
         head, marker, rest = line.partition("NOPASSWD:")
         if not marker or not _runs_as_root(head):
             continue
-        for spec in rest.split(","):
-            collapsed = " ".join(spec.split())
-            if collapsed:
-                specs.append(collapsed)
+        parts = [" ".join(spec.split()) for spec in rest.split(",")]
+        # A negated spec (`ALL, !/usr/bin/killall`) carves an exception out of the
+        # others, and what it excludes is not evaluated here. Skip the whole line:
+        # a missed grant costs a repair step, a phantom one is the failure this
+        # module exists to avoid.
+        if any(part.startswith("!") for part in parts):
+            continue
+        specs.extend(part for part in parts if part)
     return specs
 
 
@@ -625,14 +646,25 @@ def _run_privileged(command: list[str], run_fn: RunFn) -> dict:
 
 def grant(
     user: str,
-    interfaces: Iterable[str],
+    interfaces: Optional[Iterable[str]],
     run_fn: RunFn = subprocess.run,
 ) -> dict:
     """Install the sudoers file. Returns {"ok", "cancelled", "message"}.
 
     The body is built -- and therefore validated -- before anything is run, so a
     rejected account or interface name never reaches an authentication prompt.
+    `interfaces` None means the listing itself failed (`dhcp_interfaces`), which
+    is not the same as the machine having no Ethernet or Wi-Fi interface.
     """
+    if interfaces is None:
+        return {
+            "ok": False,
+            "cancelled": False,
+            "message": (
+                "Could not list this Mac's network interfaces, so there is nothing "
+                "to authorise yet. Nothing was changed. Try again in a moment."
+            ),
+        }
     names = list(interfaces)
     if not names:
         return {

@@ -220,3 +220,15 @@ def test_osascript_uses_an_absolute_path(monkeypatch):
     monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(args))
     assert calls[0][0].startswith("/")
+
+
+def test_osascript_nonzero_exit_is_logged_with_code_only(monkeypatch, capsys):
+    monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+
+    def failing(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="secret-ish stderr")
+
+    alert.notify("net down", run_fn=failing)
+    err = capsys.readouterr().err
+    assert "osascript" in err and "1" in err
+    assert "secret-ish stderr" not in err

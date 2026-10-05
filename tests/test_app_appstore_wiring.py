@@ -94,7 +94,7 @@ class FakeMessages:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        block = type("Block", (), {"text": "analysis from a fake client"})()
+        block = type("Block", (), {"type": "text", "text": "analysis from a fake client"})()
         return type("Response", (), {"content": [block]})()
 
 

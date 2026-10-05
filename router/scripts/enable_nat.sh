@@ -15,7 +15,12 @@ fi
 
 echo "=> Unloading launchd bootps socket (Frees Port 67)..."
 launchctl unload -w /System/Library/LaunchDaemons/bootps.plist 2>/dev/null || true
-mv /etc/bootpd.plist /etc/bootpd.plist.bak 2>/dev/null || true
+# This script re-runs every 60s. An unconditional mv would overwrite the .bak
+# with whatever bootpd.plist exists by then (the app router writes one), losing
+# the original configuration for good.
+if [[ ! -e /etc/bootpd.plist.bak ]]; then
+    mv /etc/bootpd.plist /etc/bootpd.plist.bak 2>/dev/null || true
+fi
 killall bootpd 2>/dev/null || true
 
 echo "=> Enabling IP Forwarding..."
@@ -30,7 +35,9 @@ sysctl -w net.inet.ip.forwarding=1
 # rather than racing it and exiting.
 WAN=""
 for _ in $(seq 1 30); do
-    WAN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')"
+    # `|| true`: with no default route `route` exits 1, and under pipefail that
+    # kills the script on the first pass instead of letting it wait for one.
+    WAN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' || true)"
     [[ -n "$WAN" ]] && break
     sleep 2
 done

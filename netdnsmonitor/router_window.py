@@ -24,6 +24,7 @@ from typing import Callable, Optional
 import yaml
 
 from netdnsmonitor.router import DEFAULTS
+from netdnsmonitor.router import validate as router_validate
 
 RunFn = Callable[..., object]
 
@@ -62,7 +63,14 @@ _MAC_RE = re.compile(r"\b[0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5}\b")
 def _capture(run_fn: RunFn, argv: list, timeout: float = COMMAND_TIMEOUT_SECONDS):
     """(stdout, None) on success, or (None, reason). Never raises."""
     try:
-        result = run_fn(argv, capture_output=True, text=True, timeout=timeout)
+        result = run_fn(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
         return None, type(exc).__name__
     if getattr(result, "returncode", 1) != 0:
@@ -131,6 +139,8 @@ def bootpd_status(run_fn: RunFn = subprocess.run) -> str:
             ["/bin/launchctl", "print", "system/com.apple.bootpd"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
@@ -483,7 +493,10 @@ class RouterWindowController:
         for i, item in enumerate(self.interfaces):
             if f"({device})" in item:
                 popup.selectItemAtIndex_(i)
-                break
+                return
+        # NSPopUpButton keeps item 0 selected unless told otherwise, so a saved
+        # interface that is no longer present would otherwise read as chosen.
+        popup.selectItemAtIndex_(-1)
 
     def _form_values(self) -> dict:
         return {
@@ -529,23 +542,43 @@ class RouterWindowController:
 
     # --- actions -----------------------------------------------------------
 
-    def on_save_config(self, values: Optional[Mapping] = None) -> bool:
-        values = dict(values) if values is not None else self._form_values()
+    def _save(self, values: Mapping, *, apply_live: bool = True):
+        """(ok, message). Validates, writes the config file, then (optionally)
+        updates the live router and config. Never touches the window, so it is
+        safe to call from a worker.
+        """
         if not values.get("wan_interface") or not values.get("lan_interface"):
-            self.append_log("not saved: select both a WAN and a LAN interface")
-            return False
+            return False, "not saved: select both a WAN and a LAN interface"
+        # Validated even while router_enabled is false: the file is read back
+        # at the next launch, so a bad value saved now would be a refusal then.
+        try:
+            router_validate(
+                values.get("wan_interface"),
+                values.get("lan_interface"),
+                values.get("lan_ip"),
+                values.get("lan_netmask"),
+                values.get("dhcp_start"),
+                values.get("dhcp_end"),
+            )
+        except ValueError as exc:
+            return False, f"not saved: {exc}"
         updates = router_updates(values)
 
         if not self.config_path:
-            self.append_log("not saved: no config file path")
-            return False
+            return False, "not saved: no config file path"
         from netdnsmonitor.settings_window import save_config
 
         try:
             result = save_config(self.config_path, updates)
         except (OSError, ValueError, yaml.YAMLError) as exc:
-            self.append_log(f"Error saving config: {type(exc).__name__}")
-            return False
+            return False, f"Error saving config: {type(exc).__name__}"
+        if apply_live:
+            self._apply_live(updates)
+        backup = result.get("backup") if isinstance(result, Mapping) else None
+        suffix = f" (previous file backed up to {backup})" if backup else ""
+        return True, f"Configuration saved to {self.config_path}{suffix}."
+
+    def _apply_live(self, updates: Mapping) -> None:
         # A rejected save must not change the settings a privileged start uses.
         router = getattr(self.app, "router", None)
         if router is not None:
@@ -555,10 +588,12 @@ class RouterWindowController:
         current = self._config()
         if isinstance(current, dict):
             current.update(updates)
-        backup = result.get("backup") if isinstance(result, Mapping) else None
-        suffix = f" (previous file backed up to {backup})" if backup else ""
-        self.append_log(f"Configuration saved to {self.config_path}{suffix}.")
-        return True
+
+    def on_save_config(self, values: Optional[Mapping] = None) -> bool:
+        values = dict(values) if values is not None else self._form_values()
+        ok, message = self._save(values)
+        self.append_log(message)
+        return ok
 
     def _router_action(self, label: str, action: Callable[[], object]) -> None:
         starter = getattr(self.app, "_start_router_worker", None)
@@ -617,9 +652,17 @@ class RouterWindowController:
         if router is None:
             self.append_log("Router module not loaded.")
             return
-        if not self.on_save_config(values):
-            return
-        self._router_action("Start router", router.start)
+
+        def start_with_saved_values():
+            # Inside the worker slot: a start refused because another router
+            # action holds the slot must leave the live router and config alone.
+            ok, message = self._save(values, apply_live=False)
+            if not ok:
+                return message
+            self._apply_live(router_updates(values))
+            return router.start()
+
+        self._router_action("Start router", start_with_saved_values)
 
     def on_stop(self):
         self.append_log("Stopping router...")
@@ -644,6 +687,8 @@ class RouterWindowController:
                     ["ping", "-c", "4", target],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=PING_TIMEOUT_SECONDS,
                 )
             except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
