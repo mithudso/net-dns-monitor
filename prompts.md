@@ -75,3 +75,5 @@ Prompt:
 > 1.Close it. 2. Add flag.
 
 > ALso resolve all the conflicts for the https://github.com/mithudso/net-dns-monitor/pull/28 merge and
+
+> 1. Yes do both.

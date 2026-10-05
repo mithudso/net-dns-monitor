@@ -9,6 +9,11 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    ignore:
+      # Each pydantic release pins one exact pydantic-core, so a core-only bump
+      # cannot install (PR #28: ResolutionImpossible). Move pydantic-core by hand
+      # to the version the new pydantic declares, in the same PR as pydantic.
+      - dependency-name: pydantic-core
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

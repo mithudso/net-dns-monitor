@@ -163,3 +163,6 @@ conflicts and merge it (this replaced the earlier "close it" answer).
 `scripts/mcp_server.py --self-test` lists tools through FastMCP `list_tools()`
 (present in both the local 3.2.4 and the pinned 4.0.10) without serving; three
 offline tests use a fake FastMCP. Tests: 2212.
+
+Follow-up (v9): owner chose to close PR #28 and ignore `pydantic-core` in
+`.github/dependabot.yml`; it moves by hand with `pydantic` (KNOW-407).
