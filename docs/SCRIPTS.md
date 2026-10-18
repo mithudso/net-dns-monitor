@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2532 tests; the whole decision surface
+python3 -m pytest -q          # 2559 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2532 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2532 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2559 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -725,7 +725,9 @@ python3.13 -m venv .venv
 
 **Purpose.** Build the bundle with py2app, then do what py2app cannot: rebuild the
 launcher stubs against the installed SDK, remove the string `itms-services` from the
-bundled standard library, refuse links to libraries outside the bundle or the OS, set
+bundled standard library, delete the first-party modules the store edition never runs
+(shell console, router, command-line tool) and prove the pruned bundle still imports,
+check the privacy manifest, refuse links to libraries outside the bundle or the OS, set
 `LSMinimumSystemVersion` from the bundled binaries, strip extended attributes, sign
 inside-out, and verify the signature.
 
@@ -759,7 +761,9 @@ warning). `adhoc` adds `--with-probe`.
 
 The build stops if a `release` run has no `https://` privacy policy URL or the URL still
 holds a placeholder, if the profile belongs to a different app ID, if a `release` bundle
-contains the probe, if `itms-services` survives anywhere, if any binary links a
+contains the probe, if `itms-services` survives anywhere, if a remaining module imports a
+deleted one at module level or the pruned bundle does not import, if
+`PrivacyInfo.xcprivacy` is missing or invalid, if any binary links a
 library outside the bundle, `/System/Library/` or `/usr/lib/`, if the bundle's
 `Info.plist` lacks `CFBundleIdentifier`, either version string,
 `LSApplicationCategoryType`, `LSMinimumSystemVersion` or
@@ -856,7 +860,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2532 passed
+python3 -m pytest -q            # 2559 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -890,7 +894,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 41 | `test_localize.py` |
 | 44 | `test_router_window.py` |
 | 35 | `test_app_log_wiring.py` |
-| 53 | `test_appstore_build.py` |
+| 71 | `test_appstore_build.py` |
 | 45 | `test_throughput.py` |
 | 31 | `test_forensic_log.py` |
 | 30 | `test_failover_policy.py` |
@@ -899,7 +903,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 29 | `test_notifications.py` |
 | 25 | `test_app_router_wiring.py` |
 | 25 | `test_history.py` |
-| 29 | `test_ping.py` |
+| 33 | `test_ping.py` |
 | 24 | `test_ping_monitor.py` |
 | 21 | `test_app_privilege_wiring.py` |
 | 23 | `test_state_machine.py` |
@@ -912,7 +916,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 17 | `test_dock_icon.py` |
 | 17 | `test_stall_log.py` |
 | 18 | `test_alert.py` |
-| 25 | `test_app_ping_wiring.py` |
+| 29 | `test_app_ping_wiring.py` |
 | 27 | `test_indexer_scripts.py` |
 | 32 | `test_interface_probe.py` |
 | 16 | `test_resolution_prober.py` |
@@ -927,7 +931,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 12 | `test_flap_gate.py` |
 | 12 | `test_query_log.py` |
 | 36 | `test_dns_query.py` |
-| 10 | `test_ai_consent.py` |
+| 11 | `test_ai_consent.py` |
 | 10 | `test_distribution.py` |
 | 10 | `test_ladder.py` |
 | 11 | `test_report.py` |
@@ -944,7 +948,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 3 | `test_record_demo.py` |
 | 7 | `test_sandbox_probe.py` |
 | 31 | `test_shell_scripts.py` |
-| **2532** | **total** |
+| **2559** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

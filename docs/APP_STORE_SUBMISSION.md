@@ -58,6 +58,8 @@ notarization (§10). Both can coexist.
 - `scripts/appstore/build_appstore.py` builds, fixes and signs the bundle, then packages it:
   - rebuilds py2app's launcher against the current SDK;
   - strips the `itms-services` string that App Review has rejected in bundled Python ([cpython#120522](https://github.com/python/cpython/issues/120522));
+  - deletes the first-party modules this edition never runs (shell console, router, `netdns` command-line tool: `STORE_OMITTED_MODULES`) and the checkout's stale bytecode for other Python versions, then imports the pruned bundle with its own interpreter to prove nothing it needs went with them (Guideline 2.5.19);
+  - refuses a bundle whose `Contents/Resources/PrivacyInfo.xcprivacy` is missing or fails the TN3181 invalid-manifest checks (ITMS-91056);
   - deletes rpaths that point outside the bundle, and refuses any link to a library outside the bundle or the OS;
   - sets the minimum macOS version from the bundled binaries;
   - signs inside-out, verifies, and runs `productbuild`.
@@ -210,6 +212,8 @@ The build refuses to continue if:
 - the profile belongs to a different app ID;
 - the probe is in the bundle;
 - `itms-services` survives anywhere;
+- a module that stays still imports an omitted module at module level, or an omitted module is still in the bundle, or the pruned bundle does not import;
+- `PrivacyInfo.xcprivacy` is missing or invalid;
 - any binary links a library outside the bundle or `/System` / `/usr/lib`.
 
 Output: `build/appstore/release/Net-DNS-Monitor-<version>-<build>.pkg`.
@@ -219,25 +223,31 @@ Output: `build/appstore/release/Net-DNS-Monitor-<version>-<build>.pkg`.
 | Property | Value |
 |---|---|
 | Architecture | arm64 only |
-| Minimum macOS | 26.0 |
-| Size | about 81 MB (Python 3.14 venv, 2026-09-27) |
+| Minimum macOS | 27.0 (measured 2026-10-17; was 26.0 on 2026-09-27) |
+| Size | about 69 MB (Python 3.14.8 venv, 2026-10-17, after the prune and the `setup.py` excludes) |
 | Category | `public.app-category.utilities` |
 
-The minimum is 26.0 because Homebrew's Python 3.13 is built for macOS 26 on
-Apple silicon, and an app cannot run below the highest minimum of its
-binaries. Re-measured 2026-09-17 on macOS 27.0: `vtool -show-build` on
-Homebrew's Python 3.13.15 framework reports `minos 26.0`, `sdk 26.5`, so a
-buyer on macOS 26 can still install it. Apple accepts arm64-only Mac apps, and macOS 27 is Apple-silicon
-only ([Apple news](https://developer.apple.com/news/?id=k1mtkt1k)).
+The minimum is 27.0 because Homebrew now builds every Python for macOS 27 on
+Apple silicon (3.12.15, 3.13.16 and 3.14.8 all report `minos 27.0`, `sdk 27.0` from
+`vtool -show-build`, measured 2026-10-17), and an app cannot run below the highest
+minimum of its binaries. The build sets `LSMinimumSystemVersion` from that, so a
+buyer on macOS 26 cannot install it. macOS 27 reached general availability on
+2026-09-14 ([MacRumors](https://www.macrumors.com/2026/09/10/macos-27-golden-gate-release-date/)),
+so a reviewer on the current public release can run it. Earlier notes here said 26.0:
+that was true for Homebrew's Python 3.13.15 on 2026-09-17 and is not any more. Apple
+accepts arm64-only Mac apps, and macOS 27 is Apple-silicon only
+([Apple news](https://developer.apple.com/news/?id=k1mtkt1k)).
 
 The store build excludes `lzma` (`setup.py`). Homebrew's `liblzma` bottle is
 built for the host macOS, so on a macOS 27 build machine bundling it raised the
 minimum to 27.0 (measured 2026-09-27). Nothing in the app uses xz, and
 `shutil` only imports `lzma` optionally.
 
-To support older macOS or Intel Macs, build with a python.org universal2
-Python 3.13 instead. The script still patches `itms-services` and recomputes
-the minimum.
+To support macOS 26 or older, or Intel Macs, build with a Python whose binaries
+target an older macOS (a python.org universal2 build, or a python-build-standalone
+interpreter, which reports `minos 11.0`). The script still patches `itms-services`
+and recomputes the minimum. Not tried: whether py2app 0.28 bundles a standalone
+(non-framework) interpreter.
 
 ## 5. Validate and upload
 
@@ -459,8 +469,10 @@ you can reply without a new build when a note is enough.
 | 4.2: minimum functionality | Low | Native menu bar utility with a real window |
 | Icon quality | Done (2026-09-27) | `make_icon.py` draws the designed icon; review `make_icon.py preview.png` after any change to it |
 | ITMS-90236 (icon sizes) | Mitigated | ICNS includes 512 and 512@2x; `--icon` checks a designed icon for the same |
-| Local Network privacy prompt (macOS 15+) | Mitigated | `NSLocalNetworkUsageDescription` is in the plist and the build refuses a bundle without it. A denial is not detectable from inside the app; see `docs/known-issues.md` |
-| Privacy manifest / required-reason API (ITMS-91053) | Not applicable | Apple's requirement names iOS, iPadOS, tvOS, visionOS and watchOS only ([source](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)) |
+| Local Network privacy prompt (macOS 15+) | Mitigated | `NSLocalNetworkUsageDescription` is in the plist and the build refuses a bundle without it. It names what triggers the prompt: LAN peer discovery (off by default in this edition) or a local address the user adds. The default configuration contacts only public addresses and the system resolver. A denial is not detectable from inside the app; see `docs/known-issues.md` |
+| 2.5.19: hidden, dormant or undocumented features | Mitigated for the console and router; privileged-repair and failover source remains | The build deletes `cli`, `cli_console`, `commands`, `console`, `console_window`, `router` and `router_window` from the bundle. `privileges.py` (the sudoers writer and its administrator dialog), `repair_executor.py` and `failover.py` still ship, switched off by `distribution.detect()`; the Notes for Review say so in those words. Nothing is obfuscated. Removing `privileges.py` needs a split of the privilege probes the tick path calls (`docs/APP_STORE_REVIEW_RESPONSE.md` section 4) |
+| 2.5.5: IPv6-only network | Mitigated, never run on NAT64 | The heartbeat ends with `ping_host_name` (`dns.google`) over `ping6`, which uses the NAT64-synthesized address; the TCP probes resolve IPv4 literals through `getaddrinfo`. Test on Apple's NAT64 network before submitting (`docs/APP_STORE_REVIEW_RESPONSE.md` section 4) |
+| Privacy manifest / required-reason API (ITMS-91053, ITMS-91056) | Mitigated, enforcement on macOS unknown | `packaging/appstore/PrivacyInfo.xcprivacy` ships in `Contents/Resources`: tracking off, the two collected-data types the App Privacy label declares, and the one required-reason category the app demonstrably uses (system boot time via `time.monotonic()`, reason 35F9.1). The build lints it and applies the TN3181 invalid cases, because an empty `NSPrivacyAccessedAPITypes` array is itself invalid. Apple's required-reason text names iOS, iPadOS, tvOS, visionOS and watchOS only ([source](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)), so whether macOS uploads are checked is unverified; the interpreter's own file-timestamp calls are not declared |
 | SDK floor for uploads (Xcode 26, since 2026-04-28) | Not applicable | The requirement names the iOS-family SDKs, not macOS ([source](https://developer.apple.com/news/upcoming-requirements/)). The launcher is rebuilt against the installed SDK regardless |
 | Quarantine attribute in the upload | Mitigated | `xattr -cr` runs before signing; Apple rejects `com.apple.quarantine` in uploads since 2025-02-18 ([source](https://developer.apple.com/news/upcoming-requirements/)) |
 | Signing / provisioning errors | Release path unrun | Fix identities or profile per the error text, then re-run §4.2 |

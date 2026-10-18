@@ -30,6 +30,10 @@ Everything py2app cannot do is here, in order:
    links a library outside the bundle or the OS, or an @rpath library no
    bundle-relative rpath resolves (a Homebrew dylib would work on this Mac and
    crash on every other one).
+3b. Delete the first-party modules the store edition never runs (the shell
+   console, the router and the command-line tool; `STORE_OMITTED_MODULES`), so
+   Guideline 2.5.19 ("hidden, dormant, or undocumented features") has nothing
+   to find, then import the pruned bundle to prove nothing still needs them.
 4. Set LSMinimumSystemVersion to the highest `minos` of any bundled binary.
    Guessing lower produces an app that installs on a Mac it cannot launch on.
 5. Strip extended attributes (uploads must not carry com.apple.quarantine).
@@ -53,6 +57,7 @@ Run from the repository root with the project venv that has py2app installed:
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import plistlib
 import py_compile
@@ -247,6 +252,177 @@ def sign_plan(
     return plan
 
 
+# First-party modules the Mac App Store edition never runs: the arbitrary-shell
+# console, the router (root LaunchDaemons, pf, an administrator dialog) and the
+# `netdns` command-line tool. distribution.detect() already switches the
+# features off, but a switched-off feature is still "dormant" to Guideline
+# 2.5.19, and the router and console carry the `sudo`, `osascript`, `pfctl` and
+# `shell=True` text a reviewer's strings pass reads first. py2app copies the
+# whole `netdnsmonitor` package and re-adds it through its detect_dunder_file
+# recipe, so `excludes` cannot drop these (measured); they are deleted after the
+# build, before signing. Deleting is not hiding: Notes for Review says so.
+STORE_OMITTED_MODULES = (
+    "cli",
+    "cli_console",
+    "commands",
+    "console",
+    "console_window",
+    "router",
+    "router_window",
+)
+
+
+def _imported_package_modules(node: ast.AST) -> list[str]:
+    """Names of first-party modules one import statement pulls in."""
+    if isinstance(node, ast.ImportFrom) and node.module:
+        if node.module == "netdnsmonitor":
+            return [alias.name for alias in node.names]
+        if node.module.startswith("netdnsmonitor."):
+            return [node.module.split(".")[1]]
+    elif isinstance(node, ast.Import):
+        return [
+            alias.name.split(".")[1]
+            for alias in node.names
+            if alias.name.startswith("netdnsmonitor.")
+        ]
+    return []
+
+
+def module_level_imports_of_omitted(
+    package: Path, omitted: Iterable[str] = STORE_OMITTED_MODULES
+) -> list[str]:
+    """Remaining modules that import an omitted module before any function runs.
+
+    Only the module body is read, so an import inside a function (which the
+    store build never reaches) is allowed and one at the top of a file (which
+    would raise ImportError at launch) is not.
+    """
+    omitted = set(omitted)
+    problems = []
+    for source in sorted(package.glob("*.py")):
+        if source.stem in omitted:
+            continue
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in tree.body:
+            for name in _imported_package_modules(node):
+                if name in omitted:
+                    problems.append(f"{source.name}:{node.lineno} -> {name}")
+    return problems
+
+
+def prune_store_bundle(app: Path, omitted: Iterable[str] = STORE_OMITTED_MODULES) -> list[str]:
+    """Delete the omitted modules (source and every cached bytecode) from the bundle.
+
+    Returns the bundle-relative paths removed. Raises SystemExit when a module
+    that stays would still import one of them at module level.
+    """
+    omitted = tuple(omitted)
+    libs = sorted((app / "Contents" / "Resources" / "lib").glob("python3.*/netdnsmonitor"))
+    if len(libs) != 1:
+        raise SystemExit(f"expected one bundled netdnsmonitor package, found {libs}")
+    package = libs[0]
+    removed = []
+    for name in omitted:
+        candidates = [package / f"{name}.py", *(package / "__pycache__").glob(f"{name}.*.pyc")]
+        for path in candidates:
+            if path.exists():
+                path.unlink()
+                removed.append(str(path.relative_to(app)))
+    # py2app copies the source tree's __pycache__ whole, so a bundle for 3.14
+    # also carried the checkout's 3.13 bytecode: never loaded, and a second copy
+    # of every first-party module for a strings pass to read.
+    running = "cpython-" + package.parent.name.removeprefix("python").replace(".", "")
+    for path in (package / "__pycache__").glob("*.pyc"):
+        if f".{running}." not in path.name:
+            path.unlink()
+            removed.append(str(path.relative_to(app)))
+    problems = module_level_imports_of_omitted(package, omitted)
+    if problems:
+        raise SystemExit(
+            "omitted modules are still imported at module level:\n  " + "\n  ".join(problems)
+        )
+    return removed
+
+
+def omitted_modules_present(app: Path, omitted: Iterable[str] = STORE_OMITTED_MODULES) -> list[str]:
+    """Omitted modules still on disk anywhere under the bundle's package directory."""
+    found = []
+    for package in (app / "Contents" / "Resources" / "lib").glob("python3.*/netdnsmonitor"):
+        for name in omitted:
+            found += [
+                str(path.relative_to(app))
+                for path in [
+                    package / f"{name}.py",
+                    *(package / "__pycache__").glob(f"{name}.*.pyc"),
+                ]
+                if path.exists()
+            ]
+    return found
+
+
+# Valid reason codes per required-reason API category (Apple's
+# NSPrivacyAccessedAPIType page; the codes TN3181 checks against).
+PRIVACY_API_REASONS = {
+    "NSPrivacyAccessedAPICategoryFileTimestamp": {"DDA9.1", "C617.1", "3B52.1", "0A2A.1"},
+    "NSPrivacyAccessedAPICategorySystemBootTime": {"35F9.1", "8FFB.1", "3D61.1"},
+    "NSPrivacyAccessedAPICategoryDiskSpace": {"85F4.1", "E174.1", "7D9E.1", "B728.1"},
+    "NSPrivacyAccessedAPICategoryActiveKeyboards": {"3EC4.1", "54BD.1"},
+    "NSPrivacyAccessedAPICategoryUserDefaults": {"CA92.1", "1C8F.1", "C56D.1", "AC6B.1"},
+}
+
+
+def privacy_manifest_problems(manifest: Mapping) -> list[str]:
+    """Why App Store Connect would call this PrivacyInfo.xcprivacy invalid (TN3181).
+
+    Mirrors the invalid cases TN3181 lists, so the build fails before upload with
+    ITMS-91056 spelled out. `plutil -lint` (run by the build) checks only that the
+    file is a property list.
+    """
+    problems = []
+    tracking = manifest.get("NSPrivacyTracking")
+    if not isinstance(tracking, bool):
+        problems.append("NSPrivacyTracking must be a Boolean")
+    domains = manifest.get("NSPrivacyTrackingDomains", [])
+    if not isinstance(domains, list) or not all(isinstance(d, str) for d in domains):
+        problems.append("NSPrivacyTrackingDomains must be an array of strings")
+    elif tracking is True and not domains:
+        problems.append("NSPrivacyTracking is true but NSPrivacyTrackingDomains is empty")
+    elif tracking is False and domains:
+        problems.append("NSPrivacyTracking is false but NSPrivacyTrackingDomains is not empty")
+    collected = manifest.get("NSPrivacyCollectedDataTypes")
+    if not isinstance(collected, list):
+        problems.append("NSPrivacyCollectedDataTypes must be an array")
+    else:
+        for entry in collected:
+            keys = (
+                "NSPrivacyCollectedDataType",
+                "NSPrivacyCollectedDataTypeLinked",
+                "NSPrivacyCollectedDataTypeTracking",
+                "NSPrivacyCollectedDataTypePurposes",
+            )
+            if not isinstance(entry, dict) or any(key not in entry for key in keys):
+                problems.append(f"NSPrivacyCollectedDataTypes entry lacks one of {', '.join(keys)}")
+    if "NSPrivacyAccessedAPITypes" in manifest:
+        api_types = manifest["NSPrivacyAccessedAPITypes"]
+        if not isinstance(api_types, list) or not api_types:
+            problems.append("NSPrivacyAccessedAPITypes must be absent or a non-empty array")
+            api_types = []
+        for entry in api_types:
+            category = entry.get("NSPrivacyAccessedAPIType") if isinstance(entry, dict) else None
+            reasons = (
+                entry.get("NSPrivacyAccessedAPITypeReasons") if isinstance(entry, dict) else None
+            )
+            if category not in PRIVACY_API_REASONS:
+                problems.append(f"unknown NSPrivacyAccessedAPIType {category!r}")
+            elif not isinstance(reasons, list) or not reasons:
+                problems.append(f"{category} has no NSPrivacyAccessedAPITypeReasons")
+            else:
+                bad = sorted(set(map(str, reasons)) - PRIVACY_API_REASONS[category])
+                if bad:
+                    problems.append(f"{category} has reason codes it does not define: {bad}")
+    return problems
+
+
 def privacy_policy_problem(url: str, mode: str) -> str | None:
     """Why this URL cannot ship, or None.
 
@@ -264,8 +440,8 @@ def privacy_policy_problem(url: str, mode: str) -> str | None:
 
 # Keys App Store Connect or the OS reads from the main Info.plist. The first
 # five are what validation rejects an upload for; the last is what macOS 15+
-# shows in the local-network permission prompt (TN3179), which this app's peer
-# announcement and gateway probe trigger.
+# shows in the local-network permission prompt (TN3179), which LAN peer discovery
+# and a user-added local monitor target trigger.
 REQUIRED_PLIST_KEYS = (
     "CFBundleIdentifier",
     "CFBundleShortVersionString",
@@ -525,6 +701,75 @@ def find_forbidden_string(app: Path) -> list[str]:
     return hits
 
 
+IMPORT_SMOKE_TEST = """
+import sys
+import netdnsmonitor.app
+from netdnsmonitor import distribution
+omitted = {omitted!r}
+loaded = sorted(m for m in omitted if "netdnsmonitor." + m in sys.modules)
+assert not loaded, "omitted modules were imported: " + ", ".join(loaded)
+assert netdnsmonitor.app.__file__.startswith({root!r}), netdnsmonitor.app.__file__
+from netdnsmonitor.anthropic_escalator import default_client
+default_client(api_key="x")
+import ssl
+ssl.create_default_context()
+caps = distribution.detect({{"NETDNS_DISTRIBUTION": "appstore"}})
+assert not (caps.shell_console or caps.router), caps
+print("import ok:", netdnsmonitor.app.__file__)
+"""
+
+
+def import_smoke_test(app: Path, omitted: Iterable[str] = STORE_OMITTED_MODULES) -> None:
+    """Import the pruned bundle's app module with the bundle's own interpreter.
+
+    Uses `Contents/MacOS/python` because the extension modules link
+    `@executable_path/../Frameworks/libssl.3.dylib`, which only resolves for an
+    executable inside the bundle. Runs before signing, with bytecode writing off
+    (a `.pyc` written now would be unsealed content inside the signed app). It
+    proves the pruned bundle imports and that nothing it still needs was
+    deleted; it does not start the GUI.
+    """
+    interpreter = app / "Contents" / "MacOS" / "python"
+    lib = next((app / "Contents" / "Resources" / "lib").glob("python3.*"))
+    paths = [str(z) for z in sorted(lib.parent.glob("python3*.zip"))]
+    paths += [str(lib), str(lib / "lib-dynload")]
+    code = IMPORT_SMOKE_TEST.format(omitted=list(omitted), root=str(lib))
+    with tempfile.TemporaryDirectory() as tmp:
+        result = subprocess.run(
+            [str(interpreter), "-S", "-B", "-c", code],
+            cwd=tmp,
+            capture_output=True,
+            text=True,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": tmp,
+                "PYTHONPATH": os.pathsep.join(paths),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+        )
+    if result.returncode != 0:
+        raise SystemExit(
+            "the pruned bundle does not import:\n"
+            + (result.stderr.strip() or result.stdout.strip() or "(no output)")
+        )
+    print(result.stdout.strip())
+
+
+def check_privacy_manifests(app: Path) -> None:
+    """Every PrivacyInfo.xcprivacy in the bundle must lint and satisfy TN3181; the app's must exist."""
+    manifests = sorted(app.rglob("PrivacyInfo.xcprivacy"))
+    top = app / "Contents" / "Resources" / "PrivacyInfo.xcprivacy"
+    if top not in manifests:
+        raise SystemExit(f"{top} is missing; setup.py installs it from packaging/appstore")
+    for manifest in manifests:
+        run(["plutil", "-lint", manifest])
+        problems = privacy_manifest_problems(plistlib.loads(manifest.read_bytes()))
+        if problems:
+            raise SystemExit(
+                f"ITMS-91056 would reject {manifest.relative_to(app)}:\n  " + "\n  ".join(problems)
+            )
+
+
 def strip_external_rpaths(app: Path, binaries: Iterable[Path]) -> int:
     """Delete every rpath that points outside the bundle; return how many.
 
@@ -733,6 +978,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if remaining:
         raise SystemExit("itms-services is still present in:\n  " + "\n  ".join(remaining))
 
+    pruned = prune_store_bundle(app)
+    print(f"removed {len(pruned)} file(s) of modules this edition never runs")
+    leftovers = omitted_modules_present(app)
+    if leftovers:
+        raise SystemExit("omitted modules are still in the bundle:\n  " + "\n  ".join(leftovers))
+    import_smoke_test(app)
+
     binaries = macho_files(app)
     removed = strip_external_rpaths(app, binaries)
     print(f"removed {removed} rpath(s) pointing outside the bundle")
@@ -748,6 +1000,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     missing = missing_plist_keys(plistlib.loads((app / "Contents" / "Info.plist").read_bytes()))
     if missing:
         raise SystemExit("Info.plist is missing required keys: " + ", ".join(missing))
+    check_privacy_manifests(app)
 
     base = plistlib.loads((PACKAGING / "entitlements.plist").read_bytes())
     app_entitlements = out / "app.entitlements"

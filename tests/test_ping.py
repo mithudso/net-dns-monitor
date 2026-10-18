@@ -249,3 +249,43 @@ def test_the_refusal_names_the_host_it_refused_and_shares_config_host_problem():
         with pytest.raises(ValueError, match="ping host") as caught:
             ping_once(bad)
         assert repr(bad) in str(caught.value)
+
+
+# --- IPv6-only DNS64/NAT64 networks (Guideline 2.5.5) -----------------------
+
+
+def test_a_name_asked_over_ipv6_goes_to_ping6_not_the_ipv4_only_ping():
+    """/sbin/ping is IPv4-only. On a DNS64/NAT64 network a name resolves to a
+    synthesized 64:ff9b:: address, which only ping6 can send to."""
+    fake_run, calls = fake_run_factory()
+    ping_once("dns.google", timeout_seconds=1.5, run_fn=fake_run, prefer_ipv6=True)
+    args, kwargs = calls[0]
+    assert args == [PING6_BIN, "-c", "1", "dns.google"]
+    assert kwargs["timeout"] == 1.5
+
+
+def test_a_name_is_still_pinged_over_ipv4_unless_ipv6_is_asked_for():
+    fake_run, calls = fake_run_factory()
+    ping_once("example.com", timeout_seconds=2.0, run_fn=fake_run)
+    assert calls[0][0][0] == PING_BIN
+
+
+def test_ping6_that_cannot_resolve_the_name_is_not_a_lost_echo():
+    """ping6 prints a getaddrinfo error and exits 1 (not 68). Nothing was sent, so
+    it says nothing about the path and must not count as measured."""
+    fake_run, _ = fake_run_factory(
+        returncode=1,
+        stdout="",
+        stderr="ping6: getaddrinfo -- nodename nor servname provided, or not known\n",
+    )
+    result = ping_once("dns.google", run_fn=fake_run, prefer_ipv6=True)
+    assert result["ok"] is False
+    assert result["probed"] is False
+    assert "did not resolve" in result["error"]
+
+
+def test_ping6_exit_1_without_a_lookup_error_is_still_a_failed_reading():
+    fake_run, _ = fake_run_factory(returncode=1, stdout="", stderr="ping6: sendmsg: No route\n")
+    result = ping_once("dns.google", run_fn=fake_run, prefer_ipv6=True)
+    assert result["ok"] is False
+    assert result.get("probed") is not False

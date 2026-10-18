@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy manifest for the Mac App Store build (installed at
+  Contents/Resources/PrivacyInfo.xcprivacy by setup.py).
+
+  The collected-data entries repeat the App Privacy label in
+  docs/APP_STORE_SUBMISSION.md section 6.3, so the two cannot disagree: the
+  publisher receives nothing, and the optional Claude diagnosis sends incident
+  data to Anthropic under the user's own API key, after explicit permission.
+
+  NSPrivacyAccessedAPITypes names one category on purpose. time.monotonic()
+  reads mach_absolute_time(), a system-boot-time API, and every probe deadline
+  and heartbeat interval uses it only to measure elapsed time on the device
+  (reason 35F9.1). TN3181 treats an EMPTY NSPrivacyAccessedAPITypes array as
+  invalid, so the key is either right or absent. Whether Apple enforces
+  required-reason declarations for macOS-only uploads is not documented; the
+  interpreter's own file-timestamp calls are not declared because the app's
+  use of them has not been audited.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherDataTypes</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

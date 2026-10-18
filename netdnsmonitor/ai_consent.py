@@ -24,7 +24,13 @@ from typing import Callable, Optional
 
 from netdnsmonitor.report_storage import _atomic_write
 
-CONSENT_VERSION = 1
+# 2: the disclosure now says what the step outcomes contain. Their text is the
+# output of `scutil --nwi`, `scutil --dns` and `netstat -rn`, which carries
+# interface names, this Mac's IP addresses, the router's and DNS servers'
+# addresses and the DNS search domains. The bundle did not change; the earlier
+# wording ("the outcome text of each troubleshooting step") did not let anyone
+# agree to that specifically, so no earlier grant counts.
+CONSENT_VERSION = 2
 
 DEFAULT_PATH = "~/Library/Application Support/net-dns-monitor/ai-consent.json"
 
@@ -36,7 +42,9 @@ DISCLOSURE = (
     "If you allow this, each such incident sends Anthropic:\n"
     "  - the incident classification (for example 'dns' or 'network')\n"
     "  - the probe results, including the names of the domains that were checked\n"
-    "  - the outcome text of each troubleshooting step\n"
+    "  - the outcome text of each troubleshooting step, which includes your network "
+    "interface names, this Mac's IP addresses (IPv4 and IPv6), the IP addresses of your router and "
+    "DNS servers, and the DNS search domains your network assigns\n"
     "  - recent network-related lines from the macOS system log, when this build can read "
     "them (the Mac App Store build cannot, and sends a note saying so instead)\n\n"
     "Strings you list under 'sensitive_strings' in Settings are replaced with [REDACTED] "

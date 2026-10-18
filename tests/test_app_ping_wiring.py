@@ -128,7 +128,7 @@ def test_a_failed_ping_fires_the_alert(tmp_path, monkeypatch):
     app = make_app(tmp_path, result=FAIL)
     run_heartbeat(app)
     assert len(alerts) == 1
-    assert alerts[0][0] == "2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"
+    assert alerts[0][0] == "2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1 / dns.google"
     assert "no reply" in alerts[0][1]
 
 
@@ -158,7 +158,7 @@ def test_recovery_cancels_the_bounce(tmp_path, monkeypatch):
     result["current"] = OK
     run_heartbeat(app)
 
-    assert recovered == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"]
+    assert recovered == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1 / dns.google"]
     assert app.ping_stats["down"] is False
     assert "61ms" in app.title
 
@@ -287,7 +287,7 @@ def test_every_queued_result_is_recorded_so_a_failure_edge_cannot_be_missed(tmp_
 
     app._drain_ping_results()
 
-    assert alerts == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1"]
+    assert alerts == ["2001:4860:4860::8888 / 8.8.8.8 / 1.1.1.1 / dns.google"]
     # The newest result is what gets drawn.
     assert "61ms" in app.title
     assert app.ping_stats["down"] is False
@@ -486,3 +486,81 @@ def test_an_exhausted_heartbeat_budget_names_the_unattempted_host():
     assert result["error"] == (
         "::1: no reply; 192.0.2.1: not attempted; heartbeat deadline exceeded"
     )
+
+
+# --- IPv6-only DNS64/NAT64 network (Guideline 2.5.5) -------------------------
+
+
+def test_the_host_name_is_pinged_last_over_ipv6_when_every_address_fails():
+    """App Review's network is IPv6-only with NAT64: the IPv6 literal may have no
+    route and there is no IPv4 for /sbin/ping. A name resolves to a synthesized
+    address, so it is the one target that can read that network as up."""
+    calls = []
+
+    def ping(host, timeout_seconds, prefer_ipv6=False):
+        calls.append((host, prefer_ipv6))
+        if host == "dns.google":
+            return {"ok": True, "rtt_ms": 38.0, "error": None}
+        return {"ok": False, "rtt_ms": None, "error": "No route to host"}
+
+    config = {
+        "ping_host_v6": "2001:4860:4860::8888",
+        "ping_host": "8.8.8.8",
+        "ping_fallback_host": "1.1.1.1",
+        "ping_host_name": "dns.google",
+        "ping_timeout_seconds": 3.0,
+    }
+    result = app_module.ping_heartbeat(config, ping_fn=ping, clock=lambda: 0.0)
+    assert calls == [
+        ("2001:4860:4860::8888", False),
+        ("8.8.8.8", False),
+        ("1.1.1.1", False),
+        ("dns.google", True),
+    ]
+    assert result["ok"] is True and result["host"] == "dns.google"
+
+
+def test_the_host_name_does_not_shrink_the_addresses_share_of_the_budget():
+    """It is never reached on a healthy dual-stack network, so it must not take a
+    quarter of the first address's time there."""
+    now = [0.0]
+    calls = []
+
+    def ping(host, timeout_seconds, prefer_ipv6=False):
+        calls.append((host, timeout_seconds))
+        now[0] += timeout_seconds
+        return {"ok": False, "rtt_ms": None, "error": "no reply"}
+
+    config = {
+        "ping_host_v6": "::1",
+        "ping_host": "192.0.2.1",
+        "ping_fallback_host": "192.0.2.2",
+        "ping_host_name": "dns.google",
+        "ping_timeout_seconds": 3.0,
+    }
+    result = app_module.ping_heartbeat(config, ping_fn=ping, clock=lambda: now[0])
+    assert calls == [("::1", 1.0), ("192.0.2.1", 1.0), ("192.0.2.2", 1.0)]
+    assert "dns.google: not attempted; heartbeat deadline exceeded" in result["error"]
+
+
+def test_a_name_that_will_not_resolve_is_not_evidence_the_network_is_down():
+    def ping(host, timeout_seconds, prefer_ipv6=False):
+        return {
+            "ok": False,
+            "rtt_ms": None,
+            "probed": False,
+            "error": f"{host} did not resolve (DNS lookup failed); no echo request was sent",
+        }
+
+    config = {"ping_host": "", "ping_host_name": "dns.google", "ping_timeout_seconds": 2.0}
+    result = app_module.ping_heartbeat(config, ping_fn=ping, clock=lambda: 0.0)
+    assert result["ok"] is False and result["probed"] is False
+
+
+def test_a_blank_host_name_turns_the_last_resort_off():
+    assert "dns.google" not in app_module.heartbeat_hosts(
+        {"ping_host": "8.8.8.8", "ping_host_name": ""}
+    )
+    assert app_module.heartbeat_hosts({"ping_host": "8.8.8.8", "ping_host_name": None}) == [
+        "8.8.8.8"
+    ]

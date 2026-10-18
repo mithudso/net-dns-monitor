@@ -77,6 +77,7 @@ def ping_once(
     host: str,
     timeout_seconds: float = 2.0,
     run_fn: RunFn = subprocess.run,
+    prefer_ipv6: bool = False,
 ) -> dict:
     """Send a single echo request and report the outcome.
 
@@ -117,9 +118,12 @@ def ping_once(
         raise ValueError(
             f"ping_timeout_seconds must be a positive finite number, got {timeout_seconds!r}"
         ) from None
-    if ":" in host:
-        # An IPv6 literal (a host name never contains a colon). See the module
-        # docstring: ping6 has no timeout flag, so the subprocess timeout is it.
+    if ":" in host or prefer_ipv6:
+        # An IPv6 literal (a host name never contains a colon), or a host name the
+        # caller wants resolved to an IPv6 address: `/sbin/ping` is IPv4-only, and
+        # on an IPv6-only DNS64/NAT64 network a name resolves to a synthesized
+        # 64:ff9b:: address that only ping6 can send to. See the module docstring:
+        # ping6 has no timeout flag, so the subprocess timeout is it.
         args = [PING6_BIN, "-c", "1", host]
         run_timeout = timeout_seconds
     else:
@@ -158,7 +162,17 @@ def ping_once(
     if result.returncode == 0:
         return {"ok": True, "rtt_ms": _parse_rtt_ms(result.stdout), "error": None}
 
-    if result.returncode == 68:
+    stderr_text = result.stderr or ""
+    # ping6 reports an unresolvable name as exit 1 with a getaddrinfo message, not
+    # as 68, and exit 1 is otherwise "no reply" -- so the message is what tells a
+    # lookup failure (nothing was sent) from a lost echo.
+    unresolved_ping6 = (
+        args[0] == PING6_BIN
+        and ":" not in host
+        and result.returncode == 1
+        and "getaddrinfo" in stderr_text
+    )
+    if result.returncode == 68 or unresolved_ping6:
         # A resolver failure, not a lost echo: nothing was sent, so this says
         # nothing about the network path. A DNS fault must not read as a
         # network one.

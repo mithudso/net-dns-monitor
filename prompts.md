@@ -103,3 +103,19 @@ Delta: 1
 Prompt:
 
 > 1. Yes, because it received a response. 2. I ran the sudo command.
+
+## v13 - 2026-10-17 - Apple rejection audit (TASK-417)
+
+Delta: 1
+
+Prompt:
+
+> Run your full workflow on /Users/mitch/dev/net-dns-monitor (branch master). Stele task TASK-417 (project_slug net-dns-monitor-cdgnu) is already created and CLAIMED by the parent session: do not create or claim another; complete it with a detailed summary at the end and link knowledge you write to it.
+>
+> User's authorization (verbatim from the session): the owner asked to "create an agent whose job it is to find all the ways that apple could or would reject this app, and fix them", then answered "Yes to all three" to: run the audit now, apply corrections to older reference files (done and pushed already), and commit/push the skills and agents repos (done). Fixing repo-owned findings and committing to master is authorized. Pushing net-dns-monitor's master to origin is authorized by the owner's standing rule for personal repos (commit straight to the canonical branch and push, never force-push). Uploading, submitting, replying to Apple, altool/Transporter, and App Store Connect actions are NOT authorized.
+>
+> Before any edit: append the exact user request above to prompts.md and record task, constraints, plan in memory.md per CLAUDE.md "Workflow records" (next vN section, increment Delta). Git status at session start was clean on master; HEAD abc9cd2. Preserve any unrelated changes that appear.
+>
+> Known inputs: catalog /Users/mitch/.claude/skills/apple-platform-publishing/references/apple-reviewer-model-and-rejection-catalog.md; dossiers rabbithole-2026-10-17-*.md in that directory. Priority suspects from the catalog for this repo: (1) Guideline 2.5.19 dormant/undocumented features in the store bundle (router, shell console, privileged repairs, sudoers writer, osascript, failover, SMTP/Slack) vs Notes in docs/APP_STORE_REVIEW_RESPONSE.md; (2) `itms-services` literal in bundled stdlib; (3) network.server entitlement justification; (4) 5.1.2(i) consent text, App Privacy label and docs/PRIVACY_POLICY.md vs actual outbound flows; (5) IPv4-literal probes on an IPv6-only NAT64 review network (2.5.5); (6) deprecated NSUserNotificationCenter via rumps (2.5.1); (7) 2.4.5(iii) login item default and consent; (8) donation/funding links reachable from reviewed pages (3.1.1); (9) Notes/description/label vs binary feature diff; (10) PrivacyInfo.xcprivacy validity.
+>
+> Do not launch the GUI. Do not paste anything into App Store Connect. Return the ledger summary, commits made, CI gate exit codes, and the owner-only UNVERIFIED actions with exact commands.

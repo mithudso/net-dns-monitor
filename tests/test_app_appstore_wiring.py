@@ -584,7 +584,7 @@ def test_store_build_with_the_router_enabled_builds_no_router_and_probes_no_priv
         monkeypatch.setattr(privileges, probe, refuse(f"privileges.{probe}"))
     monkeypatch.setattr("netdnsmonitor.app.install_main_menu", lambda on_action: None)
     monkeypatch.setattr(
-        "netdnsmonitor.app.RouterWindowController", refuse("RouterWindowController")
+        "netdnsmonitor.router_window.RouterWindowController", refuse("RouterWindowController")
     )
     app = build_app(
         tmp_path,
@@ -631,9 +631,11 @@ def test_store_build_dashboard_actions_print_the_unavailable_text(
     monkeypatch.setattr(privileges, "grant", refuse("privileges.grant"))
     monkeypatch.setattr(privileges, "revoke", refuse("privileges.revoke"))
     monkeypatch.setattr(
-        "netdnsmonitor.app.RouterWindowController", refuse("RouterWindowController")
+        "netdnsmonitor.router_window.RouterWindowController", refuse("RouterWindowController")
     )
-    monkeypatch.setattr("netdnsmonitor.app.ConsoleWindowController", refuse("the console"))
+    monkeypatch.setattr(
+        "netdnsmonitor.console_window.ConsoleWindowController", refuse("the console")
+    )
     app = build_app(tmp_path)
 
     app.handle_dashboard_action(action_id)
@@ -645,7 +647,9 @@ def test_store_build_dashboard_actions_print_the_unavailable_text(
 
 
 def test_store_build_console_and_login_item_handlers_say_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setattr("netdnsmonitor.app.ConsoleWindowController", refuse("the console"))
+    monkeypatch.setattr(
+        "netdnsmonitor.console_window.ConsoleWindowController", refuse("the console")
+    )
     app = build_app(tmp_path)
     sender = rumps.MenuItem("Start at Login")
 

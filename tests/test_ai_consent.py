@@ -103,3 +103,10 @@ def test_the_disclosure_names_the_recipient_and_every_part_of_the_bundle():
     for part in ("classification", "probe results", "troubleshooting step", "system log"):
         assert part in text
     assert "withdraw" in text
+
+
+def test_the_disclosure_says_what_the_step_outcomes_contain():
+    """Step outcomes are raw scutil and netstat output; consent has to name that."""
+    text = ai_consent.DISCLOSURE
+    for part in ("interface names", "IP addresses", "DNS servers", "search domains"):
+        assert part in text

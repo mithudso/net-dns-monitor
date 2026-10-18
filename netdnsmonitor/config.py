@@ -65,6 +65,14 @@ DEFAULT_CONFIG = {
     "ping_host_v6": "2001:4860:4860::8888",
     "ping_host": "8.8.8.8",
     "ping_fallback_host": "1.1.1.1",
+    # Pinged last, with ping6, and only with the time the three addresses above
+    # leave over. On an IPv6-only DNS64/NAT64 network (App Review's, Guideline
+    # 2.5.5) the IPv6 literal may have no route and `/sbin/ping` has no IPv4 to
+    # use, but a host NAME resolves to a synthesized NAT64 address that ping6 can
+    # reach. Without it the heartbeat reads that network as down and raises a
+    # "network failed" alert while every TCP and DNS probe works. Blank or null
+    # turns it off.
+    "ping_host_name": "dns.google",
     "ping_interval_seconds": 5,
     # Bounds the entire heartbeat across all targets, so keep it
     # comfortably under ping_interval_seconds.
@@ -622,7 +630,7 @@ def validate_config(config: dict) -> None:
     # so every heartbeat is a lost ping and the alert fires on a healthy network.
     # A value ping_once would refuse makes every heartbeat raise, so the
     # heartbeat dies silently. v6 and the fallback may be blank (off).
-    for key in ("ping_host", "ping_host_v6", "ping_fallback_host"):
+    for key in ("ping_host", "ping_host_v6", "ping_fallback_host", "ping_host_name"):
         if key not in config:
             continue
         value = config[key]

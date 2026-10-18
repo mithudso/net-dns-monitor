@@ -294,11 +294,14 @@ def _setup_py_plist() -> dict:
 
 def test_setup_py_declares_local_network_use_for_both_builds():
     # macOS 15+ shows this string in the local-network permission prompt that
-    # the peer broadcast and the gateway probe trigger; it belongs to every
+    # LAN peer discovery and a user-added local target trigger; it belongs to every
     # build, not only the store one, so it lives in the base PLIST.
     plist = _setup_py_plist()
     text = plist["NSLocalNetworkUsageDescription"]
     assert text.strip() and "local network" in text.lower()
+    # It must describe what actually triggers the prompt, not a check the default
+    # configuration never runs (Guideline 5.1.1(ii)).
+    assert "peer discovery" in text.lower()
     # The keys the App Store build adds from the build script's arguments.
     store = {
         **plist,
@@ -428,3 +431,152 @@ def test_capture_failure_carries_tool_stderr():
     cmd = [sys.executable, "-c", "import sys; sys.stderr.write('boom text'); sys.exit(3)"]
     with pytest.raises(SystemExit, match="boom text"):
         build.capture(cmd)
+
+
+# --- pruning the modules the store edition never runs ------------------------
+
+
+def _fake_bundle(tmp_path, sources):
+    """A bundle holding a `netdnsmonitor` package of the given {name: source}."""
+    app = tmp_path / "Net-DNS-Monitor.app"
+    package = app / "Contents" / "Resources" / "lib" / "python3.14" / "netdnsmonitor"
+    cache = package / "__pycache__"
+    cache.mkdir(parents=True)
+    for name, source in sources.items():
+        (package / f"{name}.py").write_text(source)
+        (cache / f"{name}.cpython-314.pyc").write_bytes(b"pyc")
+        (cache / f"{name}.cpython-313.pyc").write_bytes(b"pyc")
+    return app, package
+
+
+def test_prune_removes_the_omitted_modules_and_every_cached_bytecode(tmp_path):
+    app, package = _fake_bundle(
+        tmp_path,
+        {
+            "app": "def run():\n    from netdnsmonitor import router\n",
+            "router": "SUDO = '/usr/bin/sudo'\n",
+            "console": "",
+            "privileges": "SUDO = '/usr/bin/sudo'\n",
+        },
+    )
+    removed = build.prune_store_bundle(app, omitted=("router", "console"))
+    assert not (package / "router.py").exists() and not (package / "console.py").exists()
+    assert not list((package / "__pycache__").glob("router.*")), "stale pyc of an omitted module"
+    assert not list((package / "__pycache__").glob("console.*"))
+    assert (package / "privileges.py").exists() and (package / "app.py").exists()
+    # two sources and four omitted bytecode files, plus the other-version bytecode
+    # of the two modules that stay
+    assert len(removed) == 8
+    assert not list((package / "__pycache__").glob("*.cpython-313.pyc"))
+    assert (package / "__pycache__" / "app.cpython-314.pyc").exists()
+    assert build.omitted_modules_present(app, omitted=("router", "console")) == []
+
+
+def test_prune_refuses_a_module_that_imports_an_omitted_one_at_module_level(tmp_path):
+    app, _ = _fake_bundle(
+        tmp_path,
+        {"app": "from netdnsmonitor.router import Router\n", "router": ""},
+    )
+    with pytest.raises(SystemExit, match=r"app\.py:1 -> router"):
+        build.prune_store_bundle(app, omitted=("router",))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from netdnsmonitor import console\n",
+        "from netdnsmonitor import alert, console\n",
+        "import netdnsmonitor.console\n",
+        "from netdnsmonitor.console_window import ConsoleWindowController\n",
+    ],
+)
+def test_module_level_import_detection_covers_every_import_form(tmp_path, line):
+    _, package = _fake_bundle(tmp_path, {"app": line, "console": "", "console_window": ""})
+    found = build.module_level_imports_of_omitted(package, ("console", "console_window"))
+    assert found and found[0].startswith("app.py:1 -> ")
+
+
+def test_an_import_inside_a_function_is_allowed(tmp_path):
+    _, package = _fake_bundle(
+        tmp_path,
+        {
+            "app": "def open():\n    from netdnsmonitor.router_window import X\n",
+            "router_window": "",
+        },
+    )
+    assert build.module_level_imports_of_omitted(package, ("router_window",)) == []
+
+
+def test_the_real_package_has_no_module_level_import_of_an_omitted_module():
+    """The check the build runs, run on the source tree, so a regression fails in CI."""
+    package = ROOT / "netdnsmonitor"
+    assert build.module_level_imports_of_omitted(package) == []
+    for name in build.STORE_OMITTED_MODULES:
+        assert (package / f"{name}.py").exists(), f"{name} is listed but no longer exists"
+
+
+# --- privacy manifest (TN3181) ----------------------------------------------
+
+
+def _manifest(**overrides):
+    base = {
+        "NSPrivacyTracking": False,
+        "NSPrivacyTrackingDomains": [],
+        "NSPrivacyCollectedDataTypes": [],
+        "NSPrivacyAccessedAPITypes": [
+            {
+                "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
+                "NSPrivacyAccessedAPITypeReasons": ["35F9.1"],
+            }
+        ],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_the_shipped_privacy_manifest_satisfies_tn3181():
+    path = ROOT / "packaging" / "appstore" / "PrivacyInfo.xcprivacy"
+    manifest = plistlib.loads(path.read_bytes())
+    assert build.privacy_manifest_problems(manifest) == []
+    assert manifest["NSPrivacyTracking"] is False
+
+
+@pytest.mark.parametrize(
+    ("overrides", "fragment"),
+    [
+        ({"NSPrivacyTracking": "NO"}, "must be a Boolean"),
+        ({"NSPrivacyTrackingDomains": "x"}, "array of strings"),
+        ({"NSPrivacyTracking": True}, "is true but"),
+        ({"NSPrivacyTrackingDomains": ["a.example"]}, "is false but"),
+        ({"NSPrivacyAccessedAPITypes": []}, "absent or a non-empty array"),
+        (
+            {
+                "NSPrivacyAccessedAPITypes": [
+                    {
+                        "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
+                        "NSPrivacyAccessedAPITypeReasons": ["C617.1"],
+                    }
+                ]
+            },
+            "does not define",
+        ),
+        (
+            {
+                "NSPrivacyAccessedAPITypes": [
+                    {"NSPrivacyAccessedAPIType": "Nope", "NSPrivacyAccessedAPITypeReasons": ["x"]}
+                ]
+            },
+            "unknown NSPrivacyAccessedAPIType",
+        ),
+        ({"NSPrivacyCollectedDataTypes": [{"NSPrivacyCollectedDataType": "x"}]}, "lacks one of"),
+    ],
+)
+def test_privacy_manifest_problems_name_each_tn3181_invalid_case(overrides, fragment):
+    problems = build.privacy_manifest_problems(_manifest(**overrides))
+    assert any(fragment in problem for problem in problems), problems
+
+
+def test_a_manifest_with_no_api_types_key_is_valid():
+    manifest = _manifest()
+    del manifest["NSPrivacyAccessedAPITypes"]
+    assert build.privacy_manifest_problems(manifest) == []

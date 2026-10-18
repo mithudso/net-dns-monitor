@@ -19,7 +19,6 @@ import rumps
 import yaml
 
 import netdnsmonitor
-from netdnsmonitor import app as app_module
 from netdnsmonitor.app import (
     LOGIN_AGENT_LABEL,
     OPEN_BIN,
@@ -405,7 +404,7 @@ def test_the_router_window_reads_the_live_config_and_the_apps_path(tmp_path, mon
     window then wrote the stale copy back over the user's edits.
     """
     RecordingController.instances = []
-    monkeypatch.setattr(app_module, "RouterWindowController", RecordingController)
+    monkeypatch.setattr("netdnsmonitor.router_window.RouterWindowController", RecordingController)
     app = build_app(tmp_path)
 
     app.open_router_window(None)
@@ -439,7 +438,7 @@ def test_the_router_windows_ai_check_reads_the_key_from_the_apps_credential_stor
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     RecordingController.instances = []
-    monkeypatch.setattr(app_module, "RouterWindowController", RecordingController)
+    monkeypatch.setattr("netdnsmonitor.router_window.RouterWindowController", RecordingController)
     app = build_app(tmp_path)
     keychain = KeychainWithKey({"ANTHROPIC_API_KEY": "sk-ant-keychain-not-real"})
     app.credentials = CredentialStore(env={}, backend_factory=lambda: keychain)
@@ -460,7 +459,7 @@ def test_a_router_window_that_fails_to_open_notifies_and_is_rebuilt_next_time(
         def show(self):
             raise RuntimeError("no window server at /private/path")
 
-    monkeypatch.setattr(app_module, "RouterWindowController", BrokenController)
+    monkeypatch.setattr("netdnsmonitor.router_window.RouterWindowController", BrokenController)
     app = build_app(tmp_path)
 
     app.open_router_window(None)

@@ -87,6 +87,12 @@ ping_host: "8.8.8.8"
 # reducing alerts caused by single-host ICMP rate limiting. A reply proves
 # only that this target answered on this path.
 ping_fallback_host: "1.1.1.1"
+# Pinged last, with ping6, using only the time the three addresses above leave
+# over. On an IPv6-only DNS64/NAT64 network (the network App Review tests on) the
+# IPv6 literal may have no route and `/sbin/ping` has no IPv4 to use, but a host
+# NAME resolves to a synthesized NAT64 address that ping6 can reach; without it
+# the heartbeat reads that network as down. Blank or null turns it off.
+ping_host_name: "dns.google"
 ping_interval_seconds: 5
 
 # Bounds the entire heartbeat, shared and sliced across all targets.

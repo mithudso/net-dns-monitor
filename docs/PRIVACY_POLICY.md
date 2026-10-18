@@ -44,9 +44,10 @@ or by removing items from Keychain Access. The forensic journal rotates at
 
 To test your connection, the app contacts the network addresses in its
 settings. By default these are Cloudflare (1.1.1.1 and 2606:4700:4700::1111) and
-Google (8.8.8.8 and 2001:4860:4860::8888). It
-also resolves `api.anthropic.com` as a DNS control check and resolves any
-domains you add. These checks send ordinary connection attempts and DNS
+Google (8.8.8.8 and 2001:4860:4860::8888). If none of
+those answers a ping, it pings the name `dns.google` over IPv6, which also works
+on IPv6-only networks. It also resolves `api.anthropic.com` as a DNS control
+check and resolves any domains you add. These checks send ordinary connection attempts and DNS
 queries. They carry no personal information beyond what any network
 connection reveals, such as your public IP address.
 
@@ -58,7 +59,10 @@ model run by Anthropic, for a diagnosis. Each such request contains:
 
 - the incident classification, for example "dns" or "network";
 - the connectivity check results, including the domain names that were checked;
-- the outcome of each troubleshooting step.
+- the outcome of each troubleshooting step. That text is the output of the
+  checks the app runs, so it includes your network interface names, this Mac's
+  IP addresses (IPv4 and IPv6), the IP addresses of your router and DNS
+  servers, and the DNS search domains your network assigns.
 
 Text you list under "sensitive strings" in Settings is replaced with
 `[REDACTED]` before sending.
@@ -107,7 +111,9 @@ The app is a network utility and is not directed at children.
 ## Changes
 
 If what the app sends changes, this policy will be updated and the app will
-ask for permission again before sending anything new to Anthropic.
+ask for permission again before sending anything new to Anthropic. The app
+already did this once: version 2 of the permission (2026-10-17) names the
+network details above, so permission given under version 1 no longer counts.
 
 ## Contact
 

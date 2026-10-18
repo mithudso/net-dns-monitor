@@ -218,3 +218,37 @@ Delta: 1
 on ConnectionRefusedError (an RST is the target answering). Verified read-only:
 `launchctl print-disabled system` shows homebrew.mxcl.dnsmasq, com.apple.bootpd
 and com.custom.router.nat disabled; no dnsmasq/bootpd process. 2532 tests pass.
+
+## v13 - 2026-10-17 - Apple rejection audit (TASK-417)
+
+Delta: 1
+
+Active task: TASK-417 (claimed by the parent session). Agent: apple-review-rejection-auditor.
+Constraints: no upload, submit, altool, Transporter, App Store Connect or message to
+Apple; no GUI launch; CLAUDE.md non-negotiables 1-10 bind every fix; never obfuscate
+code to pass a scan (2.5.19); commit to master and push, never force-push.
+Plan: walk catalog 3A/3B/3C against a fresh store bundle build, then an adversarial
+pass; fix repo-owned FAILs with the smallest change; run the CI gate and
+`scripts/check_docs.py --collect-tests`; commit only this session's files.
+Starting state: HEAD abc9cd2, clean tree.
+
+Completed (v13, commit 1): built the store bundle (`build_appstore.py adhoc`, 97 MB) and walked
+catalog 3A/3B/3C against it. Fixed: the bundle shipped the shell console, router and `netns`
+CLI modules (2.5.19/2.4.5(v)); `prune_store_bundle` now deletes them and a bundle-interpreter
+import check proves the rest still imports (app.py imports became function-level); a
+valid `PrivacyInfo.xcprivacy` (the build applies the TN3181 invalid cases; an EMPTY
+required-reason array is invalid); `NSLocalNetworkUsageDescription` names what triggers the
+prompt; consent text v2 names interface names, IP addresses, router/DNS addresses and search
+domains (the step outcomes are raw `scutil`/`netstat` output); heartbeat ends with
+`ping_host_name` (`dns.google`) over ping6 for IPv6-only NAT64 networks (2.5.5); setup.py
+excludes 28 unused third-party/stdlib packages (97 MB to 64 MB, funding strings gone);
+review Notes, reply, policy and submission docs rewritten to match. Found, not fixed: the
+hosted privacy policy is stale and its site nav carries a funding link (other repo);
+`NSUserNotificationCenter` is still deprecated tech; `privileges.py`/`repair_executor.py`/
+`failover.py` still ship dormant (disclosed in Notes); LSMinimumSystemVersion is now 27.0
+(Homebrew Python is built for macOS 27; GA 2026-09-14). Another session (TASK-418) is editing
+repair_executor, app.py and the build script for editable remediation scripts: its store
+gating must keep `remediation_editor` off and the scripts directory out of reach
+(Guideline 2.5.2). Verification: isolated worktree at HEAD plus these hunks, ruff clean,
+2559 passed, check_docs passes.
+

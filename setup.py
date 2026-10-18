@@ -32,15 +32,19 @@ PLIST = {
     "CFBundleVersion": "1",
     "LSUIElement": False,
     # macOS 15 and later gate traffic to local-network addresses behind a
-    # per-app permission (Apple TN3179). This app trips it on purpose: the peer
-    # announcement is a UDP broadcast and the interface probe reaches the
-    # gateway. The prompt appears either way; this string is the reason the
-    # user sees in it, and a store build without it is refused by
-    # build_appstore.py.
+    # per-app permission (Apple TN3179). The default configuration never
+    # contacts one: heartbeat and connectivity probes go to public addresses
+    # (1.1.1.1, 8.8.8.8, Cloudflare and Google IPv6) and the system resolver.
+    # The prompt appears when the user turns on LAN peer discovery (a UDP
+    # broadcast; off by default in the store build) or adds a local address to
+    # monitor, and the direct build's failover probes a gateway the same way.
+    # This string is the only reason the user sees in the prompt, so it names
+    # exactly those cases (Guideline 5.1.1(ii)); a store build without it is
+    # refused by build_appstore.py.
     "NSLocalNetworkUsageDescription": (
-        "Net-DNS-Monitor checks whether your router and other devices on your local "
-        "network are reachable, and announces itself to other copies of the app on "
-        "the same network."
+        "Net-DNS-Monitor sends a small status broadcast to other Macs on your local "
+        "network, and listens for theirs, when you turn on LAN peer discovery. It also "
+        "contacts local addresses you add to monitor, such as your router."
     ),
 }
 
@@ -85,7 +89,62 @@ if os.environ.get("NETDNS_BUILD") == "appstore":
     # liblzma, whose bottle is built for the host macOS, and
     # build_appstore.py sets LSMinimumSystemVersion from the highest minos in
     # the bundle -- so that one dylib raised the store floor to macOS 27.
-    OPTIONS["excludes"] = ["lzma", "_lzma"]
+    #
+    # The rest are third-party and standard-library packages the app never
+    # imports. They arrive because the build venv holds more than
+    # requirements.txt (anthropic's optional `mcp` import drags in a web-server
+    # stack) and because py2app follows every import under `packages`. Dropping
+    # them removes about 25 MB, the oldest SDK stamps, and strings such as
+    # funding links in third-party package metadata that App Review would read
+    # as part of the app. Each name was checked by importing the pruned bundle
+    # and building an Anthropic client (build_appstore.import_smoke_test).
+    OPTIONS["excludes"] = [
+        "lzma",
+        "_lzma",
+        "mcp",
+        "uvicorn",
+        "starlette",
+        "sse_starlette",
+        "httptools",
+        "watchfiles",
+        "websockets",
+        "requests",
+        "urllib3",
+        "charset_normalizer",
+        "cryptography",
+        "jsonschema",
+        "jsonschema_specifications",
+        "referencing",
+        "rpds",
+        "dns",
+        "email_validator",
+        "pydantic_settings",
+        "python_multipart",
+        "dotenv",
+        "tomli",
+        "markdown_it",
+        "mdurl",
+        "httpx_sse",
+        "setuptools",
+        "pkg_resources",
+        "_distutils_hack",
+        "tkinter",
+        "unittest",
+        "test",
+        "pydoc_data",
+        "_pyrepl",
+        "xmlrpc",
+        "aiohttp",
+        "aiosignal",
+        "frozenlist",
+        "multidict",
+        "propcache",
+        "yarl",
+        "uvloop",
+    ]
+    # Contents/Resources/PrivacyInfo.xcprivacy; build_appstore.py refuses a
+    # bundle whose copy is missing or fails its TN3181 checks (ITMS-91056).
+    OPTIONS["resources"] = ["packaging/appstore/PrivacyInfo.xcprivacy"]
     icon = os.environ.get("NETDNS_ICON")
     if icon:
         OPTIONS["iconfile"] = icon

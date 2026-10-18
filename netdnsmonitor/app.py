@@ -41,7 +41,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Mapping
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import rumps
 import yaml
@@ -49,7 +49,6 @@ import yaml
 from netdnsmonitor import (
     ai_consent,
     alert,
-    console,
     credentials,
     credentials_prompt,
     distribution,
@@ -61,7 +60,6 @@ from netdnsmonitor import (
 from netdnsmonitor.anthropic_escalator import default_client, make_escalator
 from netdnsmonitor.classifier import Classification, classify
 from netdnsmonitor.config import ConfigError, load_config
-from netdnsmonitor.console_window import ConsoleWindowController
 from netdnsmonitor.dashboard import (
     ALL_ACTIONS,
     DashboardWindow,
@@ -109,12 +107,6 @@ from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.resolution_log import append_resolution_findings
 from netdnsmonitor.resolution_prober import resolve_domains_parallel
-from netdnsmonitor.router import PF_ANCHOR, Router
-from netdnsmonitor.router_window import (
-    RouterWindowController,
-    collect_diagnostics,
-    get_interfaces,
-)
 from netdnsmonitor.settings_window import (
     FIELDS as SETTINGS_FIELDS,
 )
@@ -138,6 +130,9 @@ from netdnsmonitor.status import (
     resolution_counts,
     status_state,
 )
+
+if TYPE_CHECKING:
+    from netdnsmonitor.console_window import ConsoleWindowController
 
 # The router's settings that are not named router_*.
 ROUTER_SETTING_KEYS = frozenset(
@@ -648,6 +643,7 @@ def heartbeat_hosts(config: dict) -> list[str]:
                 config.get("ping_host_v6"),
                 config["ping_host"],
                 config.get("ping_fallback_host"),
+                config.get("ping_host_name"),
             )
             if host
         )
@@ -676,6 +672,12 @@ def ping_heartbeat(
     Looks `ping_once` up at call time, which is the seam the suite patches.
     """
     hosts = heartbeat_hosts(config)
+    name = config.get("ping_host_name")
+    # The host name goes last and is not part of the split: it asks ping6 for an
+    # IPv6 (NAT64-synthesized) path, and is worth only what the addresses leave.
+    # Slicing across it too would shrink every address's share on a healthy
+    # dual-stack network, where it is never reached.
+    addresses = [host for host in hosts if host != name]
     failures = []
     measured = False
     fn = ping_once if ping_fn is None else ping_fn
@@ -688,7 +690,10 @@ def ping_heartbeat(
         # A blackholing first target must leave time to ask the others. Fast
         # failures return their unused slice to the remaining targets.
         try:
-            result = fn(host, timeout_seconds=remaining / (len(hosts) - i))
+            if host == name:
+                result = fn(host, timeout_seconds=remaining, prefer_ipv6=True)
+            else:
+                result = fn(host, timeout_seconds=remaining / (len(addresses) - i))
         except ValueError as exc:
             # ping_once refuses a host that could be read as a ping option.
             # load_config refuses the same hosts, but a caller can pass a config
@@ -787,6 +792,8 @@ def router_nat_text(run_fn: Callable[..., object]) -> str:
     `sudo -n`: reading pf needs root, and a sudo that may prompt waits on a
     terminal this app does not have.
     """
+    from netdnsmonitor.router import PF_ANCHOR
+
     argv = [privileges.SUDO, "-n", PFCTL_BIN, "-a", PF_ANCHOR, "-s", "nat"]
     try:
         result = run_fn(
@@ -805,7 +812,7 @@ class NetDnsMonitorApp(rumps.App):
     def __init__(
         self,
         config_path: str = DEFAULT_CONFIG_PATH,
-        router_factory: Callable[..., object] = Router,
+        router_factory: Optional[Callable[..., object]] = None,
         capabilities: Optional[Capabilities] = None,
         credential_store: Optional[credentials.CredentialStore] = None,
         consent_store: Optional[ai_consent.ConsentStore] = None,
@@ -978,9 +985,15 @@ class NetDnsMonitorApp(rumps.App):
         # dashboard button the *same* console, sharing one cwd and one history
         # rather than opening two that silently disagree.
         self.console: Optional[ConsoleWindowController] = None
-        # A console command still running at quit would outlive the app.
-        # `callbacks` is a set, so the many apps a test run builds register once.
-        rumps.events.before_quit.register(console.kill_running)
+        if self.capabilities.shell_console:
+            # A console command still running at quit would outlive the app.
+            # `callbacks` is a set, so the many apps a test run builds register once.
+            # Imported here, not at module level: the store bundle deletes the
+            # console modules (build_appstore.prune_store_bundle), so this line
+            # must be unreachable there.
+            from netdnsmonitor import console
+
+            rumps.events.before_quit.register(console.kill_running)
         self.router_window = None
         # Router menu work runs on workers and reports through this queue: Start
         # and Stop wait on the macOS admin dialog, and the reads shell out.
@@ -1030,6 +1043,10 @@ class NetDnsMonitorApp(rumps.App):
         # The menu's Start item and the router window are the only ways to start it.
         self.router = None
         if self.config["router_enabled"] and self.capabilities.router:
+            if router_factory is None:
+                # Imported here for the same reason as the console: the store
+                # bundle has no router module.
+                from netdnsmonitor.router import Router as router_factory
             self.router = router_factory(
                 wan_if=self.config["wan_interface"],
                 lan_if=self.config["lan_interface"],
@@ -3043,6 +3060,8 @@ class NetDnsMonitorApp(rumps.App):
             return
         try:
             if self.console is None:
+                from netdnsmonitor.console_window import ConsoleWindowController
+
                 self.console = ConsoleWindowController(status=self.status_snapshot)
             self.console.show()
         except Exception as exc:  # noqa: BLE001 - a failed window must say so
@@ -3193,6 +3212,8 @@ class NetDnsMonitorApp(rumps.App):
                 # The key through the credential store: an app started by
                 # LaunchServices has no shell environment, so a Keychain key is
                 # the only one it can have.
+                from netdnsmonitor.router_window import RouterWindowController
+
                 self.router_window = RouterWindowController(
                     config_getter=lambda: self.config,
                     config_path=self.config_path,
@@ -3322,6 +3343,8 @@ class NetDnsMonitorApp(rumps.App):
         run_fn = self.router_run_fn
 
         def work() -> str:
+            from netdnsmonitor.router_window import get_interfaces
+
             names = get_interfaces(run_fn)
             if not names:
                 return "Could not list network interfaces."
@@ -3336,6 +3359,8 @@ class NetDnsMonitorApp(rumps.App):
         wan, lan = self._router_interfaces()
 
         def work() -> str:
+            from netdnsmonitor.router_window import collect_diagnostics
+
             lines = collect_diagnostics(run_fn, wan, lan)
             lines.append("\n" + router_nat_text(run_fn))
             return "\n".join(lines)
