@@ -75,7 +75,7 @@ The app is not in a regulated industry and contains no protected third-party mat
 Mitchell Hudson
 ```
 
-## 2. App Review Information → Notes (2,876 characters — limit 4,000)
+## 2. App Review Information → Notes (3,013 characters — limit 4,000)
 
 ```text
 NO ACCOUNT NEEDED. No login, no demo account, no sample files, no in-app purchases.
@@ -92,7 +92,7 @@ HOW TO REVIEW
 7. Menu > Allow Claude diagnosis...: consent dialog listing exactly what would be sent to Anthropic. Menu > Withdraw Claude permission revokes it.
 8. Menu > Privacy Policy opens https://llms-explorer.com/net-dns-monitor/privacy/
 
-NOT IN THE MAC APP STORE EDITION: switching the network service order, privileged repairs (DNS cache restart, DHCP renew), reading the system log, the router, the shell console, and the login-item agent. The shell console, router and command-line code are not in this bundle. The source for privileged repairs and the network-order switch is in the bundle but never runs: the app turns it off when it detects the App Sandbox, and the menus and buttons for it do not exist. A step that would need it reports UNAVAILABLE_IN_APP_STORE_BUILD and says nothing was changed. Nothing is hidden or obfuscated.
+NOT IN THE MAC APP STORE EDITION: switching the network service order, privileged repairs (DNS cache restart, DHCP renew), reading the system log, the router, the shell console, and the login-item agent. The shell console, router and command-line code are not in this bundle. The source for privileged repairs and the network-order switch is in the bundle but never runs: the app turns it off when it detects the App Sandbox, and the menus and buttons for it do not exist. A step that would need it reports UNAVAILABLE_IN_APP_STORE_BUILD and says nothing was changed. Nothing is hidden or obfuscated. Each troubleshooting step runs from a Python script shipped inside the signed bundle; this edition cannot edit, add or download scripts.
 
 ENTITLEMENTS (no temporary exceptions)
 - com.apple.security.network.client: outbound reachability probes, DNS lookups, and optional user-configured HTTPS (Anthropic, Slack) and SMTP.
