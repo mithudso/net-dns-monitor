@@ -283,8 +283,9 @@ Done: all seven plan items. Gate (clean tree of this task alone): ruff check and
 clean, 2617 tests pass, `check_docs.py --collect-tests` passes. Headless AppKit smoke
 run of the editor window built it, checked, saved, and ran a script (it caught a real
 bug: a helper method on the NSObject subclass was read as a selector).
-Open: the editor and its window are in `STORE_OMITTED_MODULES`, but no store bundle
-was built to confirm the prune and the shipped `remediations/*.py` files survive py2app;
-the editor window has not been used by hand in the menu-bar app (cannot be automated).
+Store bundle check (2026-10-17, `build_appstore.py adhoc`, exit 0, ad-hoc signed): the editor
+and window modules were pruned, `remediation_scripts.py` and all nine `remediations/*.py` are in
+the bundle, and the pruned bundle imports. The editor window has not been used by hand in the
+menu-bar app (cannot be automated); the owner runs that click-through.
 The store bundle's `exec(compile(...))` in `remediation_scripts.execute` runs bundled,
 signed built-ins only; a 2.5.2 reviewer scanning for `exec` may ask.
