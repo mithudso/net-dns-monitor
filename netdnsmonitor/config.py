@@ -214,6 +214,16 @@ DEFAULT_CONFIG = {
     "smtp_username": None,
     "smtp_starttls": True,
     "notify_timeout_seconds": 5,
+    # --- remediation scripts --------------------------------------------
+    # Each ladder step is a Python script (docs/REMEDIATION_SCRIPTS.md). Edits to
+    # the shipped ones and your own scripts live in this folder. The Mac App Store
+    # build ignores all three keys: it runs the shipped scripts only.
+    "remediation_scripts_dir": "~/Library/Application Support/net-dns-monitor/remediations",
+    # False runs the shipped scripts exactly as shipped and ignores every file in
+    # the folder: a way to rule your own edits out while diagnosing a problem.
+    "custom_remediation_scripts_enabled": True,
+    # A script still running after this is reported as `unknown:` and abandoned.
+    "remediation_script_timeout_seconds": 60,
     # --- automatic network failover -------------------------------------
     # Off by default, and deliberately so: this is the only feature that
     # rewrites system network configuration, and it cannot guess which of the
@@ -291,6 +301,7 @@ PATH_KEYS = (
     "history_path",
     "learned_domains_path",
     "failover_state_path",
+    "remediation_scripts_dir",
 )
 
 # Keys whose consumers iterate them. A str is iterable too, so a bare string is
@@ -341,6 +352,7 @@ POSITIVE_KEYS = (
     "log_view_poll_seconds",
     "log_view_timeout_seconds",
     "notify_timeout_seconds",
+    "remediation_script_timeout_seconds",
     "failover_speedtest_timeout_seconds",
     # A cap of 0 or less would make every throughput sample empty.
     "failover_speedtest_max_bytes",

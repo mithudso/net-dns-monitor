@@ -39,6 +39,7 @@ from typing import Callable, Optional
 
 import yaml
 
+from netdnsmonitor import ui_style
 from netdnsmonitor.config import (
     DEFAULT_CONFIG,
     PATH_KEYS,
@@ -48,6 +49,7 @@ from netdnsmonitor.config import (
     target_problem,
     validate_config,
 )
+from netdnsmonitor.ui_catalog import CONTROL_TIPS, GROUP_TIPS, SETTING_TIPS
 
 # (key, label, kind). Grouped in display order. `kind` drives parsing, and a
 # wrong kind is the difference between 5 and "5" reaching bind() or a timer.
@@ -187,6 +189,14 @@ GROUPS = [
         ],
     ),
     (
+        "Remediation scripts",
+        [
+            ("custom_remediation_scripts_enabled", "Run my edited and custom scripts", "bool"),
+            ("remediation_scripts_dir", "Scripts folder", "str"),
+            ("remediation_script_timeout_seconds", "Script timeout (seconds)", "float"),
+        ],
+    ),
+    (
         "Files and folders",
         [
             ("reports_dir", "Incident reports", "str"),
@@ -290,6 +300,10 @@ NEEDS_RESTART = {
     "failover_speedtest_port",
     "failover_speedtest_timeout_seconds",
     "failover_speedtest_max_bytes",
+    # The script store and the executor's timeout are built once in App.__init__.
+    "custom_remediation_scripts_enabled",
+    "remediation_scripts_dir",
+    "remediation_script_timeout_seconds",
     # The Router is built once in App.__init__ but never started there: only
     # Router > Start or the router window starts it. That object is built from
     # these keys at launch, so a change here needs a restart to reach it.
@@ -643,7 +657,7 @@ def settings_notice(
 
 # --- the window ------------------------------------------------------------
 
-WINDOW_WIDTH = 560
+WINDOW_WIDTH = 700
 ROW_HEIGHT = 26
 LABEL_WIDTH = 300
 FIELD_WIDTH = 210
@@ -652,6 +666,8 @@ GROUP_GAP = 24
 # past the width of the window.
 NOTICE_HEIGHT = 70
 CHROME_HEIGHT = 76 + NOTICE_HEIGHT
+# The row of options that are not config keys (login item, credentials, ...).
+APP_ROW_HEIGHT = 40
 
 
 class SettingsWindow:
@@ -663,12 +679,17 @@ class SettingsWindow:
         config_path_display: Optional[str] = None,
         restart_hint: Optional[str] = None,
         hidden_keys: frozenset = frozenset(),
+        app_options: Optional[list] = None,
+        on_app_action: Optional[Callable[[str], None]] = None,
     ):
         import AppKit
 
         from netdnsmonitor.dashboard import _label, _make_button_target
 
         self.on_save = on_save
+        self.on_app_action = on_app_action
+        self.app_options = list(app_options or [])
+        self.app_controls = {}
         self.fields = {}
         # Features the current build cannot run are not offered. A hidden key
         # has no field, so collect never sees it and save never writes it.
@@ -684,9 +705,10 @@ class SettingsWindow:
         rows = sum(len(fields) for _g, fields in visible_groups)
         content_height = rows * ROW_HEIGHT + len(visible_groups) * GROUP_GAP + 20
         visible_height = min(620, content_height)
+        app_row = APP_ROW_HEIGHT if self.app_options else 0
 
         self.window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            AppKit.NSMakeRect(0, 0, WINDOW_WIDTH, visible_height + CHROME_HEIGHT),
+            AppKit.NSMakeRect(0, 0, WINDOW_WIDTH, visible_height + CHROME_HEIGHT + app_row),
             AppKit.NSWindowStyleMaskTitled
             | AppKit.NSWindowStyleMaskClosable
             | AppKit.NSWindowStyleMaskResizable,
@@ -715,7 +737,7 @@ class SettingsWindow:
             AppKit.NSMakeRect(16, 52, WINDOW_WIDTH - 32, visible_height)
         )
         scroll.setHasVerticalScroller_(True)
-        scroll.setBorderType_(AppKit.NSBezelBorder)
+        ui_style.style_pane(AppKit, scroll)
         document = AppKit.NSView.alloc().initWithFrame_(
             AppKit.NSMakeRect(0, 0, WINDOW_WIDTH - 52, content_height)
         )
@@ -723,20 +745,20 @@ class SettingsWindow:
         y = content_height - 10
         for group, fields in visible_groups:
             y -= GROUP_GAP
-            document.addSubview_(
-                _label(AppKit, AppKit.NSMakeRect(8, y, LABEL_WIDTH, 18), group.upper(), 10.0)
-            )
+            heading = _label(AppKit, AppKit.NSMakeRect(8, y, LABEL_WIDTH, 18), group.upper(), 10.0)
+            ui_style.tip(heading, GROUP_TIPS.get(group, group))
+            document.addSubview_(heading)
             for key, label, _kind in fields:
                 y -= ROW_HEIGHT
                 suffix = "  (restart)" if key in NEEDS_RESTART else ""
-                document.addSubview_(
-                    _label(
-                        AppKit,
-                        AppKit.NSMakeRect(8, y + 3, LABEL_WIDTH, 18),
-                        label + suffix,
-                        10.5,
-                    )
+                row_label = _label(
+                    AppKit,
+                    AppKit.NSMakeRect(8, y + 3, LABEL_WIDTH, 18),
+                    label + suffix,
+                    10.5,
                 )
+                ui_style.tip(row_label, SETTING_TIPS[key])
+                document.addSubview_(row_label)
                 field = AppKit.NSTextField.alloc().initWithFrame_(
                     AppKit.NSMakeRect(LABEL_WIDTH + 12, y, FIELD_WIDTH, 21)
                 )
@@ -745,10 +767,14 @@ class SettingsWindow:
                         10.5, AppKit.NSFontWeightRegular
                     )
                 )
+                field.setIdentifier_(key)
+                ui_style.tip(field, SETTING_TIPS[key])
                 document.addSubview_(field)
                 self.fields[key] = field
 
         scroll.setDocumentView_(document)
+        # An unflipped document opens showing its bottom; start at the first group.
+        document.scrollPoint_(AppKit.NSMakePoint(0, content_height))
         outer.addSubview_(scroll)
 
         for index, (title, action, key) in enumerate(
@@ -758,7 +784,8 @@ class SettingsWindow:
                 AppKit.NSMakeRect(WINDOW_WIDTH - 32 - (index + 1) * 104, 14, 96, 28)
             )
             button.setTitle_(title)
-            button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+            ui_style.style_button(AppKit, button, prominent=action == "save")
+            ui_style.tip(button, CONTROL_TIPS[action])
             button.setTarget_(self._target)
             button.setAction_("invoke:")
             button.setIdentifier_(action)
@@ -770,10 +797,68 @@ class SettingsWindow:
         self.status = _label(
             AppKit, AppKit.NSMakeRect(16, 6, WINDOW_WIDTH - 32 - 2 * 104 - 16, 44), "", 9.5
         )
+        ui_style.tip(self.status, CONTROL_TIPS["editor_status"])
         outer.addSubview_(self.status)
+
+        self._add_app_options(AppKit, outer, visible_height + CHROME_HEIGHT)
+        self.glass_kind = ui_style.apply_window_glass(AppKit, self.window)
+
+    def _add_app_options(self, AppKit, outer, top):
+        """The options that are not config keys, in a row above the notice."""
+        x = 16
+        for spec in self.app_options:
+            if spec[0] == "check":
+                _kind, action_id, title, tooltip = spec
+                control = AppKit.NSButton.checkboxWithTitle_target_action_(
+                    title, self._target, "invoke:"
+                )
+                width = len(title) * 7 + 28
+                control.setFrame_(AppKit.NSMakeRect(x, top + 8, width, 22))
+                x += width + 6
+            elif spec[0] == "menu":
+                _kind, title, tooltip, entries = spec
+                control, items = ui_style.make_pulldown(
+                    AppKit,
+                    AppKit.NSMakeRect(x, top + 6, 112, 26),
+                    title,
+                    tooltip,
+                    entries,
+                    self._target,
+                )
+                action_id = f"menu_{title.lower()}"
+                self.app_controls.update(items)
+                x += 118
+            else:
+                _kind, action_id, title, tooltip = spec
+                control = AppKit.NSButton.alloc().initWithFrame_(
+                    AppKit.NSMakeRect(x, top + 6, 104, 26)
+                )
+                control.setTitle_(title)
+                control.setTarget_(self._target)
+                control.setAction_("invoke:")
+                ui_style.style_button(AppKit, control)
+                x += 110
+            control.setIdentifier_(action_id)
+            ui_style.tip(control, tooltip)
+            outer.addSubview_(control)
+            self.app_controls[action_id] = control
+
+    def set_app_state(self, state: dict):
+        """Tick the checkboxes to match what is actually on disk."""
+        for action_id, on in state.items():
+            control = self.app_controls.get(action_id)
+            if control is not None:
+                control.setState_(1 if on else 0)
 
     def _handle(self, sender):
         action = str(sender.identifier() or "")
+        if action in self.app_controls and self.on_app_action is not None:
+            try:
+                self.on_app_action(action)
+            except Exception as exc:  # noqa: BLE001 - never raise into AppKit
+                traceback.print_exc()
+                self.set_status(f"Failed -- {type(exc).__name__}")
+            return
         if action == "save":
             try:
                 message = self.on_save({key: f.stringValue() for key, f in self.fields.items()})

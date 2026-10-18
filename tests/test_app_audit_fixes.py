@@ -284,6 +284,9 @@ def test_store_build_settings_window_is_built_with_the_hidden_keys(tmp_path, mon
         def set_status(self, text):
             pass
 
+        def set_app_state(self, state):
+            pass
+
     monkeypatch.setattr(app_module, "SettingsWindow", FakeSettingsWindow)
     app = build_app(tmp_path, capabilities=STORE)
     app.open_settings()

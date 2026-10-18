@@ -7,6 +7,7 @@ ones that fail silently in a bundle. `show()` is deliberately never called: that
 would flash a window across the screen on every test run.
 """
 
+from netdnsmonitor import ui_style
 from netdnsmonitor.dashboard import (
     ALL_ACTIONS,
     EDIT_MENU_ITEMS,
@@ -341,10 +342,14 @@ def test_window_is_not_released_when_closed():
     assert window.window.isReleasedWhenClosed() is False
 
 
-def test_every_declared_action_gets_a_button():
+def test_every_declared_action_gets_a_control():
+    """A control is a button or an item in a category menu; either way the action
+    is reachable, and the window needs far fewer top-level controls than actions.
+    """
     window = DashboardWindow(on_action=lambda action: None)
-    assert len(window.buttons) == len(ALL_ACTIONS)
+    assert set(window.action_controls) == {action_id for _, action_id, _ in ALL_ACTIONS}
     assert len(ALL_ACTIONS) == len(TROUBLESHOOTING_ACTIONS) + len(SECONDARY_ACTIONS)
+    assert len(window.buttons) < len(ALL_ACTIONS) / 2
 
 
 def test_the_grid_lays_out_only_the_actions_it_is_given():
@@ -352,10 +357,7 @@ def test_the_grid_lays_out_only_the_actions_it_is_given():
     window must lay out exactly that list, not fall back to the full one.
     """
     window = DashboardWindow(on_action=lambda action: None, actions=TROUBLESHOOTING_ACTIONS)
-    assert len(window.buttons) == len(TROUBLESHOOTING_ACTIONS)
-    assert [str(button.identifier()) for button in window.buttons] == [
-        action_id for _, action_id, _ in TROUBLESHOOTING_ACTIONS
-    ]
+    assert set(window.action_controls) == {action_id for _, action_id, _ in TROUBLESHOOTING_ACTIONS}
 
 
 # --- the log column --------------------------------------------------------
@@ -368,7 +370,7 @@ def test_the_log_controls_are_not_counted_as_troubleshooting_buttons():
     """
     window = DashboardWindow(on_action=lambda action: None)
     assert set(window.log_control_buttons) == {action_id for _, action_id in LOG_ACTIONS}
-    assert len(window.buttons) == len(ALL_ACTIONS)
+    assert set(window.action_controls) == {action_id for _, action_id, _ in ALL_ACTIONS}
 
 
 def test_every_log_control_carries_its_action_id_and_a_target():
@@ -517,9 +519,12 @@ def test_the_console_button_is_present_and_on_screen():
     positioned off the bottom of the content view, where it renders as nothing.
     """
     window = DashboardWindow(on_action=lambda action: None)
-    button = next(b for b in window.buttons if str(b.identifier()) == "open_console")
-    assert "console" in str(button.title()).lower()
-    frame = button.frame()
+    item = window.action_controls["open_console"]
+    assert "console" in str(item.title()).lower()
+    # A menu item has no frame; the pull-down that holds it is what is on screen.
+    menu = item.menu()
+    holder = next(b for b in window.buttons if b.menu() is menu)
+    frame = holder.frame()
     assert frame.origin.y >= 0
     assert frame.origin.x >= 0
     assert frame.origin.x + frame.size.width <= LEFT_WIDTH
@@ -558,10 +563,11 @@ def test_every_button_is_wired_to_a_target_and_carries_its_action_id():
     """
     window = DashboardWindow(on_action=lambda action: None)
     ids = {action_id for _, action_id, _ in ALL_ACTIONS}
-    for button in window.buttons:
-        assert button.target() is not None
-        assert button.action() == "invoke:"
-        assert str(button.identifier()) in ids
+    assert set(window.action_controls) == ids
+    for action_id, control in window.action_controls.items():
+        assert control.target() is not None
+        assert control.action() == "invoke:"
+        assert str(control.identifier()) == action_id
 
 
 def test_clicking_a_button_dispatches_its_action_id():
@@ -570,7 +576,7 @@ def test_clicking_a_button_dispatches_its_action_id():
     """
     dispatched = []
     window = DashboardWindow(on_action=dispatched.append)
-    by_id = {str(b.identifier()): b for b in window.buttons}
+    by_id = window.action_controls
     window._target.invoke_(by_id["flush_dns_cache"])
     window._target.invoke_(by_id["ping_now"])
     assert dispatched == ["flush_dns_cache", "ping_now"]
@@ -586,9 +592,9 @@ def test_state_changing_buttons_say_so():
     assert "changes system state" in label.lower()
 
     window = DashboardWindow(on_action=lambda action: None)
-    for button in window.buttons:
-        if str(button.identifier()) in repairs:
-            assert "state" in (button.toolTip() or "").lower()
+    for action_id, control in window.action_controls.items():
+        if action_id in repairs:
+            assert "state" in (control.toolTip() or "").lower()
 
 
 def test_buttons_do_not_overlap_the_output_pane():
@@ -682,12 +688,12 @@ def test_without_the_log_column_the_window_is_the_left_column_alone():
     assert window.log_search_field is None
     assert window.log_status_label is None
     assert window.log_control_buttons == {}
-    assert len(window.buttons) == len(TROUBLESHOOTING_ACTIONS)
+    assert set(window.action_controls) == {action_id for _, action_id, _ in TROUBLESHOOTING_ACTIONS}
 
 
 def test_without_the_log_column_nothing_is_laid_out_past_the_left_column():
     window = DashboardWindow(on_action=lambda action: None, log_column=False)
-    for view in window.window.contentView().subviews():
+    for view in ui_style.window_content(window.window).subviews():
         frame = view.frame()
         assert frame.origin.x + frame.size.width <= LEFT_WIDTH - MARGIN
 

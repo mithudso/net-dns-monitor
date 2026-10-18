@@ -23,7 +23,9 @@ import threading
 import traceback
 from typing import Callable, Optional
 
+from netdnsmonitor import ui_style
 from netdnsmonitor.console import BANNER, PROMPT, ClearSignal, ConsoleState, handle, run_command
+from netdnsmonitor.ui_catalog import CONTROL_TIPS
 
 # titled | closable | miniaturizable | resizable. Spelled numerically because
 # the PyObjC constant names for these moved between versions (NSTitledWindowMask
@@ -223,6 +225,7 @@ class ConsoleWindowController:
     # --- window ----------------------------------------------------------
 
     def show(self) -> None:
+        import AppKit
         from AppKit import (
             NSApplication,
             NSBackingStoreBuffered,
@@ -274,6 +277,8 @@ class ConsoleWindowController:
         except Exception:  # noqa: BLE001 - system colors, not worth failing over
             pass
         scroll.setDocumentView_(self.text_view)
+        ui_style.tip(self.text_view, CONTROL_TIPS["console_transcript"])
+        ui_style.style_pane(AppKit, scroll)
         content.addSubview_(scroll)
 
         # Kept on the instance: an ObjC target is not retained by setTarget_, so
@@ -286,6 +291,7 @@ class ConsoleWindowController:
         self.input_field.setAutoresizingMask_(RESIZE_PINNED_BOTTOM)
         self.input_field.setTarget_(self._target)
         self.input_field.setAction_("submit:")
+        ui_style.tip(self.input_field, CONTROL_TIPS["console_input"])
         content.addSubview_(self.input_field)
 
         positioned = False
@@ -307,6 +313,7 @@ class ConsoleWindowController:
         if not positioned:
             self.window.center()
 
+        self.glass_kind = ui_style.apply_window_glass(AppKit, self.window)
         self.window.makeKeyAndOrderFront_(None)
         self.window.makeFirstResponder_(self.input_field)
 

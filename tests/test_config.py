@@ -27,6 +27,7 @@ PATH_KEYS = {
     # path against the unexpanded default and fail.
     "learned_domains_path",
     "failover_state_path",
+    "remediation_scripts_dir",
 }
 
 

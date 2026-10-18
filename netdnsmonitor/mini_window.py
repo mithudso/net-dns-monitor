@@ -28,6 +28,9 @@ it does not steal focus from what you were doing.
 
 from typing import Optional
 
+from netdnsmonitor import ui_style
+from netdnsmonitor.ui_catalog import CONTROL_TIPS
+
 WIDTH = 168
 HEIGHT = 44
 FRAME_AUTOSAVE_NAME = "NetDnsMonitorMiniWindow"
@@ -102,10 +105,16 @@ class MiniWindow:
 
         content = self.window.contentView()
         content.setWantsLayer_(True)
-        effect = AppKit.NSVisualEffectView.alloc().initWithFrame_(rect)
-        effect.setMaterial_(AppKit.NSVisualEffectMaterialHUDWindow)
-        effect.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
-        effect.setState_(AppKit.NSVisualEffectStateActive)
+        # Liquid Glass where the system has it, the HUD vibrancy it replaced
+        # where it does not. Either is a view the label is added to.
+        if ui_style.glass_available(AppKit):
+            effect = AppKit.NSGlassEffectView.alloc().initWithFrame_(rect)
+            effect.setCornerRadius_(HEIGHT / 2)
+        else:
+            effect = AppKit.NSVisualEffectView.alloc().initWithFrame_(rect)
+            effect.setMaterial_(AppKit.NSVisualEffectMaterialHUDWindow)
+            effect.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
+            effect.setState_(AppKit.NSVisualEffectStateActive)
         effect.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
         content.addSubview_(effect)
         self.effect = effect
@@ -120,6 +129,7 @@ class MiniWindow:
             AppKit.NSFont.monospacedDigitSystemFontOfSize_weight_(15, AppKit.NSFontWeightSemibold)
         )
         self.label.setStringValue_(mini_text("healthy"))
+        ui_style.tip(self.label, CONTROL_TIPS["mini_label"])
         effect.addSubview_(self.label)
 
     # --- what App calls ----------------------------------------------------

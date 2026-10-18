@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from netdnsmonitor import ui_style
 from netdnsmonitor.config import DEFAULT_CONFIG, load_config
 from netdnsmonitor.settings_window import (
     DEFAULT_CONFIG_PATH_DISPLAY,
@@ -648,7 +649,7 @@ def test_the_window_knows_which_fields_were_edited_since_loading():
 def _button(window, action):
     return next(
         b
-        for b in window.window.contentView().subviews()
+        for b in ui_style.iter_views(window.window.contentView())
         if str(getattr(b, "identifier", lambda: "")() or "") == action
     )
 
@@ -684,7 +685,7 @@ def test_a_parse_error_is_shown_in_the_window_rather_than_raised():
     window = SettingsWindow(on_save=boom)
     save = next(
         b
-        for b in window.window.contentView().subviews()
+        for b in ui_style.iter_views(window.window.contentView())
         if str(getattr(b, "identifier", lambda: "")() or "") == "save"
     )
     window._target.invoke_(save)
@@ -696,7 +697,7 @@ def test_a_successful_save_reports_the_message_it_was_given():
     window = SettingsWindow(on_save=lambda values: "Saved. Restart needed.")
     save = next(
         b
-        for b in window.window.contentView().subviews()
+        for b in ui_style.iter_views(window.window.contentView())
         if str(getattr(b, "identifier", lambda: "")() or "") == "save"
     )
     window._target.invoke_(save)
@@ -706,7 +707,7 @@ def test_a_successful_save_reports_the_message_it_was_given():
 def _button(window, identifier):
     return next(
         b
-        for b in window.window.contentView().subviews()
+        for b in ui_style.iter_views(window.window.contentView())
         if str(getattr(b, "identifier", lambda: "")() or "") == identifier
     )
 
@@ -832,7 +833,7 @@ def test_a_failing_save_is_reported_in_the_window_not_raised_into_appkit():
     window = SettingsWindow(on_save=explode)
     save = next(
         b
-        for b in window.window.contentView().subviews()
+        for b in ui_style.iter_views(window.window.contentView())
         if str(getattr(b, "identifier", lambda: "")() or "") == "save"
     )
     window._target.invoke_(save)

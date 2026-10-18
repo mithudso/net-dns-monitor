@@ -20,6 +20,7 @@ import threading
 import traceback
 from typing import Callable, Optional
 
+from netdnsmonitor import ui_style
 from netdnsmonitor.remediation_editor import (
     KIND_BUILTIN_NAME,
     KIND_COMMENT,
@@ -29,6 +30,7 @@ from netdnsmonitor.remediation_editor import (
     EditorSession,
     highlight_spans,
 )
+from netdnsmonitor.ui_catalog import CONTROL_TIPS
 
 # titled | closable | miniaturizable | resizable (numeric for the reason in console_window).
 STYLE_MASK = 1 | 2 | 4 | 8
@@ -194,6 +196,8 @@ class RemediationWindowController:
         self._names = [row.name for row in rows]
         self.popup.removeAllItems()
         self.popup.addItemsWithTitles_([row.label for row in rows])
+        for item, row in zip(self.popup.itemArray(), rows, strict=True):
+            ui_style.tip(item, row.tip)
         if select in self._names:
             self.popup.selectItemAtIndex_(self._names.index(select))
 
@@ -345,9 +349,14 @@ class RemediationWindowController:
 
     # --- window ----------------------------------------------------------
 
-    def show(self) -> None:
+    def build(self) -> None:
+        """Create the window and its controls without showing it.
+
+        Split from `show` so the offline suite can build the window and walk its
+        controls (every one must have a tooltip) without putting it on screen.
+        """
+        import AppKit
         from AppKit import (
-            NSApplication,
             NSBackingStoreBuffered,
             NSButton,
             NSFont,
@@ -358,15 +367,6 @@ class RemediationWindowController:
             NSWindow,
         )
         from Foundation import NSMakeRect
-
-        # A menu bar app is an accessory; without this the window opens looking
-        # usable and ignores typing until it is clicked.
-        with contextlib.suppress(Exception):
-            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-
-        if self.window is not None:
-            self.window.makeKeyAndOrderFront_(None)
-            return
 
         width, height = 900, 640
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -384,26 +384,29 @@ class RemediationWindowController:
         )
         self.popup.setTarget_(self._target)
         self.popup.setAction_("pick:")
+        ui_style.tip(self.popup, CONTROL_TIPS["pick"])
         self.popup.setAutoresizingMask_(PINNED_TOP)
         content.addSubview_(self.popup)
 
-        def button(title, action, x, w=80):
+        def button(title, action, x, w=80, tip_key=""):
             b = NSButton.alloc().initWithFrame_(NSMakeRect(x, top, w, 26))
             b.setTitle_(title)
-            b.setBezelStyle_(1)
+            ui_style.style_button(AppKit, b, prominent=action == "save:")
+            ui_style.tip(b, CONTROL_TIPS[tip_key])
             b.setTarget_(self._target)
             b.setAction_(action)
             b.setAutoresizingMask_(PINNED_TOP)
             content.addSubview_(b)
             return b
 
-        button("Save", "save:", 350)
-        button("Check", "check:", 435)
-        button("Run test", "run:", 520, 90)
-        self.remove_button = button("Reset...", "remove:", 615, 90)
-        button("New...", "new:", 710)
+        button("Save", "save:", 350, tip_key="editor_save")
+        button("Check", "check:", 435, tip_key="editor_check")
+        button("Run test", "run:", 520, 90, tip_key="editor_run")
+        self.remove_button = button("Reset...", "remove:", 615, 90, tip_key="editor_remove")
+        button("New...", "new:", 710, tip_key="editor_new")
 
         self.status = NSTextField.labelWithString_("")
+        ui_style.tip(self.status, CONTROL_TIPS["editor_status"])
         self.status.setFrame_(NSMakeRect(800, top + 4, 90, 18))
         self.status.setAutoresizingMask_(PINNED_TOP)
         content.addSubview_(self.status)
@@ -432,6 +435,7 @@ class RemediationWindowController:
             with contextlib.suppress(Exception):
                 getattr(self.editor, setter)(False)
         self.editor.setDelegate_(self._target)
+        ui_style.tip(self.editor, CONTROL_TIPS["editor_text"])
         scroll.setDocumentView_(self.editor)
         content.addSubview_(scroll)
 
@@ -443,12 +447,25 @@ class RemediationWindowController:
         self.output.setEditable_(False)
         self.output.setRichText_(False)
         self.output.setFont_(mono)
+        ui_style.tip(self.output, CONTROL_TIPS["editor_output"])
         out_scroll.setDocumentView_(self.output)
         content.addSubview_(out_scroll)
 
         self._reload_popup()
+        self.glass_kind = ui_style.apply_window_glass(AppKit, self.window)
         self.window.center()
-        self.window.makeKeyAndOrderFront_(None)
         if self._names:
             self.popup.selectItemAtIndex_(0)
             self.open_script(self._names[0])
+
+    def show(self) -> None:
+        from AppKit import NSApplication
+
+        # A menu bar app is an accessory; without this the window opens looking
+        # usable and ignores typing until it is clicked.
+        with contextlib.suppress(Exception):
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+
+        if self.window is None:
+            self.build()
+        self.window.makeKeyAndOrderFront_(None)

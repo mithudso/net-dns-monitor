@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2644 tests; the whole decision surface
+python3 -m pytest -q          # 2678 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2644 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2644 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2678 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -860,7 +860,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2644 passed
+python3 -m pytest -q            # 2678 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -873,7 +873,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 
 | Tests | File |
 |---|---|
-| 295 | `test_config.py` |
+| 299 | `test_config.py` |
 | 122 | `test_failover.py` |
 | 110 | `test_settings_window.py` |
 | 89 | `test_privileges.py` |
@@ -950,7 +950,9 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 31 | `test_shell_scripts.py` |
 | 59 | `test_remediation_scripts.py` |
 | 25 | `test_remediation_editor.py` |
-| **2644** | **total** |
+| 16 | `test_ui_catalog.py` |
+| 14 | `test_ui_windows.py` |
+| **2678** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

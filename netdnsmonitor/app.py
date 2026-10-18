@@ -41,6 +41,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Optional
 
 import rumps
@@ -131,6 +132,7 @@ from netdnsmonitor.status import (
     resolution_counts,
     status_state,
 )
+from netdnsmonitor.ui_catalog import app_options
 
 if TYPE_CHECKING:
     from netdnsmonitor.console_window import ConsoleWindowController
@@ -478,10 +480,20 @@ def unified_log_unavailable_watcher() -> Callable[[], list[str]]:
 
 
 REMEDIATION_DIR_ENV = "NETDNS_REMEDIATION_DIR"
+# The settings that only mean something where scripts can be edited.
+REMEDIATION_SETTING_KEYS = frozenset(
+    {
+        "remediation_scripts_dir",
+        "custom_remediation_scripts_enabled",
+        "remediation_script_timeout_seconds",
+    }
+)
 
 
 def build_remediation_store(
-    capabilities: Capabilities, env: Optional[Mapping[str, str]] = None
+    capabilities: Capabilities,
+    env: Optional[Mapping[str, str]] = None,
+    config: Optional[dict] = None,
 ) -> ScriptStore:
     """The script store for this build.
 
@@ -490,11 +502,14 @@ def build_remediation_store(
     (distribution.REASONS["remediation_editor"]). The directory can be moved with
     NETDNS_REMEDIATION_DIR, which is how the suite keeps its apps off the real one.
     """
-    if not capabilities.remediation_editor:
+    config = config or {}
+    if not capabilities.remediation_editor or not config.get(
+        "custom_remediation_scripts_enabled", True
+    ):
         return ScriptStore()
     env = os.environ if env is None else env
-    directory = env.get(REMEDIATION_DIR_ENV) or DEFAULT_USER_DIR
-    return ScriptStore(user_dir=os.path.expanduser(directory))
+    directory = env.get(REMEDIATION_DIR_ENV) or config.get("remediation_scripts_dir")
+    return ScriptStore(user_dir=os.path.expanduser(directory or DEFAULT_USER_DIR))
 
 
 def build_state_machine(
@@ -590,7 +605,10 @@ def build_state_machine(
             )
 
     repair_executor = make_repair_executor(
-        failover_fn=failover_fn, store=remediation_store, **privilege_options
+        failover_fn=failover_fn,
+        store=remediation_store,
+        script_timeout=config.get("remediation_script_timeout_seconds", 60),
+        **privilege_options,
     )
 
     escalator = build_escalator(
@@ -873,7 +891,7 @@ class NetDnsMonitorApp(rumps.App):
         self.privacy_policy_url_fn = privacy_policy_url_fn
         self.config = self._load_config(config_path)
         self.failover = build_failover(self.config)
-        self.remediation_store = build_remediation_store(self.capabilities)
+        self.remediation_store = build_remediation_store(self.capabilities, config=self.config)
         self.state_machine = build_state_machine(
             self.config,
             self.failover,
@@ -2215,6 +2233,38 @@ class NetDnsMonitorApp(rumps.App):
         # The store build ships no service script to restart it with.
         return STORE_RESTART_HINT if self.capabilities.is_app_store else SERVICE_RESTART_HINT
 
+    def settings_app_state(self) -> dict:
+        """What the Settings window's checkboxes should show, read from the system."""
+        consent = self.consent.granted() if self.consent is not None else False
+        return {
+            "app_toggle_login": login_item_installed()
+            if self.capabilities.launch_agent_login_item
+            else False,
+            "app_toggle_claude": consent,
+        }
+
+    def handle_settings_action(self, action_id: str) -> None:
+        """A control in the Settings window's app-options row was used.
+
+        The same methods the menu bar calls, so there is one behaviour for each
+        option whichever surface it is changed from.
+        """
+        if action_id == "app_toggle_login":
+            self.toggle_login(SimpleNamespace(state=None))
+        elif action_id == "app_toggle_claude":
+            if self.consent is not None and self.consent.granted():
+                self.withdraw_claude_permission()
+            else:
+                self.allow_claude_diagnosis()
+        elif action_id == "cred_remove":
+            self.remove_credentials()
+        elif action_id.startswith("cred_"):
+            self.set_credential(action_id[len("cred_") :])
+        else:
+            self.handle_dashboard_action(action_id)
+        if self._settings is not None:
+            self._settings.set_app_state(self.settings_app_state())
+
     def hidden_setting_keys(self) -> frozenset:
         """Settings whose feature this build cannot run, so the window omits them.
 
@@ -2232,6 +2282,7 @@ class NetDnsMonitorApp(rumps.App):
                 or (key.startswith("failover_") and not caps.network_order_write)
                 or (key.startswith("log_view_") and not caps.unified_log)
                 or (key == "auto_open_console" and not caps.shell_console)
+                or (key in REMEDIATION_SETTING_KEYS and not caps.remediation_editor)
             ):
                 hidden.add(key)
         return frozenset(hidden)
@@ -2248,6 +2299,10 @@ class NetDnsMonitorApp(rumps.App):
                     config_path_display=self.config_path,
                     restart_hint=self._settings_restart_hint(),
                 )
+            options.update(
+                app_options=app_options(self.capabilities),
+                on_app_action=self.handle_settings_action,
+            )
             self._settings = SettingsWindow(on_save=self._save_settings, **options)
         # The file, not the running config: restart-only keys keep their launch
         # values in self.config, and the window edits what is on disk.
@@ -2258,6 +2313,7 @@ class NetDnsMonitorApp(rumps.App):
             shown = self.config
             problem = config_error_text(exc)
         self._settings.load(shown)
+        self._settings.set_app_state(self.settings_app_state())
         self._settings.show()
         if problem:
             self._settings.set_status(

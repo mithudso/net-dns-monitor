@@ -35,9 +35,16 @@ import sys
 import traceback
 from typing import Callable, Optional
 
+from netdnsmonitor import ui_style
 from netdnsmonitor.graphs import format_bits
 from netdnsmonitor.peers import BUCKETS
 from netdnsmonitor.status import resolution_counts
+from netdnsmonitor.ui_catalog import (
+    CONTROL_TIPS,
+    LOG_ACTION_TIPS,
+    action_tip,
+    group_actions,
+)
 
 WINDOW_TITLE = "Net-DNS-Monitor"
 
@@ -404,12 +411,17 @@ WINDOW_WIDTH = LEFT_WIDTH + LOG_WIDTH + MARGIN
 # than the bare 12 the test demands, so the grid clears the pane by one BUTTON_GAP
 # instead of landing exactly on it.
 #
-# 150 -> 114 when the remediation editor button made it one row more, 28px over
-# the pane -- the fifth time. 36px, so the grid clears the pane by 8px.
-STATS_HEIGHT = 114
-OUTPUT_HEIGHT = 150
+# The action grid used to be one button per action, nine or ten rows, and every
+# new action cost the stats pane another 34px (five times). The actions now sit in
+# two rows -- two buttons and pull-down menus by category -- so a new action joins
+# a menu and costs nothing. The room that freed went back to the stats and results
+# panes. test_buttons_do_not_overlap_the_output_pane still guards the arithmetic.
+STATS_HEIGHT = 230
+OUTPUT_HEIGHT = 210
 BUTTON_HEIGHT = 28
 BUTTON_GAP = 6
+# Controls per row: the two primary buttons and the category menus.
+BUTTON_COLUMNS = 4
 GRAPH_HEIGHT = 92
 GRAPH_GAP = 6
 
@@ -504,6 +516,7 @@ class DashboardWindow:
         self._add_graphs(AppKit, content)
 
         self.buttons = []
+        self.action_controls = {}
         self._add_buttons(AppKit, content)
 
         self.output_view = _text_view(
@@ -519,6 +532,13 @@ class DashboardWindow:
         self.log_view = None
         if log_column:
             self._add_log_column(AppKit, content)
+
+        ui_style.tip(self.stats_view, CONTROL_TIPS["stats"])
+        ui_style.tip(self.output_view, CONTROL_TIPS["output"])
+        for field, view in self.graph_views.items():
+            ui_style.tip(view, CONTROL_TIPS[f"graph_{field}"])
+        # Last, so every control above is already in place when the material goes behind.
+        self.glass_kind = ui_style.apply_window_glass(AppKit, self.window)
 
     def _add_graphs(self, AppKit, content):
         """One image view per series, stacked under the stats pane.
@@ -565,27 +585,59 @@ class DashboardWindow:
             )
 
     def _add_buttons(self, AppKit, content):
-        """Two columns, laid out downward from just under the graphs."""
-        column_width = (LEFT_WIDTH - 2 * MARGIN - BUTTON_GAP) / 2
+        """Primary buttons and category menus, in rows of BUTTON_COLUMNS.
+
+        What you reach for during an outage -- ping, full diagnosis -- stays a
+        button. Everything else sits in a pull-down menu by category (Checks,
+        Repairs, Tools, Reports, Permissions; see ui_catalog.ACTION_GROUPS), so
+        similar actions share one control instead of filling the window with a
+        grid. `self.buttons` is those top-level controls; `self.action_controls`
+        maps every action id to the control that fires it (a button or a menu
+        item), which is what a test or a caller looks an action up by.
+        """
+        primary, groups = group_actions(self.actions)
+        column_width = (LEFT_WIDTH - 2 * MARGIN - (BUTTON_COLUMNS - 1) * BUTTON_GAP) / (
+            BUTTON_COLUMNS
+        )
         top = self._graphs_bottom() - GRAPH_GAP
-        for index, (label, action_id, kind) in enumerate(self.actions):
-            row, column = divmod(index, 2)
-            x = MARGIN + column * (column_width + BUTTON_GAP)
-            y = top - (row + 1) * (BUTTON_HEIGHT + BUTTON_GAP)
-            button = AppKit.NSButton.alloc().initWithFrame_(
-                AppKit.NSMakeRect(x, y, column_width, BUTTON_HEIGHT)
+        slots = [("button", item) for item in primary] + [("group", item) for item in groups]
+        for index, (slot_kind, item) in enumerate(slots):
+            row, column = divmod(index, BUTTON_COLUMNS)
+            frame = AppKit.NSMakeRect(
+                MARGIN + column * (column_width + BUTTON_GAP),
+                top - (row + 1) * (BUTTON_HEIGHT + BUTTON_GAP),
+                column_width,
+                BUTTON_HEIGHT,
             )
-            button.setTitle_(label)
-            button.setBezelStyle_(AppKit.NSBezelStyleRounded)
-            button.setTarget_(self._target)
-            button.setAction_("invoke:")
-            # The action id travels on the button itself, so the single shared
-            # target can dispatch without a closure per button.
-            button.setIdentifier_(action_id)
-            if kind == "repair":
-                button.setToolTip_("Changes system state.")
-            content.addSubview_(button)
-            self.buttons.append(button)
+            if slot_kind == "button":
+                label, action_id, kind = item
+                control = AppKit.NSButton.alloc().initWithFrame_(frame)
+                control.setTitle_(label)
+                control.setTarget_(self._target)
+                control.setAction_("invoke:")
+                # The action id travels on the control itself, so the single shared
+                # target can dispatch without a closure per button.
+                control.setIdentifier_(action_id)
+                ui_style.style_button(AppKit, control, prominent=action_id == "full_diagnosis")
+                ui_style.tip(control, action_tip(action_id, kind))
+                self.action_controls[action_id] = control
+            else:
+                title, group_tip, members = item
+                control, menu_items = ui_style.make_pulldown(
+                    AppKit,
+                    frame,
+                    f"{title}",
+                    group_tip,
+                    [
+                        (label, action_id, action_tip(action_id, kind))
+                        for label, action_id, kind in members
+                    ],
+                    self._target,
+                )
+                control.setIdentifier_(f"group_{title.lower()}")
+                self.action_controls.update(menu_items)
+            content.addSubview_(control)
+            self.buttons.append(control)
 
     def _add_log_column(self, AppKit, content):
         """Search field, control buttons, status line, then the pane itself.
@@ -628,6 +680,7 @@ class DashboardWindow:
         self.log_search_field.setTarget_(self._target)
         self.log_search_field.setAction_("invoke:")
         self.log_search_field.setIdentifier_("log_search")
+        ui_style.tip(self.log_search_field, LOG_ACTION_TIPS["log_search"])
         content.addSubview_(self.log_search_field)
 
         controls_y = search_y - LOG_ROW_GAP - LOG_ROW_HEIGHT
@@ -642,7 +695,8 @@ class DashboardWindow:
                 )
             )
             button.setTitle_(title)
-            button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+            ui_style.style_button(AppKit, button)
+            ui_style.tip(button, LOG_ACTION_TIPS[action_id])
             button.setTarget_(self._target)
             button.setAction_("invoke:")
             button.setIdentifier_(action_id)
@@ -658,6 +712,7 @@ class DashboardWindow:
             "Reading the system log...",
             9.5,
         )
+        ui_style.tip(self.log_status_label, CONTROL_TIPS["log_status"])
         content.addSubview_(self.log_status_label)
 
         pane_top = status_y - LOG_ROW_GAP
@@ -665,6 +720,7 @@ class DashboardWindow:
             AppKit,
             AppKit.NSMakeRect(LOG_X, MARGIN, LOG_WIDTH, pane_top - MARGIN),
         )
+        ui_style.tip(self.log_view, CONTROL_TIPS["log_pane"])
         content.addSubview_(self.log_view.enclosingScrollView() or self.log_view)
 
     def _handle(self, sender):
@@ -796,7 +852,6 @@ def _text_view(AppKit, frame):
     scroll = AppKit.NSScrollView.alloc().initWithFrame_(frame)
     scroll.setHasVerticalScroller_(True)
     scroll.setAutohidesScrollers_(True)
-    scroll.setBorderType_(AppKit.NSBezelBorder)
 
     view = AppKit.NSTextView.alloc().initWithFrame_(
         AppKit.NSMakeRect(0, 0, frame.size.width, frame.size.height)
@@ -806,6 +861,9 @@ def _text_view(AppKit, frame):
     view.setFont_(AppKit.NSFont.monospacedSystemFontOfSize_weight_(11, AppKit.NSFontWeightRegular))
     view.setAutoresizingMask_(AppKit.NSViewWidthSizable)
     scroll.setDocumentView_(view)
+    # After the document view is set: the pane's translucent fill is the text
+    # view's, and the rounded clip is the scroll view's.
+    ui_style.style_pane(AppKit, scroll, view)
     return view
 
 

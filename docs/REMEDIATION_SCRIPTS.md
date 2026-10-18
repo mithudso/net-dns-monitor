@@ -32,15 +32,24 @@ the shipped script also removes the override. A script with a name the app does 
 is a **custom** script. The folder is created mode `0700` and files `0600`, because a
 file there is code the app runs as you.
 
-Set `NETDNS_REMEDIATION_DIR` to use a different folder.
+Three settings control this (Settings → Remediation scripts, or `config.yaml`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `remediation_scripts_dir` | `~/Library/Application Support/net-dns-monitor/remediations` | The folder above. |
+| `custom_remediation_scripts_enabled` | `true` | `false` runs only the shipped scripts and ignores the folder, to rule your edits out. |
+| `remediation_script_timeout_seconds` | `60` | A script still running after this is reported `unknown:` and abandoned. |
+
+`NETDNS_REMEDIATION_DIR` overrides the folder for one run. The App Store build ignores all
+four.
 
 Edits take effect on the next incident. Nothing needs a restart: the folder is read each
 time a step runs.
 
 ## The editor
 
-Open it from the status-item menu (**Edit remediation scripts**) or the dashboard
-(**Edit remediation scripts (Python editor)**).
+Open it from the status-item menu (**Edit remediation scripts**), the dashboard's
+**Tools ▾** menu, or **Edit scripts…** in Settings.
 
 | Control | What it does |
 |---|---|

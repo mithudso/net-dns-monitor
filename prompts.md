@@ -127,3 +127,11 @@ Delta: 1
 Prompt:
 
 > make the auto remediation scripts editable and scriptable in Python. Make the current auto remediation logic uh, into Python scripts that you can edit from the GUI via a small Python IDE. Period. Allow for custom auto remediation scripts the ability to edit current ones. And make sure that the scripts are fully documented.
+
+## v15 - 2026-10-17 - Liquid Glass UI, dropdowns, tooltips, full settings (TASK-422)
+
+Delta: 1
+
+Prompt:
+
+> Save those steps so that I can look at them later. And then update the user interface to be more modern and utilize the new Mac liquid glass features. Period. Hide the redundant buttons or similarly categorized buttons behind dropdowns. And make sure every button and tool and setting has a tooltip. And make sure every configurable option is represented in the settings. Period.

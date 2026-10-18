@@ -142,6 +142,9 @@ class FakeSettingsWindow:
     def set_status(self, text):
         self.status = text
 
+    def set_app_state(self, state):
+        self.app_state = state
+
 
 def test_opening_settings_shows_the_file_not_the_running_config(tmp_path, monkeypatch):
     """Restart-only keys keep their launch values in `app.config`. The window
@@ -203,7 +206,12 @@ def test_the_store_builds_settings_window_names_its_own_file_and_restart(tmp_pat
 
     app.open_settings()
 
-    assert app._settings.options == {
+    options = dict(app._settings.options)
+    # The app-options row is covered by test_remediation_ui; here only the
+    # build-specific window options matter.
+    assert options.pop("app_options")
+    assert options.pop("on_app_action") == app.handle_settings_action
+    assert options == {
         "config_path_display": app.config_path,
         "restart_hint": STORE_RESTART_HINT,
         "hidden_keys": app.hidden_setting_keys(),
@@ -216,7 +224,10 @@ def test_the_direct_builds_settings_window_keeps_its_defaults(tmp_path, monkeypa
 
     app.open_settings()
 
-    assert app._settings.options == {}
+    options = dict(app._settings.options)
+    assert options.pop("app_options")
+    assert options.pop("on_app_action") == app.handle_settings_action
+    assert options == {}
 
 
 # --- main() on a config the app refuses ---------------------------------------

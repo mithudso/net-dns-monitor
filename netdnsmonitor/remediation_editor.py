@@ -50,6 +50,7 @@ class ScriptRow:
     origin: str
     valid: bool
     enabled: bool
+    tip: str = ""
 
 
 def utf16_length(text: str) -> int:
@@ -175,6 +176,8 @@ class EditorSession:
                     info.origin,
                     info.valid,
                     info.enabled,
+                    (info.reason or info.description.splitlines()[0] if info.description else "")
+                    or "A remediation script.",
                 )
             )
         return rows

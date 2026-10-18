@@ -289,3 +289,29 @@ the bundle, and the pruned bundle imports. The editor window has not been used b
 menu-bar app (cannot be automated); the owner runs that click-through.
 The store bundle's `exec(compile(...))` in `remediation_scripts.execute` runs bundled,
 signed built-ins only; a 2.5.2 reviewer scanning for `exec` may ask.
+
+## v15 - 2026-10-17 - Liquid Glass UI, dropdowns, tooltips, full settings (TASK-422)
+
+Delta: 1
+
+Active task: TASK-422 (Stele). Constraints: CLAUDE.md non-negotiables; AppKit windows stay
+thin shells, decisions live in offline-testable modules; no launch of the menu-bar app; the
+store build keeps hiding gated actions; NSGlassEffectView exists here (macOS 27.2, PyObjC
+12.2.2) but falls back to NSVisualEffectView; master may move under another session, so land
+with `git update-ref` and the old value.
+Done: click-through steps saved as `docs/runbooks/remediation-editor-click-through.md`.
+Plan: (1) read dashboard/settings/mini/router/editor windows and config keys; (2) shared
+`glass.py` helper (material, fallback, tooltips contract); (3) group dashboard actions into
+pull-down menus by category, keeping gating; (4) tooltips everywhere + test that walks every
+control; (5) settings fields for every config key + test; (6) docs, counts, gates.
+Done: all six plan items. `ui_catalog.py` (tips, dashboard groups, app-options row spec),
+`ui_style.py` (glass with vibrancy fallback, `tip`, tooltip walker), dashboard actions in
+five pull-down menus (Checks, Repairs, Tools, Reports, Permissions) with two buttons,
+tooltips on every control of every window, Settings row for non-config options, three new
+config keys (`remediation_scripts_dir`, `custom_remediation_scripts_enabled`,
+`remediation_script_timeout_seconds`), `docs/USER_INTERFACE.md`. Gate: ruff clean, 2678
+tests pass, check_docs passes. Headless screenshots of the dashboard and Settings checked
+(windows were not key, so button text looks dim there).
+Open: nobody has looked at the glass in the running app or used the menus by hand; the
+dashboard graph area was empty in the screenshots (no history fed), so graph appearance on
+glass is unchecked; the console and mini windows are checked only by a smoke script.

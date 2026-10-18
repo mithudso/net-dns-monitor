@@ -23,6 +23,7 @@ from typing import Callable, Optional
 
 import yaml
 
+from netdnsmonitor import ui_style
 from netdnsmonitor.router import DEFAULTS
 from netdnsmonitor.router import validate as router_validate
 
@@ -277,13 +278,25 @@ def make_label(x, y, w, h, text):
     return lbl
 
 
-def make_textfield(x, y, w, h, text):
+def make_textfield(x, y, w, h, text, tooltip="Value used when the router starts."):
     import AppKit
     from Foundation import NSMakeRect
 
     tf = AppKit.NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
     tf.setStringValue_(text)
+    ui_style.tip(tf, tooltip)
     return tf
+
+
+# Tooltips for the router window's fixed controls, by label.
+ROUTER_TIPS = {
+    "Save Config": "Write these router settings to the config file. Needs the router to be stopped to take effect.",
+    "Start Router": "Turn on IP forwarding, load the NAT rule and serve DHCP on the LAN interface. Asks for an administrator password.",
+    "Stop Router": "Stop DHCP and remove the NAT rule. Asks for an administrator password.",
+    "Refresh Diagnostics": "Read the router's current state: forwarding, NAT rules, DHCP leases.",
+    "AI Config Check": "Ask Claude to review this configuration for mistakes. Sends the settings, not credentials.",
+    "Ping": "Ping the target on the left and show the reply below.",
+}
 
 
 def _default_post(fn, *args):
@@ -411,7 +424,8 @@ class RouterWindowController:
         btn.setTitle_(title)
         btn.setTarget_(self._target)
         btn.setAction_(action)
-        btn.setBezelStyle_(1)  # NSRoundedBezelStyle
+        ui_style.style_button(AppKit, btn)
+        ui_style.tip(btn, ROUTER_TIPS[title])
         content.addSubview_(btn)
         return btn
 
@@ -435,6 +449,7 @@ class RouterWindowController:
         )
         self.wan_popup.addItemsWithTitles_(self.interfaces)
         self._select_interface(self.wan_popup, self._default("wan_interface"))
+        ui_style.tip(self.wan_popup, "The upstream interface, the one with internet access.")
         content.addSubview_(self.wan_popup)
 
         content.addSubview_(make_label(400, y, 100, 24, "LAN Interface:"))
@@ -443,24 +458,33 @@ class RouterWindowController:
         )
         self.lan_popup.addItemsWithTitles_(self.interfaces)
         self._select_interface(self.lan_popup, self._default("lan_interface"))
+        ui_style.tip(self.lan_popup, "The interface that serves the LAN. Its address is replaced.")
         content.addSubview_(self.lan_popup)
 
         y -= 40
         content.addSubview_(make_label(10, y, 100, 24, "LAN IP:"))
-        self.lan_ip = make_textfield(120, y, 150, 24, str(self._default("lan_ip")))
+        self.lan_ip = make_textfield(
+            120, y, 150, 24, str(self._default("lan_ip")), "This Mac's address on the LAN."
+        )
         content.addSubview_(self.lan_ip)
 
         content.addSubview_(make_label(290, y, 80, 24, "Netmask:"))
-        self.lan_nm = make_textfield(370, y, 150, 24, str(self._default("lan_netmask")))
+        self.lan_nm = make_textfield(
+            370, y, 150, 24, str(self._default("lan_netmask")), "LAN netmask, e.g. 255.255.255.0."
+        )
         content.addSubview_(self.lan_nm)
 
         y -= 40
         content.addSubview_(make_label(10, y, 100, 24, "DHCP Start:"))
-        self.dhcp_s = make_textfield(120, y, 150, 24, str(self._default("dhcp_start")))
+        self.dhcp_s = make_textfield(
+            120, y, 150, 24, str(self._default("dhcp_start")), "First address DHCP hands out."
+        )
         content.addSubview_(self.dhcp_s)
 
         content.addSubview_(make_label(290, y, 80, 24, "DHCP End:"))
-        self.dhcp_e = make_textfield(370, y, 150, 24, str(self._default("dhcp_end")))
+        self.dhcp_e = make_textfield(
+            370, y, 150, 24, str(self._default("dhcp_end")), "Last address DHCP hands out."
+        )
         content.addSubview_(self.dhcp_e)
 
         y -= 40
@@ -472,7 +496,9 @@ class RouterWindowController:
 
         y -= 40
         content.addSubview_(make_label(10, y, 100, 24, "Ping Target:"))
-        self.ping_field = make_textfield(120, y, 200, 24, "8.8.8.8")
+        self.ping_field = make_textfield(
+            120, y, 200, 24, "8.8.8.8", "Address or name to ping with the Ping button."
+        )
         content.addSubview_(self.ping_field)
         self._button(content, (330, y, 100, 24), "Ping", "onPing:")
 
@@ -487,7 +513,10 @@ class RouterWindowController:
         self.text_view.setBackgroundColor_(AppKit.NSColor.blackColor())
         self.text_view.setTextColor_(AppKit.NSColor.whiteColor())
         scroll.setDocumentView_(self.text_view)
+        ui_style.tip(self.text_view, "Router diagnostics and command output.")
+        ui_style.style_pane(AppKit, scroll)
         content.addSubview_(scroll)
+        self.glass_kind = ui_style.apply_window_glass(AppKit, self.window)
 
     def _select_interface(self, popup, device):
         for i, item in enumerate(self.interfaces):

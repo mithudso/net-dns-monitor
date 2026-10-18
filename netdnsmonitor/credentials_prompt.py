@@ -48,6 +48,9 @@ def prompt_for_secret(title: str, message: str) -> Optional[str]:
     field = AppKit.NSSecureTextField.alloc().initWithFrame_(
         AppKit.NSMakeRect(0, 0, SECURE_FIELD_WIDTH, SECURE_FIELD_HEIGHT)
     )
+    field.setToolTip_(
+        "Paste the secret here. It is masked and goes to the Keychain, never to a file."
+    )
     alert.setAccessoryView_(field)
     alert.window().setInitialFirstResponder_(field)
     _bring_to_front()
