@@ -103,6 +103,7 @@ from netdnsmonitor.ping import ping_once
 from netdnsmonitor.ping_monitor import PingMonitor
 from netdnsmonitor.prober import make_prober
 from netdnsmonitor.query_log import extract_top_domains, make_query_log_reader
+from netdnsmonitor.remediation_scripts import DEFAULT_USER_DIR, ScriptStore
 from netdnsmonitor.repair_executor import make_repair_executor
 from netdnsmonitor.report_storage import save_report
 from netdnsmonitor.resolution_log import append_resolution_findings
@@ -175,6 +176,7 @@ NO_PING_YET = {
 GATED_DASHBOARD_ACTIONS = {
     "open_console": ("shell_console", "the console"),
     "open_router_window": ("router", "the router console"),
+    "open_remediation_editor": ("remediation_editor", "the remediation script editor"),
     "grant_privileges": ("privileged_repairs", "granting elevated permissions"),
     "revoke_privileges": ("privileged_repairs", "revoking elevated permissions"),
     # The executor already answers with the same text in the store build
@@ -475,6 +477,26 @@ def unified_log_unavailable_watcher() -> Callable[[], list[str]]:
     return watcher
 
 
+REMEDIATION_DIR_ENV = "NETDNS_REMEDIATION_DIR"
+
+
+def build_remediation_store(
+    capabilities: Capabilities, env: Optional[Mapping[str, str]] = None
+) -> ScriptStore:
+    """The script store for this build.
+
+    The store edition gets the shipped scripts only: a user's override or custom
+    script is code the user wrote, and running it is a Guideline 2.5.2 question
+    (distribution.REASONS["remediation_editor"]). The directory can be moved with
+    NETDNS_REMEDIATION_DIR, which is how the suite keeps its apps off the real one.
+    """
+    if not capabilities.remediation_editor:
+        return ScriptStore()
+    env = os.environ if env is None else env
+    directory = env.get(REMEDIATION_DIR_ENV) or DEFAULT_USER_DIR
+    return ScriptStore(user_dir=os.path.expanduser(directory))
+
+
 def build_state_machine(
     config: dict,
     failover=None,
@@ -482,6 +504,7 @@ def build_state_machine(
     credential_store: Optional[credentials.CredentialStore] = None,
     consent: Optional[ai_consent.ConsentStore] = None,
     spawn=None,
+    remediation_store: Optional[ScriptStore] = None,
 ) -> StateMachine:
     """`failover` is passed in by the app so the ladder step and the tick-path
     failback share one instance and therefore one set of counters. It is
@@ -566,7 +589,9 @@ def build_state_machine(
                 "network_order_write", "switching to the backup network"
             )
 
-    repair_executor = make_repair_executor(failover_fn=failover_fn, **privilege_options)
+    repair_executor = make_repair_executor(
+        failover_fn=failover_fn, store=remediation_store, **privilege_options
+    )
 
     escalator = build_escalator(
         capabilities,
@@ -584,6 +609,13 @@ def build_state_machine(
         sensitive_strings=config["sensitive_strings"],
         failover_classifications=(
             failover_trigger_classifications(config) if failover else frozenset()
+        ),
+        # Only a store that can hold the user's files adds steps; the built-ins-only
+        # store has nothing to add, so the ladder stays exactly ladder.py's.
+        custom_steps_fn=(
+            remediation_store.custom_steps
+            if remediation_store is not None and remediation_store.editable
+            else None
         ),
     )
 
@@ -841,12 +873,14 @@ class NetDnsMonitorApp(rumps.App):
         self.privacy_policy_url_fn = privacy_policy_url_fn
         self.config = self._load_config(config_path)
         self.failover = build_failover(self.config)
+        self.remediation_store = build_remediation_store(self.capabilities)
         self.state_machine = build_state_machine(
             self.config,
             self.failover,
             capabilities=self.capabilities,
             credential_store=self.credentials,
             consent=self.consent,
+            remediation_store=self.remediation_store,
         )
         self.notifier = build_notifier(self.config, env=self.credentials.as_env())
         self.last_notification_results = None
@@ -985,6 +1019,8 @@ class NetDnsMonitorApp(rumps.App):
         # dashboard button the *same* console, sharing one cwd and one history
         # rather than opening two that silently disagree.
         self.console: Optional[ConsoleWindowController] = None
+        # The remediation-script editor window, built on first use like the console.
+        self.remediation_window = None
         if self.capabilities.shell_console:
             # A console command still running at quit would outlive the app.
             # `callbacks` is a set, so the many apps a test run builds register once.
@@ -2405,6 +2441,9 @@ class NetDnsMonitorApp(rumps.App):
             except Exception as exc:  # noqa: BLE001 - a window failure must not cost the click
                 self._append_output(f"Router console failed: {type(exc).__name__}\n")
             return
+        if action_id == "open_remediation_editor":
+            self.open_remediation_editor()
+            return
         if action_id == "open_console":
             # Straight to the menu bar handler, not a fresh controller: two
             # controllers would be two consoles with two working directories and
@@ -2605,6 +2644,20 @@ class NetDnsMonitorApp(rumps.App):
         )
         return lines
 
+    def _custom_remediation_steps(self, classification_value: str) -> list:
+        """The user's custom ladder steps for a classification, or none.
+
+        Never raises: a diagnosis must not die because the scripts folder is
+        unreadable, and the shipped ladder still runs without them.
+        """
+        store = getattr(self, "remediation_store", None)
+        if store is None or not store.editable:
+            return []
+        try:
+            return store.custom_steps(classification_value)
+        except Exception:  # noqa: BLE001 - custom steps are optional
+            return []
+
     def _full_diagnosis(self, events: list) -> list:
         probe = self.state_machine.prober()
         classification = classify(probe.get("external_reachable"), probe.get("dns_ok"))
@@ -2615,7 +2668,11 @@ class NetDnsMonitorApp(rumps.App):
         # The configured classifications, not ladder_for's default: that default
         # adds the failover step to every network ladder, so a manual diagnosis
         # attempted a failover the configuration had not put on the ladder.
-        steps = ladder_for(classification, self.state_machine.failover_classifications)
+        steps = ladder_for(
+            classification,
+            self.state_machine.failover_classifications,
+            self._custom_remediation_steps(classification.value),
+        )
         if not steps:
             if classification is Classification.HEALTHY:
                 lines.append("No ladder to run: nothing is broken.")
@@ -2751,6 +2808,10 @@ class NetDnsMonitorApp(rumps.App):
             # item is easy to miss on a notched menu bar, which is why it leads.
             "Open dashboard",
         ]
+        if caps.remediation_editor:
+            items.append(
+                rumps.MenuItem("Edit remediation scripts", callback=self.open_remediation_editor)
+            )
         if caps.shell_console:
             # The failover line's own "Open console…" item is gone: this line's
             # console is the arbitrary-shell one, reachable from here and from the
@@ -3073,6 +3134,38 @@ class NetDnsMonitorApp(rumps.App):
                 "Console",
                 f"Could not open the console window ({type(exc).__name__}). "
                 "`python3 -m netdnsmonitor.cli console` is the terminal equivalent.",
+            )
+
+    def open_remediation_editor(self, _sender=None):
+        """Open the remediation-script editor, building it on first use.
+
+        Guarded for the reason `open_console` is: a window that fails to build must
+        cost the editor and nothing else, and a half-built controller must not be
+        kept. The editor runs scripts through the live executor, so what its test
+        run reports is what an incident would record.
+        """
+        text = self._unavailable_text("remediation_editor", "the remediation script editor")
+        if text is not None:
+            self._notify("Remediation scripts", text)
+            return
+        try:
+            if self.remediation_window is None:
+                from netdnsmonitor.remediation_editor import EditorSession
+                from netdnsmonitor.remediation_window import RemediationWindowController
+
+                session = EditorSession(
+                    self.remediation_store,
+                    run_source=getattr(self.state_machine.repair_executor, "run_source", None),
+                )
+                self.remediation_window = RemediationWindowController(session)
+            self.remediation_window.show()
+        except Exception as exc:  # noqa: BLE001 - a failed window must say so
+            self.remediation_window = None
+            rumps.notification(
+                "Net/DNS Monitor",
+                "Remediation scripts",
+                f"Could not open the editor window ({type(exc).__name__}). The scripts are "
+                f"plain files in {self.remediation_store.user_dir}.",
             )
 
     @rumps.clicked("Toggle mini window")

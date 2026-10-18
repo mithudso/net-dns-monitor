@@ -64,6 +64,7 @@ class StateMachine:
         success_threshold: int = 2,
         sensitive_strings: Optional[list[str]] = None,
         failover_classifications: frozenset = DEFAULT_FAILOVER_CLASSIFICATIONS,
+        custom_steps_fn: Optional[Callable[[str], list]] = None,
     ):
         self.prober = prober
         self.repair_executor = repair_executor
@@ -77,6 +78,10 @@ class StateMachine:
         # actually acted on, and then the verdict would explain a different event.
         self.last_probe: ProbeResult = {}
         self.failover_classifications = failover_classifications
+        # The user's custom remediation steps for a classification value. Read on
+        # every incident, so an edit in the remediation editor applies to the
+        # next one without a restart.
+        self.custom_steps_fn = custom_steps_fn
         # Held around the incident pipeline. A caller that runs repair steps
         # outside tick() (the app's manual diagnosis runs on a worker thread)
         # holds it too, so a manual repair or failover cannot interleave with the
@@ -120,6 +125,22 @@ class StateMachine:
     # exception escaping here would lose the only report, and the only alert,
     # this incident will ever get. Exception messages are dropped in favour of
     # the class name, because they can carry command output or request URLs.
+
+    def ladder(self, classification: Classification) -> list[LadderStep]:
+        """The steps this machine runs for a classification: shipped, custom, failover.
+
+        The one place that combines them, so the incident pipeline and a manual
+        diagnosis cannot disagree about what is on the ladder.
+        """
+        extra: list = []
+        if self.custom_steps_fn is not None:
+            try:
+                extra = list(self.custom_steps_fn(classification.value))
+            except Exception:  # noqa: BLE001 - a broken script folder must not cost the report
+                # The shipped ladder still runs; an unreadable custom folder
+                # removes custom steps only.
+                extra = []
+        return ladder_for(classification, self.failover_classifications, extra)
 
     def _run_step(self, step: LadderStep, classification: Classification) -> str:
         try:
@@ -183,7 +204,7 @@ class StateMachine:
 
         ladder_results = []
         repair_outcomes = []
-        for step in ladder_for(classification, self.failover_classifications):
+        for step in self.ladder(classification):
             outcome = self._run_step(step, classification)
             ladder_results.append(
                 {

@@ -119,3 +119,11 @@ Prompt:
 > Known inputs: catalog /Users/mitch/.claude/skills/apple-platform-publishing/references/apple-reviewer-model-and-rejection-catalog.md; dossiers rabbithole-2026-10-17-*.md in that directory. Priority suspects from the catalog for this repo: (1) Guideline 2.5.19 dormant/undocumented features in the store bundle (router, shell console, privileged repairs, sudoers writer, osascript, failover, SMTP/Slack) vs Notes in docs/APP_STORE_REVIEW_RESPONSE.md; (2) `itms-services` literal in bundled stdlib; (3) network.server entitlement justification; (4) 5.1.2(i) consent text, App Privacy label and docs/PRIVACY_POLICY.md vs actual outbound flows; (5) IPv4-literal probes on an IPv6-only NAT64 review network (2.5.5); (6) deprecated NSUserNotificationCenter via rumps (2.5.1); (7) 2.4.5(iii) login item default and consent; (8) donation/funding links reachable from reviewed pages (3.1.1); (9) Notes/description/label vs binary feature diff; (10) PrivacyInfo.xcprivacy validity.
 >
 > Do not launch the GUI. Do not paste anything into App Store Connect. Return the ledger summary, commits made, CI gate exit codes, and the owner-only UNVERIFIED actions with exact commands.
+
+## v14 - 2026-10-17 - Editable remediation scripts and in-app IDE (TASK-418)
+
+Delta: 1
+
+Prompt:
+
+> make the auto remediation scripts editable and scriptable in Python. Make the current auto remediation logic uh, into Python scripts that you can edit from the GUI via a small Python IDE. Period. Allow for custom auto remediation scripts the ability to edit current ones. And make sure that the scripts are fully documented.

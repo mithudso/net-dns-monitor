@@ -406,6 +406,7 @@ def _secondary_ids():
 _HANDLERS = {
     "open_console": "open_console",
     "open_router_window": "_open_router_window",
+    "open_remediation_editor": "open_remediation_editor",
     "open_settings": "open_settings",
     "toggle_mini": "toggle_mini_window",
     "open_last_report": "open_last_report",

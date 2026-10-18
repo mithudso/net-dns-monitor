@@ -1,5 +1,12 @@
 """Dispatch ladder steps (see ladder.py) to real macOS actions.
 
+The logic of each step is a Python script (`netdnsmonitor/remediations/`, edited
+and extended through `remediation_scripts.ScriptStore`; see
+`docs/REMEDIATION_SCRIPTS.md`). This module is what stays in code: it builds the
+`RemediationContext` a script receives -- the only route a script has to the
+subprocess, the resolver, the privilege probes and the failover -- and runs the
+script for a step. The behaviour described below is the shipped scripts'.
+
 Check steps shell out to read-only system tools and report their output; none of
 them mutate system state.
 
@@ -31,14 +38,20 @@ interface actually being renewed. Without it, renewal falls back to
 """
 
 import os
-import re
 import subprocess
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Callable, Optional
 
 from netdnsmonitor import privileges
 from netdnsmonitor.dns_query import query_public_dns_any
 from netdnsmonitor.ladder import LadderStep
+from netdnsmonitor.remediation_scripts import (
+    DEFAULT_TIMEOUT_SECONDS,
+    RunResult,
+    ScriptStore,
+    execute,
+)
 
 RunFn = Callable[..., object]
 
@@ -53,11 +66,38 @@ NETSTAT = "/usr/sbin/netstat"
 
 GRANT_HINT = 'Use "Grant elevated permissions" in the app window to allow this.'
 
-# A DHCP server must put a lease time in every ACK that grants an address (RFC
-# 2131 section 4.3.1, table 3). The ACK to an INFORM -- an address set by hand
-# that only asks the server for options -- must not carry one (4.3.5), so a
-# packet alone does not show the interface is on DHCP; the lease line does.
-_LEASE_LINE = re.compile(r"^lease_time\b", re.MULTILINE)
+
+@dataclass
+class RemediationContext:
+    """Everything a remediation script may use. Documented in
+    docs/REMEDIATION_SCRIPTS.md; a field added here is documented there.
+
+    A script gets side effects only through this object, which is why the offline
+    suite can run every shipped script against fakes.
+    """
+
+    step_name: str
+    classification: Optional[str]
+    probe_domain: str
+    tools: SimpleNamespace
+    run: Callable[[list], object]
+    report_command: Callable[[list], str]
+    did_not_complete: Callable[[object], bool]
+    query_public_dns: Callable[[str], Optional[bool]]
+    resolver_dir_exists: Callable[[str], bool]
+    listdir: Callable[[str], list]
+    is_granted: Callable[[], bool]
+    primary_interface: Callable[[], Optional[str]]
+    dhcp_granted: Optional[Callable[[str], bool]]
+    covered_interfaces: Callable[[], list]
+    failover: Optional[Callable[[str], str]]
+    unavailable: Callable[[str], Optional[str]]
+    needs_privilege: Callable[[str], str]
+    log_lines: list = field(default_factory=list)
+
+    def log(self, message: str) -> None:
+        """A note for the editor's test run. Never part of the recorded outcome."""
+        self.log_lines.append(str(message))
 
 
 def make_repair_executor(
@@ -72,12 +112,18 @@ def make_repair_executor(
     dhcp_granted_fn: Optional[Callable[[str], bool]] = None,
     unavailable_fn: Optional[Callable[[str], str]] = None,
     covered_interfaces_fn: Optional[Callable[[], list]] = None,
+    store: Optional[ScriptStore] = None,
+    script_timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ):
     """`unavailable_fn(what)` marks the privileged repairs as not part of this
     build (the Mac App Store edition may not ask for root). When it is set, those
     steps run nothing and return its text, which never reads as ok, failed or
     NEEDS_PRIVILEGE -- the grant hint would point at a button that build lacks.
+
+    `store` supplies the scripts. The default is the built-ins only, so a caller
+    that does not opt in (every test, the CLI) never runs a user's file.
     """
+    store = store or ScriptStore()
     is_granted_fn = is_granted_fn or (lambda: False)
     primary_interface_fn = primary_interface_fn or (lambda: None)
     # `is_granted_fn` answers only for the mDNSResponder restart. The DHCP rules
@@ -116,219 +162,73 @@ def make_repair_executor(
             return f"failed: {' '.join(args)} exited {result.returncode} -- {output or 'no output'}"
         return output or f"no output from {' '.join(args)}"
 
-    def flush_dns_cache() -> str:
-        if unavailable_fn is not None:
-            return unavailable_fn("flushing the DNS cache")
-        flush = run([DSCACHEUTIL, "-flushcache"])
-        if did_not_complete(flush):
-            return f"failed: {DSCACHEUTIL} did not complete ({flush.stderr})"
-        if flush.returncode != 0:
-            return f"failed: {flush.stderr.strip()}"
-        hup = run(list(privileges.MDNS_HUP))
-        if hup.returncode == 0:
-            return "ok"
-        if did_not_complete(hup):
-            # Nothing was refused, so the grant is not the fix and the hint
-            # would be wrong.
-            return (
-                "partial: dscacheutil cache flushed; the mDNSResponder HUP did not "
-                f"complete ({hup.stderr})"
-            )
-        # dscacheutil succeeds unprivileged, but mDNSResponder is owned by
-        # another user (root/_mdnsresponder) -- signaling it without elevated
-        # privilege reliably fails. Report what actually happened rather than a
-        # blanket failure.
-        if is_granted_fn():
-            elevated = run([privileges.SUDO, "-n", *privileges.MDNS_HUP])
-            if elevated.returncode == 0:
-                return "ok (HUP sent to mDNSResponder using the granted privilege)"
-            if did_not_complete(elevated):
-                return (
-                    "partial: cache flushed; the HUP sent through the granted sudo rule "
-                    f"did not complete ({elevated.stderr})"
-                )
-            # The grant exists but did not work: the rule may not match, or
-            # sudoers.d may not be included. Distinguished from "no grant"
-            # because the fix is completely different.
-            return (
-                "partial: cache flushed, but the granted sudo rule did not signal "
-                f"mDNSResponder ({elevated.stderr.strip()})"
-            )
-        return (
-            "partial: dscacheutil cache flushed, but mDNSResponder HUP "
-            f"failed ({hup.stderr.strip()}) -- requires elevated privilege. {GRANT_HINT}"
-        )
-
     def needs_privilege_stub(step_name: str) -> str:
         return (
             f"NEEDS_PRIVILEGE: {step_name} needs to run as root, and that has not "
             f"been granted. {GRANT_HINT}"
         )
 
-    def renew_dhcp_lease() -> str:
-        if unavailable_fn is not None:
-            return unavailable_fn("renewing the DHCP lease")
-        # Without a per-interface answer, keep the old order: refuse before the
-        # interface lookup, so an ungranted machine spends no subprocess on it.
-        if dhcp_granted_fn is None and not is_granted_fn():
-            return needs_privilege_stub("renew_dhcp_lease")
-        interface = primary_interface_fn()
-        if interface is None:
-            # primary_interface only returns en* names, so None also means a
-            # full-tunnel VPN holds the route on utun, or `route` could not be
-            # read. "No interface carries the default route" is false then.
-            return (
-                "cannot renew: no Ethernet or Wi-Fi interface carries the default "
-                "route (there is none, a VPN or other tunnel holds it, or the route "
-                "could not be read), so there is no interface to request a lease on"
-            )
-        if dhcp_granted_fn is not None and not dhcp_granted_fn(interface):
-            return needs_privilege_stub("renew_dhcp_lease")
-        covered = list(covered_interfaces_fn())
-        if (
-            covered
-            and covered != list(privileges.ALL_INTERFACES_SENTINEL)
-            and interface not in covered
-        ):
-            return needs_privilege_stub(f"renew_dhcp_lease on {interface}")
-        # `ipconfig set` de-configures the interface's existing IPv4 service
-        # before starting DHCP. On an address set by hand, that swaps the static
-        # configuration for DHCP, and on a network with no DHCP server the
-        # interface is left with no usable IPv4 until the next network
-        # configuration change (man ipconfig). So the renewal only runs on an
-        # interface that already holds a lease. `getpacket` is an unprivileged
-        # read that prints nothing when DHCP is not active or has no lease.
-        packet = run([privileges.IPCONFIG, "getpacket", interface])
-        if did_not_complete(packet):
-            return (
-                f"failed: could not read the DHCP state of {interface} (ipconfig getpacket "
-                f"did not complete ({packet.stderr})), so it is unknown whether renewing "
-                "would replace a configuration set by hand. Nothing was changed."
-            )
-        if packet.returncode != 0:
-            # A failed read is not evidence of a manual configuration; saying
-            # "not using DHCP" here would be a guess.
-            return (
-                f"failed: could not read the DHCP state of {interface} (ipconfig getpacket "
-                f"-- {packet.stderr.strip()}), so it is unknown whether renewing would "
-                "replace a configuration set by hand. Nothing was changed."
-            )
-        if not _LEASE_LINE.search(packet.stdout or ""):
-            return (
-                f"cannot renew: {interface} holds no DHCP lease (ipconfig getpacket shows "
-                "none): either it is not configured for DHCP or DHCP has not obtained one, and "
-                f"ipconfig set {interface} DHCP would replace a configuration set by hand. "
-                "Nothing was changed."
-            )
-        result = run([privileges.SUDO, "-n", privileges.IPCONFIG, "set", interface, "DHCP"])
-        if did_not_complete(result):
-            # The request may have reached ipconfig before the timeout, so
-            # neither "ok" nor "failed" is something that was observed.
-            return (
-                f"unknown: ipconfig set {interface} DHCP did not complete ({result.stderr}); "
-                "the lease request may or may not have been sent"
-            )
-        if result.returncode != 0:
-            return f"failed: ipconfig set {interface} DHCP -- {result.stderr.strip()}"
-        return f"ok: re-requested a DHCP lease on {interface}"
+    def unavailable(what: str) -> Optional[str]:
+        return unavailable_fn(what) if unavailable_fn is not None else None
 
-    def toggle_network_service() -> str:
-        """Never automated, and not because of privilege. See privileges.py.
-
-        Reported as its own outcome rather than as NEEDS_PRIVILEGE so that granting
-        permissions does not leave someone waiting for a step that is never going to
-        run.
-        """
-        return (
-            "NOT_AUTOMATED: taking an interface down and back up cannot be done as "
-            "one command, and doing it as two risks leaving this machine offline "
-            "with no network to fix it over if anything interrupts the second one. "
-            "Toggle Wi-Fi or the cable by hand if the other steps have not helped."
+    def build_context(step_name: str, classification: Optional[str]) -> RemediationContext:
+        # Read at build time, not import time, so a test that patches the
+        # privilege constants sees the patch.
+        tools = SimpleNamespace(
+            DSCACHEUTIL=DSCACHEUTIL,
+            SCUTIL=SCUTIL,
+            NETSTAT=NETSTAT,
+            SUDO=privileges.SUDO,
+            IPCONFIG=privileges.IPCONFIG,
+            KILLALL=privileges.KILLALL,
+            MDNS_HUP=tuple(privileges.MDNS_HUP),
+            ALL_INTERFACES_SENTINEL=tuple(privileges.ALL_INTERFACES_SENTINEL),
+            RESOLVER_DIR=RESOLVER_DIR,
+            GRANT_HINT=GRANT_HINT,
+        )
+        return RemediationContext(
+            step_name=step_name,
+            classification=classification,
+            probe_domain=probe_domain,
+            tools=tools,
+            run=run,
+            report_command=report_command,
+            did_not_complete=did_not_complete,
+            query_public_dns=query_fn,
+            resolver_dir_exists=resolver_dir_exists_fn,
+            listdir=resolver_listdir_fn,
+            is_granted=is_granted_fn,
+            primary_interface=primary_interface_fn,
+            dhcp_granted=dhcp_granted_fn,
+            covered_interfaces=covered_interfaces_fn,
+            failover=failover_fn,
+            unavailable=unavailable,
+            needs_privilege=needs_privilege_stub,
         )
 
-    def check_interface_state() -> str:
-        return report_command([SCUTIL, "--nwi"])
-
-    def check_default_route() -> str:
-        findings = [
-            (label, report_command([NETSTAT, "-rn", "-f", family]))
-            for label, family in (("IPv4", "inet"), ("IPv6", "inet6"))
-        ]
-        failures = sum(result.startswith("failed:") for _, result in findings)
-        prefix = (
-            "failed: could not read either route table\n"
-            if failures == 2
-            else "partial: could not read one route table\n"
-            if failures
-            else ""
-        )
-        return prefix + "\n\n".join(f"{label} routes:\n{result}" for label, result in findings)
-
-    def check_configured_dns_servers() -> str:
-        return report_command([SCUTIL, "--dns"])
-
-    def check_resolver_overrides() -> str:
-        if not resolver_dir_exists_fn(RESOLVER_DIR):
-            return f"no {RESOLVER_DIR} overrides configured"
-        try:
-            entries = resolver_listdir_fn(RESOLVER_DIR)
-        except OSError as exc:
-            # Every subprocess path here is wrapped by run(); this one was not.
-            # os.listdir can raise PermissionError, or FileNotFoundError via a
-            # TOCTOU race with the isdir check above. state_machine's per-step
-            # guard would keep the incident alive, but it can only report the
-            # exception class; handling it here keeps the reason in the outcome.
-            return f"failed: could not read {RESOLVER_DIR} ({exc})"
-        if not entries:
-            return f"no {RESOLVER_DIR} overrides configured"
-        return f"{RESOLVER_DIR} overrides present for: {', '.join(entries)}"
-
-    def resolve_against_public_resolver() -> str:
-        answered = query_fn(probe_domain)
-        if answered is None:
-            # No reply is not a negative answer. Saying "did NOT resolve" here
-            # would tell someone DNS is broken everywhere when nothing was learned.
-            return (
-                f"could not obtain a usable public resolver result for {probe_domain} "
-                "(no usable reply: timed out, no route, UDP port 53 blocked, "
-                "or an invalid or truncated reply); this "
-                "says nothing about the name"
-            )
-        if answered:
-            return f"{probe_domain} resolved via public resolver"
-        return f"{probe_domain} did NOT resolve via public resolver"
-
-    dispatch = {
-        "flush_dns_cache": flush_dns_cache,
-        "renew_dhcp_lease": renew_dhcp_lease,
-        "toggle_network_service": toggle_network_service,
-        "check_interface_state": check_interface_state,
-        "check_default_route": check_default_route,
-        "check_configured_dns_servers": check_configured_dns_servers,
-        "check_resolver_overrides": check_resolver_overrides,
-        "resolve_against_public_resolver": resolve_against_public_resolver,
-    }
+    def run_source(name: str, source: str, classification: Optional[str] = None) -> RunResult:
+        """Run `source` as step `name` -- the editor's test run, unsaved text included."""
+        return execute(name, source, build_context(name, classification), script_timeout)
 
     def executor(step: LadderStep, classification: Optional[str] = None) -> str:
-        # Failover is the one step that needs to know what it is responding to,
-        # because the policy refuses classifications it was not configured for.
-        if step.name == "switch_to_backup_network":
-            if failover_fn is None:
-                return "disabled: network failover is not configured"
-            # Not defaulted: "network" is the classification most likely to be
-            # permitted, so filling it in would turn a caller's omission into a
-            # switch the operator never authorised.
-            if not classification:
-                return "refused: the failover step needs the classification it is responding to"
-            try:
-                return failover_fn(classification)
-            except Exception as exc:  # noqa: BLE001 - every step reports as a string
-                # The one path here that does not go through run(). state_machine
-                # has no per-step guard, so an escape aborts the incident unreported.
-                return f"failed: the failover step raised {type(exc).__name__}"
-        handler = dispatch.get(step.name)
-        if handler is None:
+        info = store.info(step.name)
+        if info is None:
             return f"unknown step: {step.name}"
-        return handler()
+        if not info.enabled:
+            return f"skipped: {step.name} is switched off in its script (ENABLED = False)"
+        if info.problems:
+            # Honest about the step not having run, rather than falling back to
+            # the shipped logic: someone edited this on purpose, and a silent
+            # fallback would report a repair their change was meant to replace.
+            return (
+                f"failed: the {step.name} script is invalid ({info.problems[0]}); "
+                "fix or reset it in the remediation editor"
+            )
+        source = store.source(step.name)
+        if source is None:
+            return f"failed: the {step.name} script could not be read"
+        return run_source(step.name, source, classification).outcome
 
+    executor.run_source = run_source
+    executor.store = store
     return executor

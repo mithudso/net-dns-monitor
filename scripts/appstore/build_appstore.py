@@ -269,6 +269,8 @@ STORE_OMITTED_MODULES = (
     "console_window",
     "router",
     "router_window",
+    "remediation_editor",
+    "remediation_window",
 )
 
 

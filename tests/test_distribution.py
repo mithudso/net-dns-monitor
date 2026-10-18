@@ -75,6 +75,7 @@ def test_every_gated_feature_has_a_reason():
         "unified_log",
         "router",
         "launch_agent_login_item",
+        "remediation_editor",
     }
     assert caps_fields == set(distribution.REASONS)
 

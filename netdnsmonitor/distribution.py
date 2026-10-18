@@ -56,6 +56,8 @@ REASONS = {
     "may not do (Guideline 2.4.5)",
     "launch_agent_login_item": "writing a LaunchAgent is outside the app's container; use the "
     "system Login Items setting instead",
+    "remediation_editor": "running scripts the user writes is executing arbitrary code, which "
+    "App Review does not permit (Guideline 2.5.2); the built-in steps run as shipped",
 }
 
 
@@ -75,6 +77,9 @@ class Capabilities:
     # Guideline 5.1.2(i): explicit permission before data goes to a third-party
     # AI. The direct build keeps its existing opt-in (setting the API key).
     requires_ai_consent: bool
+    # Editing the built-in remediation scripts and running custom ones. Off in the
+    # store build, which runs the shipped scripts only.
+    remediation_editor: bool
 
     @property
     def is_app_store(self) -> bool:
@@ -105,6 +110,7 @@ def detect(env: Optional[Mapping[str, str]] = None) -> Capabilities:
         launch_agent_login_item=full,
         credentials_from_keychain=True,
         requires_ai_consent=app_store,
+        remediation_editor=full,
     )
 
 

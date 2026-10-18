@@ -48,6 +48,7 @@ DIRECT = distribution.detect({})
 
 GATED_TITLES = (
     "Open console",
+    "Edit remediation scripts",
     "Router",
     "Start at Login",
     "Switch to backup now",

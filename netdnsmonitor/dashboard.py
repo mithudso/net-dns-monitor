@@ -68,6 +68,7 @@ SECONDARY_ACTIONS = [
     # buttons' worth of attention while saying nothing true about this one. The
     # label carries what the reader actually needs -- that it is a real shell.
     ("Open console (arbitrary shell)", "open_console", "check"),
+    ("Edit remediation scripts (Python editor)", "open_remediation_editor", "check"),
     ("Open router console", "open_router_window", "check"),
     ("Open settings", "open_settings", "check"),
     ("Collapse to floating mini window", "toggle_mini", "check"),
@@ -402,7 +403,10 @@ WINDOW_WIDTH = LEFT_WIDTH + LOG_WIDTH + MARGIN
 # which put the grid 12px over the results pane -- the fourth time. 18px rather
 # than the bare 12 the test demands, so the grid clears the pane by one BUTTON_GAP
 # instead of landing exactly on it.
-STATS_HEIGHT = 150
+#
+# 150 -> 114 when the remediation editor button made it one row more, 28px over
+# the pane -- the fifth time. 36px, so the grid clears the pane by 8px.
+STATS_HEIGHT = 114
 OUTPUT_HEIGHT = 150
 BUTTON_HEIGHT = 28
 BUTTON_GAP = 6

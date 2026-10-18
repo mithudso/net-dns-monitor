@@ -7,6 +7,7 @@ descriptive only; enforcement is in the repair_executor handlers via
 privileges.covers.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from netdnsmonitor.classifier import Classification
@@ -123,13 +124,23 @@ DEFAULT_FAILOVER_CLASSIFICATIONS = frozenset({"network"})
 def ladder_for(
     classification: Classification,
     failover_classifications: frozenset = DEFAULT_FAILOVER_CLASSIFICATIONS,
+    extra_steps: Sequence[LadderStep] = (),
 ) -> list[LadderStep]:
+    """The ordered steps for a classification.
+
+    `extra_steps` are the user's custom remediation scripts for it (see
+    remediation_scripts.ScriptStore.custom_steps). They run after every shipped
+    step and before the failover: the shipped steps are the cheap, reversible
+    ones, and a custom step is not allowed to push the network switch earlier.
+    """
     if classification == Classification.NETWORK:
         steps = list(NETWORK_LADDER)
     elif classification == Classification.DNS:
         steps = list(DNS_LADDER)
     else:
         return []
+    known = {step.name for step in steps}
+    steps.extend(step for step in extra_steps if step.name not in known)
     if classification.value in failover_classifications:
         steps.append(FAILOVER_STEP)
     return steps

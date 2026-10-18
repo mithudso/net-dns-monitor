@@ -261,3 +261,30 @@ credentials passed: entitlements per Mach-O (sandbox, plus inherit on the helper
 `._*`, no private symbols, `codesign --verify --strict`, profile decoded offline (team,
 app id and Apple Distribution certificate match, expires 2027-09-27). Open: NAT64 run,
 `altool --validate-app`, GUI launch, Local Network prompt, notification banner, macOS 26 floor.
+
+
+## v14 - 2026-10-17 - Editable remediation scripts and in-app IDE (TASK-418)
+
+Delta: 1
+
+Active task: TASK-418 (Stele). Decision: KNOW-419.
+Constraints: CLAUDE.md non-negotiables 1-10; no GUI launch (window is a thin shell,
+logic lives in an offline-testable module); App Store build runs bundled built-ins
+only (no overrides, custom scripts or editor, Guideline 2.5.2); another session has
+uncommitted edits in app.py, setup.py, scripts/appstore/build_appstore.py and three
+test files, so stage only this task's hunks.
+Plan: (1) `builtin_remediations/*.py`, one documented script per ladder step, run with
+an injected `ctx`; (2) `remediation_scripts.py` store/loader/runner; (3)
+`make_repair_executor` dispatches through it with identical outcome strings; (4)
+custom steps join `ladder_for`; (5) `remediation_editor.py` logic + `remediation_window.py`
+shell, menu and dashboard entry; (6) store bundle prune + package data; (7)
+`docs/REMEDIATION_SCRIPTS.md`, tests, counts.
+Done: all seven plan items. Gate (clean tree of this task alone): ruff check and format
+clean, 2617 tests pass, `check_docs.py --collect-tests` passes. Headless AppKit smoke
+run of the editor window built it, checked, saved, and ran a script (it caught a real
+bug: a helper method on the NSObject subclass was read as a selector).
+Open: the editor and its window are in `STORE_OMITTED_MODULES`, but no store bundle
+was built to confirm the prune and the shipped `remediations/*.py` files survive py2app;
+the editor window has not been used by hand in the menu-bar app (cannot be automated).
+The store bundle's `exec(compile(...))` in `remediation_scripts.execute` runs bundled,
+signed built-ins only; a 2.5.2 reviewer scanning for `exec` may ask.
