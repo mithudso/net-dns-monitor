@@ -325,3 +325,30 @@ Done: new `netdnsmonitor/user_notify.py` (`post` returns `queued`, `denied`, `no
 Measured: under Homebrew framework `python3`, `NSBundle.mainBundle()` reports `org.python.python` at `.../Python.app`, so identifier plus `.app` is not enough; `has_app_bundle` rejects the interpreter's bundle. `objc.loadBundle` of the system framework works and content/request objects build; the center itself was deliberately not called outside a bundle.
 Gate: ruff clean, 2700 tests pass, check_docs passes.
 Open (UNVERIFIED): the `requestAuthorizationWithOptions:` and `addNotificationRequest:withCompletionHandler:` block metadata registered by hand in `load_backend` has never run against the real center; authorization prompt, banner, and denied path need the signed app. Owner check: build the app, click **Test network alert**, expect the permission prompt, then a banner after Allow; after Don't Allow expect no banner and `notification authorization denied` in `~/Library/Logs/net-dns-monitor.launchd.log`.
+
+## v17 - 2026-10-17 - Support macOS 26 in the store build (TASK-423)
+
+Delta: 1
+
+Active task: TASK-423 (Stele). Constraints: CLAUDE.md non-negotiables; install nothing
+system-wide (temp venv only); no upload, no App Store Connect, no GUI launch; never claim a
+minos that was not read with `vtool`; plist floor, productbuild and every Mach-O minos must
+agree (ITMS-90264); avoid `netdnsmonitor/alert.py` (another session).
+Plan: (1) measure minos of Homebrew Python vs uv python-build-standalone 3.14.7; (2) build the
+bundle from a temp venv on the standalone interpreter; (3) survey every Mach-O; (4) adapt
+`build_appstore.py` (non-framework layout, floor 26.0, gate) and `setup.py`; (5) docs, tests,
+gates, commit, push.
+Finding so far: uv's standalone 3.14.7 reports `minos 11.0`; py2app 0.28.10 bundles it as a
+non-framework `libpython3.14.dylib` but crashes on `zlib.__file__` (zlib is built in).
+Done: option (a) worked. uv python-build-standalone 3.14.7 (minos 11.0) in a temp venv; py2app
+0.28.10 bundles it as `Frameworks/libpython3.14.dylib`. `setup.py` shims py2app's
+`zlib.__file__` copy; `build_appstore.py` finds libpython, writes `SUPPORTED_MACOS` 26.0 as
+the plist floor and refuses any Mach-O above it (`minimum_system_version`, 2 new tests).
+Ad-hoc bundle: 15 Mach-O, highest minos 26.0 (two rebuilt launchers), interpreter/libpython
+11.0, extensions 10.15/11.0; plist 26.0; codesign strict deep valid; `productbuild
+--synthesize` gives `os-version min="26.0"`; probe not run. Gate: ruff clean, 2680 tests,
+check_docs passes. Docs updated (SUBMISSION s4/4.3, CHECKLIST, REVIEW_RESPONSE, SCRIPTS,
+INSTALLATION). `.venv-store/` gitignored.
+Open (owner only): launch on a real macOS 26 Mac; `altool --validate-app` on a package built
+from `.venv-store`; the app uses NSGlassEffectView (macOS 26) with a vibrancy fallback, not
+exercised on 26.

@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2700 tests; the whole decision surface
+python3 -m pytest -q          # 2702 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2700 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2700 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2702 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -721,6 +721,11 @@ python3.13 -m venv .venv
 .venv/bin/pip install py2app -c constraints.txt
 ```
 
+The store build needs a different venv, `.venv-store`, on a python-build-standalone
+interpreter (`minos 11.0`) so the bundle runs on macOS 26; `build_appstore.py` refuses
+Homebrew's Python (`minos 27.0`). The recipe is in `docs/APP_STORE_SUBMISSION.md`
+section 4.
+
 ### `build_appstore.py` — build, sign and package
 
 **Purpose.** Build the bundle with py2app, then do what py2app cannot: rebuild the
@@ -728,7 +733,7 @@ launcher stubs against the installed SDK, remove the string `itms-services` from
 bundled standard library, delete the first-party modules the store edition never runs
 (shell console, router, command-line tool) and prove the pruned bundle still imports,
 check the privacy manifest, refuse links to libraries outside the bundle or the OS, set
-`LSMinimumSystemVersion` from the bundled binaries, strip extended attributes, sign
+`LSMinimumSystemVersion` to 26.0 (refusing any binary with a higher `minos`), strip extended attributes, sign
 inside-out, and verify the signature.
 
 **When to use it.** `adhoc` after any change that adds a subprocess or file access, to
@@ -756,7 +761,7 @@ warning). `adhoc` adds `--with-probe`.
 `--profile`. The full `release` command is in `docs/APP_STORE_SUBMISSION.md` §4.2.
 
 ```bash
-.venv/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
+.venv-store/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
 ```
 
 The build stops if a `release` run has no `https://` privacy policy URL or the URL still
@@ -860,7 +865,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2700 passed
+python3 -m pytest -q            # 2702 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -894,7 +899,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 41 | `test_localize.py` |
 | 44 | `test_router_window.py` |
 | 35 | `test_app_log_wiring.py` |
-| 71 | `test_appstore_build.py` |
+| 73 | `test_appstore_build.py` |
 | 45 | `test_throughput.py` |
 | 31 | `test_forensic_log.py` |
 | 30 | `test_failover_policy.py` |
@@ -953,7 +958,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 16 | `test_ui_catalog.py` |
 | 14 | `test_ui_windows.py` |
 | 19 | `test_user_notify.py` |
-| **2700** | **total** |
+| **2702** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

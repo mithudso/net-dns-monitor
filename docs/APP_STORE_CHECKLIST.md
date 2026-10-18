@@ -25,6 +25,7 @@ ship the full build outside the store instead (§10). Both can coexist.
 | Privacy policy | `docs/PRIVACY_POLICY.md` complete (publisher, contact, effective date 2026-09-27); public copy at <https://llms-explorer.com/net-dns-monitor/privacy/>, support page at <https://llms-explorer.com/net-dns-monitor/> (both from the `llms-explorer` repository, deployed by Cloudflare Pages) |
 | Icon | Drawn in code by `scripts/appstore/make_icon.py`, reviewed 2026-09-27; the ICNS carries 512 and 512@2x |
 | Tooling | Xcode 27.0 (27A266a) on macOS 27.0, `altool` 27.0.5, Transporter installed, `.venv` on Python 3.13.15 with py2app 0.28.10 |
+| macOS 26 floor (2026-10-17, TASK-423) | Ad-hoc build from a python-build-standalone 3.14.7 venv: `LSMinimumSystemVersion` 26.0, highest Mach-O `minos` 26.0 (the rebuilt launchers; interpreter and `libpython` 11.0), `codesign --verify --strict --deep` valid, `productbuild --synthesize` wrote `os-version min="26.0"`. A launch on macOS 26 is not done (owner-only) |
 | Rebuilt on `master` (2026-09-27) | After the dependency bumps (`anthropic` 1.8.0, `pyobjc` 12.2.2), with the repo `.venv` on Python 3.14.7: 81 MB, `LSMinimumSystemVersion` 26.0, signature valid, same three entitlements, probe result unchanged. The first rebuild said 27.0: Homebrew's `liblzma` bottle is built for macOS 27, and the build sets the minimum from the highest `minos` in the bundle. `setup.py` now excludes `lzma` from the store build; nothing uses xz |
 | Team ID | `L9ELX85ZFD`, from the OU field of the Apple Development certificate in the login keychain |
 
@@ -129,7 +130,7 @@ contains dots, so it reports "No value at that key path" for a good profile.)
 Quit your normal copy first; two copies alert and fail over independently.
 
 ```bash
-.venv/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
+.venv-store/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
 build/appstore/adhoc/dist/Net-DNS-Monitor.app/Contents/MacOS/sandbox_probe   # JSON; compare with §1
 open build/appstore/adhoc/dist/Net-DNS-Monitor.app
 ```
@@ -155,14 +156,16 @@ open build/appstore/adhoc/dist/Net-DNS-Monitor.app
 
 ### Step 6. Release build
 
-Run from the repository root with its `.venv`. Check that the build prints
-`Minimum macOS: 26.0`; a higher number means a newly bundled binary raised the
-floor (find it with `otool -l <file> | grep minos`).
+Run from the repository root with `.venv-store` (a python-build-standalone venv; see
+`docs/APP_STORE_SUBMISSION.md` section 4), not the Homebrew `.venv`: Homebrew's Python
+is stamped `minos 27.0` and the build refuses it. The build prints
+`Minimum macOS: 26.0`; if it stops with "a bundled binary needs macOS ...", a binary
+raised the floor (find it with `vtool -show-build <file> | grep minos`).
 The identity strings must match `security find-identity -v` exactly; the icon
 needs no flag (the build draws it).
 
 ```bash
-.venv/bin/python scripts/appstore/build_appstore.py release \
+.venv-store/bin/python scripts/appstore/build_appstore.py release \
   --team-id L9ELX85ZFD \
   --bundle-id com.mitchhudson.netdnsmonitor \
   --version 1.0 --build-number 1 \

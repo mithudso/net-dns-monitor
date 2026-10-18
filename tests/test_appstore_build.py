@@ -31,6 +31,19 @@ def test_parse_minos_reads_every_architecture():
     assert build.parse_minos(output) == [(10, 13), (11, 0)]
 
 
+def test_minimum_system_version_is_the_supported_floor_when_binaries_are_older():
+    assert build.SUPPORTED_MACOS == (26, 0)
+    assert build.minimum_system_version((11, 0)) == "26.0"
+    assert build.minimum_system_version((26, 0)) == "26.0"
+
+
+def test_minimum_system_version_refuses_a_binary_newer_than_the_floor():
+    # Homebrew's Python reports minos 27.0; shipping it under a 26.0 plist
+    # would install on macOS 26 and crash at launch.
+    with pytest.raises(SystemExit, match="python-build-standalone"):
+        build.minimum_system_version((27, 0))
+
+
 def test_format_version_always_has_a_minor_component():
     assert build.format_version((26,)) == "26.0"
     assert build.format_version((10, 15, 7)) == "10.15.7"

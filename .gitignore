@@ -34,3 +34,4 @@ net-dns-monitor.log
 
 # Local Claude Code state (machine-specific settings/agents/worktrees)
 .claude/
+.venv-store/

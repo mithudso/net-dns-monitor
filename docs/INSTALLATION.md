@@ -10,7 +10,7 @@ Choose one of three ways to run the app.
 
 ## Prerequisites
 
-- macOS on Apple silicon. The bundled Python sets the minimum OS; the Homebrew build is macOS 26.
+- macOS on Apple silicon. macOS 26 or later for the store build (`LSMinimumSystemVersion` 26.0, set by `scripts/appstore/build_appstore.py`).
 - Python 3.13. `scripts/install.sh` and `scripts/start.sh` refuse older versions.
 - Xcode 26 or later, only for the Mac App Store build.
 

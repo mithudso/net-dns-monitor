@@ -34,8 +34,12 @@ Everything py2app cannot do is here, in order:
    console, the router and the command-line tool; `STORE_OMITTED_MODULES`), so
    Guideline 2.5.19 ("hidden, dormant, or undocumented features") has nothing
    to find, then import the pruned bundle to prove nothing still needs them.
-4. Set LSMinimumSystemVersion to the highest `minos` of any bundled binary.
-   Guessing lower produces an app that installs on a Mac it cannot launch on.
+4. Set LSMinimumSystemVersion to `SUPPORTED_MACOS` (26.0) and refuse a bundle
+   whose highest `minos` is above it. The plist, the launcher stubs and every
+   bundled Mach-O must agree (ITMS-90264), and a plist below a binary's minos
+   installs on a Mac the app cannot launch on. Homebrew's Python is stamped for
+   the host macOS (27.0), so build from a python-build-standalone venv (minos
+   11.0); docs/APP_STORE_SUBMISSION.md section 4.1 has the recipe.
 5. Strip extended attributes (uploads must not carry com.apple.quarantine).
 6. Sign inside-out: libraries without entitlements, then frameworks, then
    helper executables with the inherit entitlements, then the app. No --deep,
@@ -43,10 +47,10 @@ Everything py2app cannot do is here, in order:
 7. Verify the signature, and in release mode build and check the installer
    package.
 
-Run from the repository root with the project venv that has py2app installed:
+Run from the repository root with the python-build-standalone venv `.venv-store` (see docs/APP_STORE_SUBMISSION.md section 4):
 
-  .venv/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
-  .venv/bin/python scripts/appstore/build_appstore.py release \\
+  .venv-store/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
+  .venv-store/bin/python scripts/appstore/build_appstore.py release \\
       --team-id ABCDE12345 --bundle-id com.example.netdnsmonitor \\
       --version 1.0 --build-number 1 \\
       --app-identity "Apple Distribution: Jane Doe (ABCDE12345)" \\
@@ -76,6 +80,9 @@ BUILD_ROOT = REPO / "build" / "appstore"
 APP_NAME = "Net-DNS-Monitor"
 PROBE_NAME = "sandbox_probe"
 DEFAULT_BUNDLE_ID = "com.net-dns-monitor.app"
+# The oldest macOS the store edition supports (owner decision 2026-10-17). It is
+# the plist's LSMinimumSystemVersion; no bundled Mach-O may require more.
+SUPPORTED_MACOS: tuple[int, ...] = (26, 0)
 
 MACHO_MAGICS = {
     b"\xfe\xed\xfa\xce",
@@ -115,6 +122,23 @@ def format_version(parts: Sequence[int]) -> str:
     while len(parts) < 2:
         parts.append(0)
     return ".".join(str(p) for p in parts)
+
+
+def minimum_system_version(
+    highest: Sequence[int], supported: Sequence[int] = SUPPORTED_MACOS
+) -> str:
+    """The plist floor, or a SystemExit when a binary needs a newer macOS.
+
+    Raising the plist to the binary's minos would silently drop macOS 26 buyers;
+    lowering the binary's minos by hand would crash on 26. So the build stops.
+    """
+    if tuple(highest) > tuple(supported):
+        raise SystemExit(
+            f"a bundled binary needs macOS {format_version(highest)}, above the supported "
+            f"{format_version(supported)}. Build from a python-build-standalone venv "
+            "(minos 11.0), not Homebrew's Python: docs/APP_STORE_SUBMISSION.md section 4.1."
+        )
+    return format_version(supported)
 
 
 def parse_minos(vtool_output: str) -> list[tuple[int, ...]]:
@@ -604,8 +628,16 @@ def rebuild_launchers(app: Path, min_version: str) -> None:
     info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
     macos = app / "Contents" / "MacOS"
     main = macos / info["CFBundleExecutable"]
+    # py2app on a framework Python bundles Python.framework; on a standalone
+    # (non-framework) Python it bundles Frameworks/libpython3.X.dylib instead.
+    frameworks = app / "Contents" / "Frameworks"
     python_binary = next(
-        (app / "Contents" / "Frameworks").glob("Python.framework/Versions/*/Python")
+        iter(
+            [
+                *frameworks.glob("Python.framework/Versions/*/Python"),
+                *frameworks.glob("libpython3.*.dylib"),
+            ]
+        )
     )
     archs = capture(["lipo", "-archs", python_binary]).split()
     arch_flags = [flag for arch in archs for flag in ("-arch", arch)]
@@ -973,7 +1005,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.mode == "release" and (app / "Contents" / "MacOS" / PROBE_NAME).exists():
         raise SystemExit("refusing to package a bundle that contains the sandbox probe")
 
-    min_os = format_version(highest_minos(macho_files(app)))
+    min_os = minimum_system_version(highest_minos(macho_files(app)))
     rebuild_launchers(app, min_os)
 
     remaining = patch_stdlib_zip(app)
@@ -994,7 +1026,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if problems:
         raise SystemExit("libraries outside the bundle or the OS:\n  " + "\n  ".join(problems))
 
-    min_os = format_version(highest_minos(binaries))
+    min_os = minimum_system_version(highest_minos(binaries))
     plist_updates = {"LSMinimumSystemVersion": min_os}
     if args.declare_exempt_encryption:
         plist_updates["ITSAppUsesNonExemptEncryption"] = False

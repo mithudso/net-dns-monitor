@@ -84,6 +84,25 @@ if os.environ.get("NETDNS_BUILD") == "appstore":
     if policy_url:
         # Read by the app's "Privacy Policy" menu item (Guideline 5.1.1(i)).
         PLIST["NDMPrivacyPolicyURL"] = policy_url
+    # A python-build-standalone interpreter (the only kind whose Mach-O minos is
+    # low enough for macOS 26; Homebrew's is 27.0) builds zlib into the
+    # executable, so `zlib.__file__` does not exist and py2app 0.28.10 raises
+    # AttributeError copying it. There is nothing to copy; skip exactly that file.
+    import zlib
+
+    if not getattr(zlib, "__file__", None):
+        from py2app.build_app import py2app as _py2app_command
+
+        _no_file = "<zlib is built into the interpreter>"
+        zlib.__file__ = _no_file
+        _copy_file = _py2app_command.copy_file
+
+        def _copy_file_skipping_zlib(self, infile, *args, **kwargs):
+            if infile == _no_file:
+                return None
+            return _copy_file(self, infile, *args, **kwargs)
+
+        _py2app_command.copy_file = _copy_file_skipping_zlib
     # Nothing here uses xz; lzma is only reached through shutil's optional
     # import, which tolerates its absence. Bundling it drags in Homebrew's
     # liblzma, whose bottle is built for the host macOS, and

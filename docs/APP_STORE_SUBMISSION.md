@@ -165,19 +165,30 @@ Apple does not let you download it again. Save it to
 
 ## 4. Build
 
-Run from the repository root. The build uses the project venv with the pinned
-tools:
+Run from the repository root. The store build needs a venv whose Python was built
+for an old macOS, because the bundle's minimum macOS is the highest `minos` of
+the interpreter it embeds. Homebrew's Python reports `minos 27.0`, so a bundle
+built from the ordinary `.venv` is refused by `build_appstore.py` (it stops with
+"a bundled binary needs macOS 27.0"). Use a
+[python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+interpreter from `uv` (`minos 11.0`) in a separate venv, `.venv-store`:
 
 ```bash
-python3.13 -m venv .venv            # or: uv venv -p python3.13 .venv
-.venv/bin/pip install -r requirements-dev.txt -c constraints.txt
-.venv/bin/pip install py2app -c constraints.txt
+uv python install 3.14.7            # user-level, under ~/.local/share/uv/python
+~/.local/share/uv/python/cpython-3.14.7-macos-aarch64-none/bin/python3 -m venv .venv-store
+.venv-store/bin/pip install -r requirements-dev.txt -c constraints.txt
+.venv-store/bin/pip install py2app -c constraints.txt
+vtool -show-build .venv-store/bin/python3 | grep minos    # expect: minos 11.0
 ```
+
+Use `.venv-store/bin/python` wherever the commands below say `.venv/bin/python`.
+`setup.py` carries a shim for one py2app 0.28.10 bug on this kind of Python (zlib
+is built in, so `zlib.__file__` does not exist).
 
 ### 4.1 Ad-hoc build and sandbox probe (no Apple account needed)
 
 ```bash
-.venv/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
+.venv-store/bin/python scripts/appstore/build_appstore.py adhoc --with-probe
 build/appstore/adhoc/dist/Net-DNS-Monitor.app/Contents/MacOS/sandbox_probe
 ```
 
@@ -192,7 +203,7 @@ first: two copies alert and fail over independently.
 ### 4.2 Release build
 
 ```bash
-.venv/bin/python scripts/appstore/build_appstore.py release \
+.venv-store/bin/python scripts/appstore/build_appstore.py release \
   --team-id <TEAMID> \
   --bundle-id <your.bundle.id> \
   --version 1.0 --build-number 1 \
@@ -223,31 +234,39 @@ Output: `build/appstore/release/Net-DNS-Monitor-<version>-<build>.pkg`.
 | Property | Value |
 |---|---|
 | Architecture | arm64 only |
-| Minimum macOS | 27.0 (measured 2026-10-17; was 26.0 on 2026-09-27) |
-| Size | about 69 MB (Python 3.14.8 venv, 2026-10-17, after the prune and the `setup.py` excludes) |
+| Minimum macOS | 26.0 (`LSMinimumSystemVersion`; measured 2026-10-17 on an ad-hoc build from a python-build-standalone venv) |
+| Size | 78 MB (standalone Python 3.14.7 venv, 2026-10-17, after the prune and the `setup.py` excludes) |
 | Category | `public.app-category.utilities` |
 
-The minimum is 27.0 because Homebrew now builds every Python for macOS 27 on
-Apple silicon (3.12.15, 3.13.16 and 3.14.8 all report `minos 27.0`, `sdk 27.0` from
-`vtool -show-build`, measured 2026-10-17), and an app cannot run below the highest
-minimum of its binaries. The build sets `LSMinimumSystemVersion` from that, so a
-buyer on macOS 26 cannot install it. macOS 27 reached general availability on
-2026-09-14 ([MacRumors](https://www.macrumors.com/2026/09/10/macos-27-golden-gate-release-date/)),
-so a reviewer on the current public release can run it. Earlier notes here said 26.0:
-that was true for Homebrew's Python 3.13.15 on 2026-09-17 and is not any more. Apple
-accepts arm64-only Mac apps, and macOS 27 is Apple-silicon only
-([Apple news](https://developer.apple.com/news/?id=k1mtkt1k)).
+The minimum is 26.0 because the owner decided on 2026-10-17 to support macOS 26.
+`build_appstore.py` writes `SUPPORTED_MACOS` (26.0) as `LSMinimumSystemVersion`,
+rebuilds the launcher stubs with `-mmacosx-version-min=26.0`, and stops if any
+bundled Mach-O has a higher `minos`. The same value reaches the installer package:
+`productbuild --synthesize` on the ad-hoc bundle wrote `<os-version min="26.0"/>`.
 
-The store build excludes `lzma` (`setup.py`). Homebrew's `liblzma` bottle is
-built for the host macOS, so on a macOS 27 build machine bundling it raised the
-minimum to 27.0 (measured 2026-09-27). Nothing in the app uses xz, and
-`shutil` only imports `lzma` optionally.
+Measured with `vtool -show-build` on every Mach-O in the ad-hoc bundle (15 files,
+2026-10-17): the embedded interpreter `Contents/MacOS/python` and
+`Contents/Frameworks/libpython3.14.dylib` report `minos 11.0` (sdk 15.0); the two
+rebuilt launchers (`Net-DNS-Monitor`, `sandbox_probe`) report `minos 26.0`; the
+extension modules report `minos 10.15` and `11.0`. The highest is 26.0, so no
+binary asks for more than the plist. Binaries below the plist are fine; the
+check that matters is that none is above it.
 
-To support macOS 26 or older, or Intel Macs, build with a Python whose binaries
-target an older macOS (a python.org universal2 build, or a python-build-standalone
-interpreter, which reports `minos 11.0`). The script still patches `itms-services`
-and recomputes the minimum. Not tried: whether py2app 0.28 bundles a standalone
-(non-framework) interpreter.
+Earlier notes said 27.0. Homebrew builds every Python for macOS 27 on Apple silicon
+(3.12.15, 3.13.16 and 3.14.8 all report `minos 27.0`, `sdk 27.0`, measured
+2026-10-17), and that Python is why the floor was raised to 27.0 that day. A
+python-build-standalone interpreter from `uv` (3.13.12 and 3.14.7, `minos 11.0`)
+removes the constraint. py2app 0.28.10 bundles it as a non-framework
+`Frameworks/libpython3.14.dylib` (not `Python.framework`); `build_appstore.py` and
+`setup.py` handle that layout. The 27.0 build and its Homebrew `liblzma` cause are
+history: the store build still excludes `lzma` (`setup.py`), which nothing uses.
+
+NOT verified: launching this bundle on a macOS 26 machine. This build Mac runs macOS 27.2
+and has no macOS 26 install, so a launch on 26 is an owner-only check (see
+`docs/APP_STORE_CHECKLIST.md` step 5). Also not verified: that Apple's validator
+(`altool --validate-app`) accepts the package; it was not run.
+
+Intel Macs are still out of scope: the bundle is arm64 only.
 
 ## 5. Validate and upload
 

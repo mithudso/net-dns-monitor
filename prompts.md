@@ -143,3 +143,11 @@ Delta: 1
 Prompt:
 
 > Should I migrate alerts off NSUserNotificationCenter? ... yes
+
+## v17 - 2026-10-17 - Support macOS 26 in the store build (TASK-423)
+
+Delta: 1
+
+Prompt:
+
+> Support macOS 26: yes
