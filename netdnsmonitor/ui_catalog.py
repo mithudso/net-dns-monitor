@@ -103,6 +103,17 @@ SETTING_TIPS = {
     "custom_remediation_scripts_enabled": "Off = run only the shipped scripts and ignore every file in the scripts folder, to rule your edits out. Needs a restart.",
     "remediation_scripts_dir": "Folder holding your edits to the shipped scripts and your own scripts. Needs a restart.",
     "remediation_script_timeout_seconds": "A script still running after this is reported as unknown and abandoned. Needs a restart.",
+    # Fleet reporting
+    "fleet_reporting_enabled": "Send incidents, the steps tried and the recovery to the central server. Used by headless mode. Needs a restart.",
+    "fleet_server_address": "IP address of the central server. Blank broadcasts to this subnet. An IP is more reliable than a name during an outage. Needs a restart.",
+    "fleet_port": "UDP port the fleet reports use, on both the machines and the server. Needs a restart.",
+    "fleet_heartbeat_seconds": "How often this machine tells the server it is alive. Needs a restart.",
+    "fleet_machine_name": "Name shown in the server's log for this Mac. Blank uses the host name. Needs a restart.",
+    "fleet_allow_unsigned": "Server only. Accept reports with no signature. A trial setting: any host on the network can then claim any machine name. Needs a restart.",
+    "fleet_server_enabled": "Run the central server inside the headless process. Needs a restart.",
+    "fleet_server_log_path": "Server only. Append-only log of every incident, resolution and silence. Needs a restart.",
+    "fleet_server_state_path": "Server only. The current picture of every machine. Needs a restart.",
+    "fleet_stale_seconds": "Server only. A machine not heard from for this long is logged as silent. Needs a restart.",
     # Files and folders
     "reports_dir": "Where incident reports are written. Needs a restart.",
     "learned_domains_path": "File holding the learned domain names. Needs a restart.",
@@ -133,6 +144,7 @@ GROUP_TIPS = {
     "Domain learning": "Names the app adds to its own checks.",
     "Notifications": "Slack and email alerts. Secrets are not stored here.",
     "Remediation scripts": "Where the editable troubleshooting scripts live and how long they may run.",
+    "Fleet reporting": "Headless mode and the central server: where reports go and how the server logs them. The shared secret is a credential, not a setting.",
     "Files and folders": "Where the app writes its records.",
     "Router (not with the router/ stack)": "The in-app router. Conflicts with the standalone router/ stack.",
 }
@@ -298,6 +310,11 @@ CREDENTIAL_ENTRIES = [
         "Set SMTP password…",
         "cred_SMTP_PASSWORD",
         "Store the password for the SMTP login in the Keychain.",
+    ),
+    (
+        "Set fleet shared secret…",
+        "cred_FLEET_SHARED_SECRET",
+        "Store the secret that signs fleet reports in the Keychain. The central server and every reporting machine must use the same one.",
     ),
     (
         "Remove saved credentials",

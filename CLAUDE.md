@@ -94,7 +94,7 @@ report, because someone will act on it.
 ## Commands — before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2702 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2769 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -249,6 +249,13 @@ comment that is wrong about why is as expensive as code that is wrong.
   `ai_consent.py` records permission before anything goes to Anthropic.
   `docs/APP_STORE_SUBMISSION.md` is the authoritative document for the store build:
   what was measured, what is wired, and what is not verified.
+- **Fleet reporting and headless mode were added 2026-10-17 and have not run between two
+  Macs.** `netdns headless` reports to `netdns server` over signed UDP (`fleet_*.py`,
+  `headless.py`, `docs/FLEET.md`). Loopback tests and a loopback CLI smoke run passed;
+  subnet broadcast, the Local Network prompt and a launchd-loaded agent are unobserved.
+  A `resolved` event never credits a ladder step, and the server marks an incident closed
+  from a heartbeat as `inferred`. The store edition omits these modules
+  (`Capabilities.fleet_reporting`).
 - **Two consoles were merged into one.** The GUI console is the arbitrary-shell one
   (`console.py` + `console_window.py`), reachable from the menu bar and from the
   dashboard button, both going through the single controller at `App.console`.

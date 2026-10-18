@@ -224,6 +224,29 @@ DEFAULT_CONFIG = {
     "custom_remediation_scripts_enabled": True,
     # A script still running after this is reported as `unknown:` and abandoned.
     "remediation_script_timeout_seconds": 60,
+    # --- fleet reporting and the central server --------------------------
+    # Headless mode (`netdns headless`) and the server (`netdns server`); see
+    # docs/FLEET.md. Everything here is off by default and sends nothing until
+    # fleet_reporting_enabled is true. The shared secret is the credential
+    # FLEET_SHARED_SECRET, never a config key.
+    "fleet_reporting_enabled": False,
+    # Where reports go. Empty = broadcast to the local subnet, which only reaches
+    # a server on the same LAN. An IP address is more reliable than a name:
+    # during an outage the name may not resolve.
+    "fleet_server_address": "",
+    "fleet_port": 45738,
+    "fleet_heartbeat_seconds": 300,
+    # How this machine is named in the server's log. Empty = its host name.
+    "fleet_machine_name": "",
+    # Accept reports with no signature. A trial setting: any host on the network
+    # can then claim any machine name.
+    "fleet_allow_unsigned": False,
+    # Run the server inside the headless process (`netdns server` always does).
+    "fleet_server_enabled": False,
+    "fleet_server_log_path": "~/Library/Application Support/net-dns-monitor/fleet/events.jsonl",
+    "fleet_server_state_path": "~/Library/Application Support/net-dns-monitor/fleet/state.json",
+    # A machine not heard from for this long is logged as silent.
+    "fleet_stale_seconds": 900,
     # --- automatic network failover -------------------------------------
     # Off by default, and deliberately so: this is the only feature that
     # rewrites system network configuration, and it cannot guess which of the
@@ -302,6 +325,8 @@ PATH_KEYS = (
     "learned_domains_path",
     "failover_state_path",
     "remediation_scripts_dir",
+    "fleet_server_log_path",
+    "fleet_server_state_path",
 )
 
 # Keys whose consumers iterate them. A str is iterable too, so a bare string is
@@ -353,6 +378,8 @@ POSITIVE_KEYS = (
     "log_view_timeout_seconds",
     "notify_timeout_seconds",
     "remediation_script_timeout_seconds",
+    "fleet_heartbeat_seconds",
+    "fleet_stale_seconds",
     "failover_speedtest_timeout_seconds",
     # A cap of 0 or less would make every throughput sample empty.
     "failover_speedtest_max_bytes",
@@ -361,7 +388,7 @@ POSITIVE_KEYS = (
     "resolution_max_workers",
 )
 
-PORT_KEYS = ("peer_port", "smtp_port", "failover_speedtest_port")
+PORT_KEYS = ("peer_port", "smtp_port", "failover_speedtest_port", "fleet_port")
 
 # Every other numeric key. 0 is meaningful for some of these (no re-alert, no
 # automatic switching), so only the type is checked. A null loads as None, and
@@ -658,6 +685,11 @@ def validate_config(config: dict) -> None:
     for key in PATH_KEYS:
         if key in config and not _is_text(config[key]):
             raise ConfigError(key, f"config key '{key}' must be a path, got {config[key]!r}")
+
+    # A blank is the meaning of "broadcast" and "use the host name"; None is not.
+    for key in ("fleet_server_address", "fleet_machine_name"):
+        if key in config and not isinstance(config[key], str):
+            raise ConfigError(key, f"config key '{key}' must be text, got {config[key]!r}")
 
     for key in PORT_KEYS:
         if key in config and not _is_port(config[key]):

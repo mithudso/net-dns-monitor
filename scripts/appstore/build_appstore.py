@@ -295,6 +295,11 @@ STORE_OMITTED_MODULES = (
     "router_window",
     "remediation_editor",
     "remediation_window",
+    "headless",
+    "fleet_client",
+    "fleet_protocol",
+    "fleet_server",
+    "fleet_store",
 )
 
 

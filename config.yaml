@@ -329,6 +329,31 @@ custom_remediation_scripts_enabled: true
 # A script still running after this many seconds is reported as `unknown:`.
 remediation_script_timeout_seconds: 60
 
+# --- Fleet reporting and the central server ---------------------------------
+# For an administrator who installs the monitor on teammates' Macs (docs/FLEET.md).
+# `netdns headless` runs the monitor with no windows; with fleet_reporting_enabled
+# it reports each incident, what was tried, and the recovery to a central server.
+# `netdns server` is that server: it listens on fleet_port, logs events and keeps
+# the picture of which machines have problems. Nothing is sent unless reporting is
+# on. Reports are signed with the shared secret in the credential
+# FLEET_SHARED_SECRET (environment or Keychain), never in this file.
+fleet_reporting_enabled: false
+# Empty = broadcast to the local subnet. An IP address is more reliable than a
+# name: during an outage the name may not resolve.
+fleet_server_address: ""
+fleet_port: 45738
+fleet_heartbeat_seconds: 300
+# Empty = this Mac's host name.
+fleet_machine_name: ""
+# Trial setting. Unsigned reports let any host on the network claim any name.
+fleet_allow_unsigned: false
+# Run the server inside the headless process too.
+fleet_server_enabled: false
+fleet_server_log_path: "~/Library/Application Support/net-dns-monitor/fleet/events.jsonl"
+fleet_server_state_path: "~/Library/Application Support/net-dns-monitor/fleet/state.json"
+# Not heard from for this many seconds = logged as silent.
+fleet_stale_seconds: 900
+
 # --- Automatic failover to a backup network --------------------------------
 # Off, and with no services named, until you fill in both. Switching the
 # network service order is a privileged write, and doing it automatically on a

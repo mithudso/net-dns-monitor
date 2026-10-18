@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2702 tests; the whole decision surface
+python3 -m pytest -q          # 2769 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2702 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2702 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2769 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -121,6 +121,15 @@ Three columns worth reading carefully:
   fault.
 - **`Mbps = -`** means not measured, never "zero". Only reachable interfaces are
   benchmarked, because there is nothing to measure on a path carrying no traffic.
+
+### `headless`, `server`, `fleet` — monitor a team of Macs
+
+`headless` runs the monitor with no windows and reports to a central server
+(`--install` writes and loads a KeepAlive LaunchAgent, `--no-start` only writes it,
+`--uninstall` removes it). `server` listens for those reports and logs them. `fleet`
+prints which machines have problems, what they are and what was done
+(`--events N`, `--json`). Set-up, settings and the security model are in
+`docs/FLEET.md`.
 
 ### `python3 -m netdnsmonitor.cli console` — interactive
 
@@ -865,7 +874,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2702 passed
+python3 -m pytest -q            # 2769 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -878,7 +887,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 
 | Tests | File |
 |---|---|
-| 299 | `test_config.py` |
+| 307 | `test_config.py` |
 | 122 | `test_failover.py` |
 | 110 | `test_settings_window.py` |
 | 89 | `test_privileges.py` |
@@ -934,6 +943,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 14 | `test_log_watcher.py` |
 | 17 | `test_prober.py` |
 | 12 | `test_flap_gate.py` |
+| 59 | `test_fleet.py` |
 | 12 | `test_query_log.py` |
 | 36 | `test_dns_query.py` |
 | 11 | `test_ai_consent.py` |
@@ -958,7 +968,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 16 | `test_ui_catalog.py` |
 | 14 | `test_ui_windows.py` |
 | 19 | `test_user_notify.py` |
-| **2702** | **total** |
+| **2769** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

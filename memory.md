@@ -352,3 +352,24 @@ INSTALLATION). `.venv-store/` gitignored.
 Open (owner only): launch on a real macOS 26 Mac; `altool --validate-app` on a package built
 from `.venv-store`; the app uses NSGlassEffectView (macOS 26) with a vibrancy fallback, not
 exercised on 26.
+## v18 - 2026-10-17 - Headless mode and central fleet reporting server (TASK-426)
+
+Delta: 1
+
+Active task: TASK-426 (Stele); decision KNOW-427. Constraints: CLAUDE.md non-negotiables (no secret in a
+message, outbound text redacted, nothing raises out of a tick, never credit a repair that did not
+happen); decision modules stay free of socket/subprocess; no launch of the menu-bar app; owner
+overrides the earlier no-server scoping (KNOW-275).
+Plan: (1) `fleet_protocol.py` signed UDP messages; (2) `fleet_client.py` reporter + outbox;
+(3) `fleet_server.py` listener, JSONL log, state, report; (4) `headless.py` + LaunchAgent install;
+(5) CLI `headless`/`server`/`fleet`; (6) config keys, Settings tooltips/fields, FLEET_SHARED_SECRET;
+(7) docs, tests, counts, gates.
+Done: all seven plan items. New modules `fleet_protocol.py`, `fleet_client.py`, `fleet_store.py`,
+`fleet_server.py`, `headless.py`; CLI `headless` (`--install/--no-start/--uninstall`), `server`,
+`fleet`; ten `fleet_*` config keys with Settings group "Fleet reporting" and tooltips; credential
+`FLEET_SHARED_SECRET`; capability `fleet_reporting` (false in the store edition, modules pruned,
+settings hidden); `docs/FLEET.md`, SECURITY.md section 6b. Gate: ruff clean, 2745 tests pass,
+check_docs passes. Loopback CLI smoke (`server` + real reporter + `fleet`) logged online, incident,
+resolved with steps.
+Open: never run between two Macs (broadcast, Local Network prompt); LaunchAgent never loaded by
+launchctl; menu-bar app does not report; outbox is memory-only.

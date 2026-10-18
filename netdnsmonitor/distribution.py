@@ -58,6 +58,8 @@ REASONS = {
     "system Login Items setting instead",
     "remediation_editor": "running scripts the user writes is executing arbitrary code, which "
     "App Review does not permit (Guideline 2.5.2); the built-in steps run as shipped",
+    "fleet_reporting": "headless mode and the central report server are administrator tools "
+    "that run without a window and listen on the network, which the store edition does not ship",
 }
 
 
@@ -80,6 +82,8 @@ class Capabilities:
     # Editing the built-in remediation scripts and running custom ones. Off in the
     # store build, which runs the shipped scripts only.
     remediation_editor: bool
+    # Headless mode, fleet reporting and the central report server.
+    fleet_reporting: bool
 
     @property
     def is_app_store(self) -> bool:
@@ -111,6 +115,7 @@ def detect(env: Optional[Mapping[str, str]] = None) -> Capabilities:
         credentials_from_keychain=True,
         requires_ai_consent=app_store,
         remediation_editor=full,
+        fleet_reporting=full,
     )
 
 

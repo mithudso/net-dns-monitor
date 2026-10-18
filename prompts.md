@@ -151,3 +151,11 @@ Delta: 1
 Prompt:
 
 > Support macOS 26: yes
+
+## v18 - 2026-10-17 - Headless mode and central fleet reporting server (TASK-426)
+
+Delta: 1
+
+Prompt:
+
+> add a headless option so an administrator can load this application onto one of their teammates' computers and have it automatically report to a configured uh, central reporting server, period. Which means this also needs a server setting that receives and listens for uh, uh, calls on the broadcast network. And logs which systems are having problems and what they are and what has been done to resolve them.

@@ -28,6 +28,8 @@ PATH_KEYS = {
     "learned_domains_path",
     "failover_state_path",
     "remediation_scripts_dir",
+    "fleet_server_log_path",
+    "fleet_server_state_path",
 }
 
 

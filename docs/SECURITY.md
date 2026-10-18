@@ -250,6 +250,26 @@ Mitigations in the code:
 | Information disclosure | Any host that reaches the port learns this Mac's hostname and health. | `peer_discovery_enabled`; on-link filter for replies. | On by default. |
 | Denial of service | A flood of fresh ids evicts real peers, or oversize packets consume CPU. | 200-peer cap; size cap; no `ifconfig` per packet. | 200 forged ids still evict every real peer. |
 
+### 6b. Fleet reporting (`fleet_*.py`, `headless.py`)
+
+Headless mode sends signed UDP reports to a central server, and the server listens
+on `fleet_port`. Both are off by default (`fleet_reporting_enabled`,
+`fleet_server_enabled`) and absent from the store edition. Full description in
+`docs/FLEET.md`.
+
+- **Signed.** HMAC-SHA256 over the canonical JSON with `FLEET_SHARED_SECRET`;
+  `compare_digest`; a signed message is verified even in `fleet_allow_unsigned` mode.
+- **Replay.** Signed send time must be within 600 s of the server clock; repeated
+  event ids per machine are acknowledged but not logged twice.
+- **Flood.** Datagrams over 4096 bytes are dropped unparsed; 30 events a minute per
+  machine name; 1000 machines. Refusals are counted by reason, never logged per packet.
+- **Content.** Step text is redacted with `sensitive_strings`. No probe results, log
+  excerpts, paths or credentials are sent.
+- **Residual.** Not encrypted (host name, classification and step outcomes are
+  readable on the LAN). A shared secret is shared: anyone holding it can claim any
+  machine name. The server trusts a signed machine's self-reported status.
+  `fleet_allow_unsigned` removes all of this protection.
+
 ### 7. Outbound redaction (`escalation.redact`)
 
 `escalation.redact` replaces each string in `sensitive_strings` with
@@ -450,6 +470,8 @@ Mitigations in the code:
 
 ## Not verified live
 
+- Fleet reporting between two machines, including subnet broadcast and the Local
+  Network prompt for the headless process.
 - The `networksetup -ordernetworkservices` write.
 - The sudoers grant, including `renew_dhcp_lease` through `sudo -n`.
 - Slack and SMTP delivery.

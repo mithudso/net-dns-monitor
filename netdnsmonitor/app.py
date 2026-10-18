@@ -222,6 +222,11 @@ CREDENTIAL_ITEMS = (
         "SMTP_PASSWORD",
         "The password for smtp_username on smtp_host, used for email alerts.",
     ),
+    (
+        "Set fleet shared secret…",
+        "FLEET_SHARED_SECRET",
+        "The secret that signs fleet reports. Every machine and the central server must share it.",
+    ),
 )
 CREDENTIAL_STORAGE_NOTE = (
     "It is saved in your macOS Keychain. If the same name is set as an environment "
@@ -2283,6 +2288,7 @@ class NetDnsMonitorApp(rumps.App):
                 or (key.startswith("log_view_") and not caps.unified_log)
                 or (key == "auto_open_console" and not caps.shell_console)
                 or (key in REMEDIATION_SETTING_KEYS and not caps.remediation_editor)
+                or (key.startswith("fleet_") and not caps.fleet_reporting)
             ):
                 hidden.add(key)
         return frozenset(hidden)

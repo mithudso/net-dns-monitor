@@ -197,6 +197,21 @@ GROUPS = [
         ],
     ),
     (
+        "Fleet reporting",
+        [
+            ("fleet_reporting_enabled", "Report to a central server", "bool"),
+            ("fleet_server_address", "Server address (blank = broadcast)", "str"),
+            ("fleet_port", "Fleet UDP port", "int"),
+            ("fleet_heartbeat_seconds", "Heartbeat (seconds)", "float"),
+            ("fleet_machine_name", "Machine name (blank = host name)", "str"),
+            ("fleet_allow_unsigned", "Accept unsigned reports", "bool"),
+            ("fleet_server_enabled", "Run the server in headless mode", "bool"),
+            ("fleet_server_log_path", "Server event log", "str"),
+            ("fleet_server_state_path", "Server state file", "str"),
+            ("fleet_stale_seconds", "Silent after (seconds)", "float"),
+        ],
+    ),
+    (
         "Files and folders",
         [
             ("reports_dir", "Incident reports", "str"),
@@ -304,6 +319,17 @@ NEEDS_RESTART = {
     "custom_remediation_scripts_enabled",
     "remediation_scripts_dir",
     "remediation_script_timeout_seconds",
+    # Fleet reporting and the server are built when the headless process starts.
+    "fleet_reporting_enabled",
+    "fleet_server_address",
+    "fleet_port",
+    "fleet_heartbeat_seconds",
+    "fleet_machine_name",
+    "fleet_allow_unsigned",
+    "fleet_server_enabled",
+    "fleet_server_log_path",
+    "fleet_server_state_path",
+    "fleet_stale_seconds",
     # The Router is built once in App.__init__ but never started there: only
     # Router > Start or the router window starts it. That object is built from
     # these keys at launch, so a change here needs a restart to reach it.
