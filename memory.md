@@ -252,3 +252,12 @@ gating must keep `remediation_editor` off and the scripts directory out of reach
 (Guideline 2.5.2). Verification: isolated worktree at HEAD plus these hunks, ruff clean,
 2559 passed, check_docs passes.
 
+Commit 2 (docs): the live listing's description bullet "bound to each network interface"
+describes a feature the store edition lacks (interface probing serves only failover and the
+CLI), so the owner edits it in App Store Connect; Notes wording for "Refresh network
+status" fixed; the Support page's Local Network paragraph is stale and its site navigation
+links /donate/ (both in the llms-explorer repo, owner action). Gate-1 checks that need no
+credentials passed: entitlements per Mach-O (sandbox, plus inherit on the helper), no
+`._*`, no private symbols, `codesign --verify --strict`, profile decoded offline (team,
+app id and Apple Distribution certificate match, expires 2027-09-27). Open: NAT64 run,
+`altool --validate-app`, GUI launch, Local Network prompt, notification banner, macOS 26 floor.

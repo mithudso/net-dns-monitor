@@ -75,7 +75,7 @@ The app is not in a regulated industry and contains no protected third-party mat
 Mitchell Hudson
 ```
 
-## 2. App Review Information → Notes (2,844 characters — limit 4,000)
+## 2. App Review Information → Notes (2,876 characters — limit 4,000)
 
 ```text
 NO ACCOUNT NEEDED. No login, no demo account, no sample files, no in-app purchases.
@@ -87,7 +87,7 @@ HOW TO REVIEW
 2. Menu > Open dashboard: live ping time, packet loss, throughput and DNS status.
 3. Dashboard > Run full diagnosis. On a healthy network it reports that nothing is broken. Steps that need administrator rights are not in this edition and say so.
 4. Menu > Toggle mini window: floating status window.
-5. Menu > Test network alert posts a sample banner. Menu > Open last report opens the newest incident report (none exists until an incident occurs). Menu > Refresh network status only reads the network service order.
+5. Menu > Test network alert posts a sample banner. Menu > Open last report opens the newest incident report (none exists until an incident occurs). Menu > Refresh network status re-reads the network service order shown in the top rows (read only).
 6. Menu > Credentials stores the user's own Anthropic key, Slack webhook or SMTP password in the Keychain. All are optional.
 7. Menu > Allow Claude diagnosis...: consent dialog listing exactly what would be sent to Anthropic. Menu > Withdraw Claude permission revokes it.
 8. Menu > Privacy Policy opens https://llms-explorer.com/net-dns-monitor/privacy/
@@ -158,7 +158,7 @@ as it is, so it can go without them.
 | Alert banners rely on deprecated `NSUserNotificationCenter`; the store build has no fallback if it fails. Guideline 2.4.5(viii) lists deprecated technologies. | `netdnsmonitor/alert.py` | Move to `UNUserNotificationCenter`. It needs an authorization request and a signed bundle to test, so it was not done blind; the runtime dependency list (`requirements.txt`, four packages) would also grow by `pyobjc-framework-UserNotifications` unless the framework is loaded through `objc.loadBundle`. |
 | The privileged-repair and network-order source still ships (`privileges.py` with the sudoers writer and its administrator dialog, `repair_executor.py`, `failover.py`), switched off by `distribution.detect()`. The Notes say so. | `netdnsmonitor/distribution.py` | Split the privilege probes the tick path uses (`privileges.primary_interface`, `granted_commands_now`) out of `privileges.py`, then delete the sudoers writer from the store bundle as `prune_store_bundle` deletes the router. Not done: it touches the tick path and no rejection precedent names it. If a review cites 2.4.5(v) or 2.5.19 for root privileges, this is the module to remove first. |
 | The `api.anthropic.com` control lookup runs before AI consent. It is a name lookup through the system resolver; nothing is sent to Anthropic, and the Notes and the privacy policy disclose it. | `netdnsmonitor/config.py` (`control_domain`) | A neutral control domain in the store build would remove the question; `distribution.default_overrides` is where to set it. |
-| The hosted privacy policy is older than `docs/PRIVACY_POLICY.md` (checked 2026-10-17): it says peer discovery is on by default and that declining the Local Network prompt stops router checks, and it lacks the IPv6 addresses. The hosted page is what App Review reads. | `llms-explorer` repository, `site/src/pages/net-dns-monitor/privacy.astro` | Mirror `docs/PRIVACY_POLICY.md` there and deploy before submitting. |
+| The hosted privacy policy is older than `docs/PRIVACY_POLICY.md` (checked 2026-10-17): it says peer discovery is on by default and that declining the Local Network prompt stops router checks, and it lacks the IPv6 addresses. The Support page (`index.astro` in the same directory) says macOS asks about the local network at first launch and that allowing it lets the app check whether the router answers; since build 4 the prompt appears only when LAN peer discovery or a local monitor target is configured. The hosted pages are what App Review reads. | `llms-explorer` repository, `site/src/pages/net-dns-monitor/privacy.astro` and `index.astro` | Mirror `docs/PRIVACY_POLICY.md` into the first, correct the Local Network paragraph in the second, and deploy before submitting. |
 | The Support and Privacy Policy pages sit inside the llms-explorer site, whose navigation carries a "Support the project / Help fund the work" link. Guideline 3.1.1 and 3.2.1 scrutinize donation links reachable from reviewed pages. | `llms-explorer` repository | Serve the two net-dns-monitor pages without the site navigation, or remove the funding link from that layout. `https://llms-explorer.com/net-dns-monitor/app-review-demo.mp4` returned 404 on 2026-10-17; attach the recording instead. |
 | `LSMinimumSystemVersion` is 27.0 because Homebrew's Python is built for macOS 27 (was 26.0 on 2026-09-27). Reviewers on the current public macOS 27 can run it; macOS 26 users cannot install it. | `scripts/appstore/build_appstore.py`, `docs/APP_STORE_SUBMISSION.md` section 4.3 | Decide whether macOS 26 matters; if so, build with a Python that targets an older macOS. |
 

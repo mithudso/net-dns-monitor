@@ -337,7 +337,7 @@ Net-DNS-Monitor watches your Mac's internet and DNS connectivity from the menu b
 When a check fails, it separates the three things that look identical from a browser: your Mac's own link, the local network, and DNS. It runs an offline troubleshooting ladder, records what each step found, and writes an incident report you can hand to IT.
 
 • Live round-trip time, packet loss and throughput in the menu bar and Dock
-• Reachability checks against addresses you choose, bound to each network interface
+• Reachability checks against addresses you choose
 • DNS checks with a control domain, so a DNS outage is not mistaken for a dead network
 • An anti-flap gate: one outage, one alert
 • Incident reports and a forensic timeline stored on your Mac
@@ -349,6 +349,14 @@ The app never claims a repair it did not perform. Anything the Mac App Store san
 
 No account, no analytics, no ads.
 ```
+
+**Edit the live listing (2026-10-17 audit, TASK-417).** The description above is the
+corrected draft. The text entered on 2026-09-27 also said "bound to each network
+interface", and the store edition has no such feature: interface-bound probing
+(`interface_probe.py`) is used only by the failover and the `netdns` command-line tool,
+and the build gives neither to a store user. A description of a feature the binary
+lacks is a Guideline 2.3.1 / 5.1.1 mismatch. The owner changes the bullet in App Store
+Connect (a metadata edit; no new build).
 
 Two changes from the first draft. The Slack/email bullet is out because no live
 Slack or SMTP delivery has been observed (CLAUDE.md, Known-unverified areas), and
