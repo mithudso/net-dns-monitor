@@ -28,14 +28,16 @@ escapes there kills the rumps timer for the rest of the session. It goes to
 stderr instead, which the LaunchAgent redirects to
 ~/Library/Logs/net-dns-monitor.launchd.log.
 
-**Notification path.** `rumps.notification` is tried first because it carries
-the app's own identity in the banner. It goes through the deprecated
-`NSUserNotificationCenter`, which still exists and still returns a real centre
-on macOS 26.4 (checked) but does not raise when the system declines to display
-anything -- so an osascript fallback only helps in the case where rumps raises
-outright. Whether a banner is actually drawn depends on notification
-authorisation for the bundle, which is not observable from inside the process;
-that is what `Test network alert` in the menu is for.
+**Notification path.** `user_notify.post` goes first: UserNotifications
+(`UNUserNotificationCenter`), which replaced the deprecated
+`NSUserNotificationCenter` that `rumps.notification` wraps. Its status is
+"handed to the framework", never "delivered" -- see user_notify.py. A `denied`
+status is final: the user refused notifications for this app, so the alert is
+logged as not delivered and osascript is not used to go around that choice.
+`no-bundle` (plain `python3`), `unavailable` and `failed:*` fall through to
+osascript outside the sandboxed build. Whether a banner is actually drawn
+depends on notification authorisation for the bundle; `Test network alert` in
+the menu is the manual check.
 """
 
 import subprocess
@@ -43,13 +45,14 @@ import sys
 import traceback
 from typing import Callable, Mapping, Optional
 
-from . import distribution
+from . import distribution, user_notify
 
 APP_NAME = "Net-DNS-Monitor"
 OSASCRIPT_BIN = "/usr/bin/osascript"
 
 RunFn = Callable[..., object]
 AppFn = Callable[[], object]
+PostFn = Callable[[str, str, str], str]
 
 # Every request id bounce_dock has been handed and not yet cancelled. A list,
 # not one slot: with ping_alert_repeat_seconds set the alert re-fires during an
@@ -96,23 +99,33 @@ def notify(
     subtitle: str = "",
     run_fn: RunFn = subprocess.run,
     env: Optional[Mapping[str, str]] = None,
-) -> None:
-    try:
-        import rumps
+    post_fn: Optional[PostFn] = None,
+) -> str:
+    """Post a banner and return the status code, never raising.
 
-        rumps.notification(title, subtitle, message)
-        return
-    except Exception:  # noqa: BLE001 - fall through to the osascript path
-        traceback.print_exc()
+    `post_fn` is resolved at call time so the test fixture's stand-in on
+    `user_notify.post` is what runs by default.
+    """
+    try:
+        status = (post_fn or user_notify.post)(title, subtitle, message)
+    except Exception as exc:  # noqa: BLE001 - a status, never a message
+        status = f"failed:{type(exc).__name__}"
+    if status == user_notify.STATUS_QUEUED:
+        return status
+    if status == user_notify.STATUS_DENIED:
+        _log("notification not delivered: authorization denied")
+        return status
+    _log(f"notification not posted through UserNotifications: {status}")
 
     # The sandboxed build stops here. osascript sends Apple Events, which that
     # build holds no entitlement for, and spawning a scripting host is a surface
     # App Review would ask about -- app.py avoids it for URLs for the same reason.
     if distribution.detect(env).is_app_store:
-        return
+        return status
 
-    # Reached only when rumps raised. Note the banner then comes from the
-    # scripting host rather than this app, which is why it is the fallback.
+    # Reached only when UserNotifications could not be used. The banner then
+    # comes from the scripting host rather than this app, which is why it is
+    # the fallback.
     try:
         script = f"display notification {_as_applescript_string(message)} with title {_as_applescript_string(title)}"
         result = run_fn(
@@ -132,6 +145,7 @@ def notify(
             print(f"osascript fallback exited {returncode}", file=sys.stderr)
     except (subprocess.SubprocessError, OSError, UnicodeError):
         traceback.print_exc()
+    return status
 
 
 def _as_applescript_string(value: str) -> str:

@@ -315,3 +315,13 @@ tests pass, check_docs passes. Headless screenshots of the dashboard and Setting
 Open: nobody has looked at the glass in the running app or used the menus by hand; the
 dashboard graph area was empty in the screenshots (no history fed), so graph appearance on
 glass is unchecked; the console and mini windows are checked only by a smoke script.
+
+## v16 - 2026-10-17 - Alerts move to UserNotifications (TASK-424)
+
+Delta: 1
+
+Active task: TASK-424 (Stele). Constraints: CLAUDE.md non-negotiables 3-5; `requirements.txt` stays at four packages (no `pyobjc-framework-UserNotifications`, verified absent from the venv, so the framework loads through `objc.loadBundle`); the menu-bar app is not launched; real banner delivery is not claimed.
+Done: new `netdnsmonitor/user_notify.py` (`post` returns `queued`, `denied`, `no-bundle`, `unavailable` or `failed:<Class>`; authorization is asked once per launch, the first banner is held until the answer; `backend_fn` and `bundle_fn` are injected). `alert.notify` calls it through an injectable `post_fn`, falls back to `osascript` only for `no-bundle`, `unavailable`, `failed:*` and never for `denied` or in the store build. Every `rumps.notification` call in `app.py` now goes through `alert.notify`/`App._notify`. `tests/conftest.py` stubs `user_notify.post`, the loader and the bundle probe for all tests except `test_user_notify`. Docs updated (known-issues, review response, submission, COMPONENTS, external-calls, counts).
+Measured: under Homebrew framework `python3`, `NSBundle.mainBundle()` reports `org.python.python` at `.../Python.app`, so identifier plus `.app` is not enough; `has_app_bundle` rejects the interpreter's bundle. `objc.loadBundle` of the system framework works and content/request objects build; the center itself was deliberately not called outside a bundle.
+Gate: ruff clean, 2700 tests pass, check_docs passes.
+Open (UNVERIFIED): the `requestAuthorizationWithOptions:` and `addNotificationRequest:withCompletionHandler:` block metadata registered by hand in `load_backend` has never run against the real center; authorization prompt, banner, and denied path need the signed app. Owner check: build the app, click **Test network alert**, expect the permission prompt, then a banner after Allow; after Don't Allow expect no banner and `notification authorization denied` in `~/Library/Logs/net-dns-monitor.launchd.log`.

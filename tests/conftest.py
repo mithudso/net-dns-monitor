@@ -22,6 +22,7 @@ import pytest
 # attribute there would replace the thing being tested with a lambda.
 _REAL_PRIVILEGE_PROBES = frozenset({"test_privileges"})
 _REAL_LOG_READERS = frozenset({"test_system_log", "test_log_watcher"})
+_REAL_USER_NOTIFY = frozenset({"test_user_notify"})
 
 
 @pytest.fixture(autouse=True)
@@ -33,19 +34,30 @@ def isolate_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_real_notifications(monkeypatch):
+def no_real_notifications(monkeypatch, request):
     """Keep the test suite out of Notification Centre.
 
     App wiring tests drive fake ping failures through the real `alert` module,
     and `rumps.notification` posts a real "network failed" banner from the
     pytest process -- indistinguishable from the menu bar app reporting a real
-    outage. The osascript fallback runs only when `rumps.notification` raises,
-    and the tests that make it raise inject their own `run_fn`. Tests that
-    assert on notifications patch their own fake over this one.
+    outage. Delivery now goes through `user_notify.post`
+    (UNUserNotificationCenter), so that is stubbed to report `queued`; the
+    framework loader and bundle probe are stubbed too, so a test that injects
+    only one of them still cannot reach the real centre. `rumps.notification`
+    stays stubbed in case anything outside the app still calls it. The osascript
+    fallback runs only when `post` reports a non-queued status, and the tests
+    that want it inject their own `post_fn` and `run_fn`. `test_user_notify`
+    is exempt: it tests the real `post` with injected fakes.
     """
     import rumps
 
+    from netdnsmonitor import user_notify
+
     monkeypatch.setattr(rumps, "notification", lambda *args, **kwargs: None)
+    if request.module.__name__.rsplit(".", 1)[-1] not in _REAL_USER_NOTIFY:
+        monkeypatch.setattr(user_notify, "post", lambda *args, **kwargs: user_notify.STATUS_QUEUED)
+    monkeypatch.setattr(user_notify, "load_backend", lambda: None)
+    monkeypatch.setattr(user_notify, "_main_bundle", lambda: (None, None))
 
 
 @pytest.fixture(autouse=True)

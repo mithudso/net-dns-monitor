@@ -150,12 +150,17 @@ Measured, reproducible, and currently unfixed.
   and can latch an incident. `load_config` accepts the empty list. Neither case
   establishes external internet reachability.
 
-- **Notifications use the deprecated `NSUserNotificationCenter`.**
-  `rumps.notification` in `rumps` 0.4.0 posts through `NSUserNotificationCenter`,
-  which Apple deprecated in macOS 11. `alert.py` records that it still returned a
-  real centre on macOS 26.4, but it does not raise when the system declines to
-  show a banner. The menu's "Test network alert" item is the only check that a
-  banner appears.
+- **Banner delivery through `UNUserNotificationCenter` is unverified.**
+  Alerts no longer use the deprecated `NSUserNotificationCenter`: `user_notify.py`
+  loads `UserNotifications` with `objc.loadBundle`, asks for authorization once
+  per launch and posts a `UNNotificationRequest`. The offline tests cover granted,
+  denied, no-bundle, unavailable and exception-class-name paths with a fake
+  backend. Nobody has run it from the signed app bundle. The result is a status
+  (`queued`, `denied`, `no-bundle`, `unavailable`, `failed:<Class>`), and `queued`
+  means handed to the framework, not drawn on screen. Running from plain `python3`
+  reports `no-bundle` (measured: the interpreter's own `org.python.python`
+  launcher bundle does not count), and the direct build then falls back to
+  `osascript`. The menu's "Test network alert" item is the check.
 
 ## Blocked on an owner decision
 

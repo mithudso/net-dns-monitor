@@ -431,14 +431,7 @@ def test_switch_to_backup_from_the_menu_holds_off_the_tick_failback(tmp_path):
         time_fn=lambda: now[0],
     )
     app = make_app(tmp_path, failover, QuietStateMachine())
-    import netdnsmonitor.app as app_module
-
-    real_notification = app_module.rumps.notification
-    app_module.rumps.notification = lambda *a, **k: None
-    try:
-        app.switch_to_backup(None)
-    finally:
-        app_module.rumps.notification = real_notification
+    app.switch_to_backup(None)
     assert runner.order[0] == "Wi-Fi"
     assert "failback paused" in app.failover_rows[0].title
 
@@ -473,15 +466,9 @@ def test_the_switch_buttons_call_through_to_the_failover(tmp_path):
     failover = FakeFailoverForMenu(MENU_SNAPSHOT)
     app.failover = failover
     notes = []
-    import netdnsmonitor.app as app_module
-
-    real_notification = app_module.rumps.notification
-    app_module.rumps.notification = lambda *a, **k: notes.append(a)
-    try:
-        app.switch_to_backup(None)
-        app.switch_to_preferred(None)
-    finally:
-        app_module.rumps.notification = real_notification
+    app._notify = lambda subtitle, message: notes.append((subtitle, message))
+    app.switch_to_backup(None)
+    app.switch_to_preferred(None)
     assert failover.switched == ["backup", "preferred"]
     assert len(notes) == 2
 

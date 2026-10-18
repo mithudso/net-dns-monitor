@@ -3185,8 +3185,7 @@ class NetDnsMonitorApp(rumps.App):
             # Cleared so a later attempt rebuilds rather than reusing a
             # half-constructed controller.
             self.console = None
-            rumps.notification(
-                "Net/DNS Monitor",
+            self._notify(
                 "Console",
                 f"Could not open the console window ({type(exc).__name__}). "
                 "`python3 -m netdnsmonitor.cli console` is the terminal equivalent.",
@@ -3217,8 +3216,7 @@ class NetDnsMonitorApp(rumps.App):
             self.remediation_window.show()
         except Exception as exc:  # noqa: BLE001 - a failed window must say so
             self.remediation_window = None
-            rumps.notification(
-                "Net/DNS Monitor",
+            self._notify(
                 "Remediation scripts",
                 f"Could not open the editor window ({type(exc).__name__}). The scripts are "
                 f"plain files in {self.remediation_store.user_dir}.",
@@ -3262,8 +3260,7 @@ class NetDnsMonitorApp(rumps.App):
             self._notify("Network failover", text)
             return
         if self.failover is None:
-            rumps.notification(
-                "Net/DNS Monitor",
+            self._notify(
                 "Network failover",
                 "Not configured — set failover_preferred_service and "
                 "failover_backup_service in config.yaml.",
@@ -3274,7 +3271,7 @@ class NetDnsMonitorApp(rumps.App):
         except Exception as exc:  # noqa: BLE001 - report it, never crash the menu
             outcome = f"failed: {type(exc).__name__}: {exc}"
         self._refresh_failover_menu()
-        rumps.notification("Net/DNS Monitor", f"Switch to {label}", outcome)
+        self._notify(f"Switch to {label}", outcome)
 
     def switch_to_backup(self, _sender):
         self._manual_switch(BACKUP, "backup")
@@ -3290,7 +3287,7 @@ class NetDnsMonitorApp(rumps.App):
             # With no failover configured, the config.yaml hint would be wrong
             # here; the unavailable text alone is the whole answer.
             text = unavailable if self.failover is None else f"{text} {unavailable}"
-        rumps.notification("Net/DNS Monitor", "Network failover", text)
+        self._notify("Network failover", text)
 
     def open_last_report(self, _sender=None) -> str:
         """Through `url_opener`, as the privacy policy is: see
@@ -3334,7 +3331,7 @@ class NetDnsMonitorApp(rumps.App):
     def _notify(self, subtitle: str, message: str):
         """A notification that cannot raise into a menu callback."""
         try:
-            rumps.notification("Net/DNS Monitor", subtitle, message)
+            alert.notify(message, title="Net/DNS Monitor", subtitle=subtitle)
         except Exception:  # noqa: BLE001 - a lost banner must not cost the click
             traceback.print_exc()
 

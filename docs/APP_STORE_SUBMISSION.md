@@ -84,8 +84,8 @@ notarization (§10). Both can coexist.
 - **Store file opening and notification display need a manual check.** The app
   opens HTTP(S) URLs through NSWorkspace. Files and folders still use
   `/usr/bin/open`; that path is not verified in the sandbox. The alert
-  returns after a failed `rumps.notification` instead of invoking `osascript`
-  there. Neither a successful API return nor offline tests establish that macOS
+  returns the `user_notify` status after a non-queued result instead of invoking
+  `osascript` there. Neither a successful API return nor offline tests establish that macOS
   displayed a banner or opened the requested folder.
 - **Pasting into the credentials dialog needs a manual check.** The app now installs a standard Edit menu, so ⌘V should paste into Credentials → Set Anthropic API key…. No automated test can send a real keystroke. Try it once in the ad-hoc build before submitting.
 
@@ -473,7 +473,7 @@ you can reply without a new build when a note is enough.
 | 2.5.2: bundled interpreter treated as executing code | Unverified; no Apple text either way | Review notes state all code ships in the bundle and nothing is downloaded |
 | 5.1.2(i): third-party AI without permission | Mitigated | Versioned consent gate, disclosure dialog, revoke menu |
 | 5.1.1(i): privacy policy link inside the app | Mitigated | The store build's Privacy Policy menu item opens the bundled `NDMPrivacyPolicyURL`; release builds refuse to run without `--privacy-policy-url` |
-| 2.4.5(viii): deprecated technologies | Risk | `rumps` posts notifications with `NSUserNotificationCenter`, deprecated since macOS 11; `alert.py` falls back to `osascript` only in direct builds. Notification banner delivery remains unverified in the sandbox. If review objects, move to `UNUserNotificationCenter`, which needs a new dependency (`pyobjc-framework-UserNotifications`). |
+| 2.4.5(viii): deprecated technologies | Mitigated, unverified | Alerts post through `UNUserNotificationCenter` (`netdnsmonitor/user_notify.py`), loaded with `objc.loadBundle` so `requirements.txt` stays at four packages. `rumps` itself still imports `NSUserNotificationCenter` inside `rumps.notification`, but no code here calls that function. Authorization and banner delivery have not been run from the signed bundle; the offline tests use a fake backend. Direct builds fall back to `osascript` only when UserNotifications is unavailable or the process has no app bundle, never after the user denied permission. |
 | 4.2: minimum functionality | Low | Native menu bar utility with a real window |
 | Icon quality | Done (2026-09-27) | `make_icon.py` draws the designed icon; review `make_icon.py preview.png` after any change to it |
 | ITMS-90236 (icon sizes) | Mitigated | ICNS includes 512 and 512@2x; `--icon` checks a designed icon for the same |

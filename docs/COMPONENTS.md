@@ -294,8 +294,14 @@ The sudoers grant: builds and validates `/etc/sudoers.d/net-dns-monitor` (`sudoe
 
 - **Used by:** `app` (`network_failed`, `network_recovered`).
 - **Imports:** package: none; third-party: `AppKit`, `rumps`; stdlib with effects: `subprocess`.
-- **Side effects:** AppKit through `app_fn`. Notification through `rumps.notification`, with an osascript fallback through `run_fn`. stderr lines.
+- **Side effects:** AppKit through `app_fn`. Notification through `user_notify.post` (UNUserNotificationCenter), with an osascript fallback through `run_fn` when it reports `no-bundle`, `unavailable` or `failed:*` (never `denied`). stderr lines.
 - **Tests:** `tests/test_alert.py`, `tests/test_app_ping_wiring.py`.
+
+### `netdnsmonitor/user_notify.py`
+
+- **Role:** Posts a banner through `UNUserNotificationCenter`. Returns `queued` (handed to the framework, not proof of a drawn banner), `denied`, `no-bundle`, `unavailable` or `failed:<ExceptionClassName>`. Never raises.
+- **Side effects:** `objc.loadBundle` of `/System/Library/Frameworks/UserNotifications.framework` and the center calls, both behind injected `backend_fn` and `bundle_fn`. The center is not called without an `.app` bundle identifier.
+- **Tests:** `tests/test_user_notify.py`; `tests/conftest.py` stubs `post`, the loader and the bundle probe for every other test.
 
 ### `netdnsmonitor/forensic_log.py`
 

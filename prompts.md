@@ -135,3 +135,11 @@ Delta: 1
 Prompt:
 
 > Save those steps so that I can look at them later. And then update the user interface to be more modern and utilize the new Mac liquid glass features. Period. Hide the redundant buttons or similarly categorized buttons behind dropdowns. And make sure every button and tool and setting has a tooltip. And make sure every configurable option is represented in the settings. Period.
+
+## v16 - 2026-10-17 - Migrate alerts to UserNotifications (TASK-424)
+
+Delta: 1
+
+Prompt:
+
+> Should I migrate alerts off NSUserNotificationCenter? ... yes

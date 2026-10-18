@@ -13,7 +13,7 @@ import subprocess
 import AppKit
 import pytest
 
-from netdnsmonitor import alert, distribution
+from netdnsmonitor import alert, distribution, user_notify
 
 
 class FakeApp:
@@ -143,44 +143,84 @@ def test_network_recovered_logs_and_cancels(capsys):
 # --- notification fallback -------------------------------------------------
 
 
-def test_osascript_fallback_runs_only_when_rumps_raises(monkeypatch, capsys):
+def _no_bundle(title, subtitle, message):
+    return user_notify.STATUS_NO_BUNDLE
+
+
+def _queued(title, subtitle, message):
+    return user_notify.STATUS_QUEUED
+
+
+def test_osascript_fallback_runs_only_when_user_notifications_cannot_post(capsys):
     calls = []
+    status = alert.notify(
+        "net down", run_fn=lambda args, **kwargs: calls.append(args), post_fn=_no_bundle
+    )
 
-    def exploding_notification(*args, **kwargs):
-        raise RuntimeError("notification centre unavailable")
-
-    monkeypatch.setattr("rumps.notification", exploding_notification)
-    alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(args))
-
+    assert status == user_notify.STATUS_NO_BUNDLE
     assert len(calls) == 1
     assert calls[0][0] == alert.OSASCRIPT_BIN
     assert "display notification" in calls[0][2]
-    # The rumps failure has to leave a trace; otherwise a permanently broken
-    # primary path is invisible.
-    assert "notification centre unavailable" in capsys.readouterr().err
+    # The primary path's failure has to leave a trace; otherwise a permanently
+    # broken primary path is invisible.
+    assert "no-bundle" in capsys.readouterr().err
 
 
-def test_no_osascript_fallback_in_the_app_store_build(monkeypatch):
+def test_a_raising_post_fn_becomes_a_class_name_status_then_falls_back(capsys):
     calls = []
 
-    def exploding_notification(*args, **kwargs):
-        raise RuntimeError("notification centre unavailable")
+    def exploding(title, subtitle, message):
+        raise RuntimeError("secret detail that must not be echoed")
 
-    monkeypatch.setattr("rumps.notification", exploding_notification)
-    alert.notify(
+    status = alert.notify(
+        "net down", run_fn=lambda args, **kwargs: calls.append(args), post_fn=exploding
+    )
+
+    assert status == "failed:RuntimeError"
+    assert len(calls) == 1
+    assert "secret detail" not in capsys.readouterr().err
+
+
+def test_no_osascript_fallback_in_the_app_store_build():
+    calls = []
+    status = alert.notify(
         "net down",
         run_fn=lambda args, **kwargs: calls.append(args),
         env={distribution.SANDBOX_ENV: "com.example.netdnsmonitor"},
+        post_fn=lambda *a: user_notify.STATUS_UNAVAILABLE,
     )
 
     assert calls == []
+    assert status == user_notify.STATUS_UNAVAILABLE
 
 
-def test_no_osascript_when_rumps_succeeds(monkeypatch):
+def test_no_osascript_when_user_notifications_accepts_the_banner():
     calls = []
-    monkeypatch.setattr("rumps.notification", lambda *a, **k: None)
-    alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(args))
+    status = alert.notify(
+        "net down", run_fn=lambda args, **kwargs: calls.append(args), post_fn=_queued
+    )
+    assert status == user_notify.STATUS_QUEUED
     assert calls == []
+
+
+def test_denied_authorization_is_reported_not_delivered_and_not_worked_around(capsys):
+    """Falling back to osascript would draw a banner the user refused for this app."""
+    calls = []
+    status = alert.notify(
+        "net down",
+        run_fn=lambda args, **kwargs: calls.append(args),
+        post_fn=lambda *a: user_notify.STATUS_DENIED,
+    )
+    assert status == user_notify.STATUS_DENIED
+    assert calls == []
+    assert "not delivered" in capsys.readouterr().err
+
+
+def test_the_default_post_path_is_user_notify_not_rumps(monkeypatch):
+    seen = []
+    monkeypatch.setattr(user_notify, "post", lambda *a: seen.append(a) or user_notify.STATUS_QUEUED)
+    alert.notify("net down", title="T", subtitle="S")
+    assert seen == [("T", "S", "net down")]
 
 
 def test_quotes_in_the_message_cannot_break_the_applescript(monkeypatch):
@@ -188,20 +228,20 @@ def test_quotes_in_the_message_cannot_break_the_applescript(monkeypatch):
     osascript fail to compile and the notification is lost silently.
     """
     calls = []
-    monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
-    alert.notify('say "hi" \\ bye', run_fn=lambda args, **kwargs: calls.append(args))
+    alert.notify(
+        'say "hi" \\ bye', run_fn=lambda args, **kwargs: calls.append(args), post_fn=_no_bundle
+    )
     script = calls[0][2]
     assert '\\"hi\\"' in script
     assert "\\\\" in script
 
 
 def test_osascript_failure_is_logged_not_raised(monkeypatch, capsys):
-    monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
 
     def timing_out(args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args, timeout=10)
 
-    alert.notify("net down", run_fn=timing_out)
+    alert.notify("net down", run_fn=timing_out, post_fn=_no_bundle)
     assert "TimeoutExpired" in capsys.readouterr().err
 
 
@@ -210,25 +250,22 @@ def test_osascript_fallback_cannot_freeze_the_run_loop_for_long(monkeypatch):
     every timer in the app can stall if osascript hangs.
     """
     calls = []
-    monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
-    alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(kwargs))
+    alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(kwargs), post_fn=_no_bundle)
     assert calls[0]["timeout"] <= 3
 
 
 def test_osascript_uses_an_absolute_path(monkeypatch):
     calls = []
-    monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
-    alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(args))
+    alert.notify("net down", run_fn=lambda args, **kwargs: calls.append(args), post_fn=_no_bundle)
     assert calls[0][0].startswith("/")
 
 
 def test_osascript_nonzero_exit_is_logged_with_code_only(monkeypatch, capsys):
-    monkeypatch.setattr("rumps.notification", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
 
     def failing(args, **kwargs):
         return subprocess.CompletedProcess(args, 1, stdout="", stderr="secret-ish stderr")
 
-    alert.notify("net down", run_fn=failing)
+    alert.notify("net down", run_fn=failing, post_fn=_no_bundle)
     err = capsys.readouterr().err
     assert "osascript" in err and "1" in err
     assert "secret-ish stderr" not in err

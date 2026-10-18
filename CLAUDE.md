@@ -94,7 +94,7 @@ report, because someone will act on it.
 ## Commands — before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2678 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2700 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -176,6 +176,13 @@ comment that is wrong about why is as expensive as code that is wrong.
   The menu bar's "Switch to backup now" button is the intended way to find out.
 - **No live Slack or SMTP delivery has been confirmed.** Both channels are covered by
   tests with injected transports; neither has been observed delivering a real message.
+- **Banner delivery through UserNotifications has never run from the signed app.**
+  `user_notify.py` posts through `UNUserNotificationCenter`, loaded with
+  `objc.loadBundle` because `requirements.txt` stays at four packages. Its status
+  `queued` means handed to the framework, not drawn. `denied` is final (no
+  `osascript` workaround); `no-bundle` covers plain `python3`, whose
+  `org.python.python` launcher bundle must not count. The hand-registered block
+  metadata and the permission prompt are covered only by a fake backend.
 - **Auto-learned domains find nothing on a stock macOS install** — the unified log masks
   hostnames. Measured: 758 error-like lines, 198 explicitly masked, 0 learnable domains.
   Do not present the feature as working without stating that.

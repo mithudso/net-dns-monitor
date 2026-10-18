@@ -242,8 +242,8 @@ def test_a_window_that_fails_to_build_costs_the_editor_and_nothing_else(tmp_path
 
     monkeypatch.setattr(remediation_window.RemediationWindowController, "show", explode)
     posted = []
-    monkeypatch.setattr(rumps, "notification", lambda *a, **k: posted.append(a))
     app = build_app(tmp_path, capabilities=DIRECT)
+    app._notify = lambda subtitle, message: posted.append((subtitle, message))
     app.open_remediation_editor()
     assert app.remediation_window is None
-    assert "RuntimeError" in posted[0][2] and "no window server" not in posted[0][2]
+    assert "RuntimeError" in posted[0][1] and "no window server" not in posted[0][1]
