@@ -272,8 +272,12 @@ class ConsoleWindowController:
         # Command output is column-aligned (`netstat -rn`, `ifconfig`); a
         # proportional font turns all of it into noise.
         try:
-            self.text_view.setBackgroundColor_(NSColor.textBackgroundColor())
-            self.text_view.setTextColor_(NSColor.textColor())
+            # Explicit white on a fixed dark ground, not the system text colors:
+            # over the translucent glass window `textColor` resolved to black
+            # on dark grey and the transcript was unreadable.
+            self.text_view.setBackgroundColor_(NSColor.colorWithCalibratedWhite_alpha_(0.12, 1.0))
+            self.text_view.setTextColor_(NSColor.whiteColor())
+            self.text_view.setInsertionPointColor_(NSColor.whiteColor())
         except Exception:  # noqa: BLE001 - system colors, not worth failing over
             pass
         scroll.setDocumentView_(self.text_view)
@@ -288,6 +292,8 @@ class ConsoleWindowController:
         self.input_field = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 10, 800, 26))
         self.input_field.setPlaceholderString_("shell command -- :help for built-ins, q to close")
         self.input_field.setFont_(NSFont.userFixedPitchFontOfSize_(12))
+        with contextlib.suppress(Exception):
+            self.input_field.setTextColor_(NSColor.whiteColor())
         self.input_field.setAutoresizingMask_(RESIZE_PINNED_BOTTOM)
         self.input_field.setTarget_(self._target)
         self.input_field.setAction_("submit:")

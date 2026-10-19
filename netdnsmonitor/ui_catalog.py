@@ -199,6 +199,7 @@ ACTION_GROUPS = [
 # Actions that stay as buttons: what you reach for during an outage.
 PRIMARY_ACTIONS = ("ping_now", "full_diagnosis")
 
+REPAIRS_GROUP = "Repairs"
 MORE_GROUP = ("More", "Other actions.")
 
 ACTION_TIPS = {
@@ -281,6 +282,17 @@ def group_actions(actions: list) -> tuple[list, list]:
         if members:
             groups.append((title, tip, members))
     leftover = [a for a in actions if a[1] not in placed]
+    # A repair no group names (a script found in the scripts folder) belongs
+    # under Repairs, where someone looking for it would go, not under "More".
+    stray = [a for a in leftover if a[2] == "repair"]
+    if stray:
+        leftover = [a for a in leftover if a[2] != "repair"]
+        for i, (title, tip, members) in enumerate(groups):
+            if title == REPAIRS_GROUP:
+                groups[i] = (title, tip, members + stray)
+                break
+        else:
+            groups.insert(0, (REPAIRS_GROUP, "Steps that change system state.", stray))
     if leftover:
         groups.append((MORE_GROUP[0], MORE_GROUP[1], leftover))
     return primary, groups

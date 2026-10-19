@@ -168,3 +168,12 @@ Prompt:
 
 > Yes, for now they share one network unless explicitly set. Set ssl keys unique for each box and have the keys be the authentication.
 > 1. If the program is running headless it should already report to the server, so no. 2. will do.
+
+## v20 - 2026-10-19 - Console contrast, repair scripts in Repairs menu, stale peer addresses
+
+Delta: 1
+
+Prompt:
+
+> The console has black text on dark grey back ground which is hard to read. make it white text. Also in the repairs dropdown category, automatically include the repair scripts which are editable in the python editor.
+> If another monitor is discovered and it comes up on a different IP, and the old IP misses more than 5 hearbeat checks, clear it from the list.

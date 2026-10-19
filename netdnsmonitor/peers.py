@@ -50,6 +50,9 @@ BUCKETS = (CURRENT, RECENT, OTHER)
 # cap exists so a peer cannot push megabytes of text into the record file.
 MAX_FIELD = 253
 MAX_PEERS = 200
+# A peer that reappears under a new address drops its other addresses once they
+# have missed more than this many heartbeat checks.
+MISSED_BEFORE_ADDRESS_DROP = 5
 # One source address may hold at most this many ids. A fresh id per datagram from
 # a single host would otherwise evict every real peer and, by crowding the table
 # with its own readings, decide the fault-localization verdict.
@@ -144,7 +147,30 @@ class PeerRegistry:
             # Swapped in whole rather than updated in place, so no reader can copy
             # an entry that is only half written.
             self.peers[peer_id] = entry
+            self._drop_stale_addresses(peer_id, entry)
             return is_new
+
+    def _drop_stale_addresses(self, peer_id: str, entry: dict) -> None:
+        """Forget a host's old addresses once it is heard from at a new one.
+
+        A host that moves (Wi-Fi to a hotspot, a new DHCP lease) is announced
+        under each address it has used, and the old rows then sit in the list
+        reading "healthy, 4000 missed heartbeat(s)" for ever. Only entries that
+        share this one's hostname, differ in address and have missed more than
+        MISSED_BEFORE_ADDRESS_DROP probes go: a quiet peer that has not been
+        superseded stays. Caller holds the lock.
+        """
+        host, address = entry.get("host", ""), entry.get("address", "")
+        if not host or not address:
+            return
+        for key, peer in list(self.peers.items()):
+            if (
+                key != peer_id
+                and peer.get("host") == host
+                and peer.get("address") != address
+                and _as_int(peer.get("missed_healthchecks")) > MISSED_BEFORE_ADDRESS_DROP
+            ):
+                self.peers.pop(key)
 
     def note_healthcheck_miss(self, peer_id: str) -> None:
         """A probe went out and nothing came back before the next sweep."""

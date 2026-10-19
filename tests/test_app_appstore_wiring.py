@@ -1012,7 +1012,20 @@ def test_direct_dashboard_grid_keeps_every_action(tmp_path):
     from netdnsmonitor.dashboard import ALL_ACTIONS
 
     app = build_app(tmp_path, capabilities=DIRECT)
-    assert app.dashboard_actions() == list(ALL_ACTIONS)
+    actions = app.dashboard_actions()
+    assert actions[: len(ALL_ACTIONS)] == list(ALL_ACTIONS)
+    # The rest is repair scripts found in the store, nothing else.
+    assert {kind for _, _, kind in actions[len(ALL_ACTIONS) :]} <= {"repair"}
+
+
+def test_direct_grid_lists_repair_scripts_under_repairs(tmp_path):
+    from netdnsmonitor.ui_catalog import group_actions
+
+    app = build_app(tmp_path, capabilities=DIRECT)
+    _primary, groups = group_actions(app.dashboard_actions())
+    repairs = dict((title, members) for title, _tip, members in groups)["Repairs"]
+    ids = {action_id for _, action_id, _ in repairs}
+    assert {"flush_dns_cache", "renew_dhcp_lease"} <= ids
 
 
 def test_store_dashboard_has_no_log_column_and_skips_the_log_refresh(tmp_path):

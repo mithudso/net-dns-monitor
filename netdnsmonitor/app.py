@@ -87,7 +87,7 @@ from netdnsmonitor.failover import (
 )
 from netdnsmonitor.forensic_log import ForensicRecorder
 from netdnsmonitor.history import SampleHistory
-from netdnsmonitor.ladder import ladder_for, step_by_name
+from netdnsmonitor.ladder import LadderStep, ladder_for, step_by_name
 from netdnsmonitor.localize import localize
 from netdnsmonitor.log_watcher import NO_EVIDENCE_PREFIX, make_log_watcher
 from netdnsmonitor.mini_window import MiniWindow, mini_text
@@ -2206,7 +2206,24 @@ class NetDnsMonitorApp(rumps.App):
             for action_id, (feature, _what) in GATED_DASHBOARD_ACTIONS.items()
             if not getattr(self.capabilities, feature)
         }
-        return [action for action in ALL_ACTIONS if action[1] not in hidden]
+        actions = [action for action in ALL_ACTIONS if action[1] not in hidden]
+        known = {action[1] for action in actions}
+        # Repair scripts from the editor's store (shipped and the user's own)
+        # appear under Repairs without being listed here by hand.
+        for info in self._repair_scripts():
+            if info.name not in known:
+                actions.append((f"{info.name} (changes system state)", info.name, "repair"))
+        return actions
+
+    def _repair_scripts(self) -> list:
+        """Valid, enabled repair-kind scripts. Never raises; the grid must still draw."""
+        store = getattr(self, "remediation_store", None)
+        if store is None or not store.editable or not self.capabilities.privileged_repairs:
+            return []
+        try:
+            return [i for i in store.list_scripts() if i.kind == "repair" and i.valid and i.enabled]
+        except Exception:  # noqa: BLE001 - an unreadable scripts folder costs the extras only
+            return []
 
     def _ensure_dashboard(self) -> DashboardWindow:
         if self._dashboard is None:
@@ -2615,6 +2632,16 @@ class NetDnsMonitorApp(rumps.App):
 
     def _single_step(self, action_id: str, events: list) -> list:
         step = step_by_name(action_id)
+        if step is None:
+            # Not on a ladder: a failover or custom repair script from the menu.
+            step = next(
+                (
+                    LadderStep(i.name, i.kind, i.needs_privilege, i.reason)
+                    for i in self._repair_scripts()
+                    if i.name == action_id
+                ),
+                None,
+            )
         if step is None:
             return [f"Unknown step {action_id!r}."]
         # Per step, never around a loop: tick() waits for this lock on the run

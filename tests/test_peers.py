@@ -676,3 +676,32 @@ def test_load_record_survives_deeply_nested_json(tmp_path):
     path = tmp_path / "peers.json"
     path.write_text("[" * 1_000_000 + "]" * 1_000_000)
     assert load_record(str(path)) == {}
+
+
+def _old_address_with_misses(registry, misses):
+    registry.observe("a", host="mac", address="10.0.0.1")
+    for _ in range(misses):
+        registry.note_healthcheck_miss("a")
+
+
+def test_old_address_is_dropped_when_host_appears_elsewhere_after_over_five_misses():
+    registry = make_registry()
+    _old_address_with_misses(registry, 6)
+    registry.observe("b", host="mac", address="10.0.0.2")
+    assert set(registry.peers) == {"b"}
+
+
+def test_old_address_with_five_misses_is_kept():
+    registry = make_registry()
+    _old_address_with_misses(registry, 5)
+    registry.observe("b", host="mac", address="10.0.0.2")
+    assert set(registry.peers) == {"a", "b"}
+
+
+def test_other_hosts_are_not_dropped_by_a_new_address():
+    registry = make_registry()
+    registry.observe("a", host="other", address="10.0.0.1")
+    for _ in range(9):
+        registry.note_healthcheck_miss("a")
+    registry.observe("b", host="mac", address="10.0.0.2")
+    assert set(registry.peers) == {"a", "b"}

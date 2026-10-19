@@ -164,3 +164,17 @@ def test_credential_entries_match_the_menu_bars():
     assert [e[1] for e in ui_catalog.CREDENTIAL_ENTRIES[:-1]] == [
         f"cred_{name}" for _title, name, _msg in CREDENTIAL_ITEMS
     ]
+
+
+def test_a_stray_repair_lands_under_repairs_not_more():
+    from netdnsmonitor.ui_catalog import group_actions
+
+    actions = [
+        ("Flush", "flush_dns_cache", "repair"),
+        ("Mine", "my_script", "repair"),
+        ("Other", "unplaced_check", "check"),
+    ]
+    _primary, groups = group_actions(actions)
+    by_title = {title: [a[1] for a in members] for title, _tip, members in groups}
+    assert by_title["Repairs"] == ["flush_dns_cache", "my_script"]
+    assert by_title["More"] == ["unplaced_check"]

@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 2787 tests; the whole decision surface
+python3 -m pytest -q          # 2792 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 2787 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 2787 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 2792 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -875,7 +875,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 2787 passed
+python3 -m pytest -q            # 2792 passed
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -894,13 +894,13 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 89 | `test_privileges.py` |
 | 64 | `test_status.py` |
 | 60 | `test_cli_console.py` |
-| 62 | `test_app_appstore_wiring.py` |
+| 63 | `test_app_appstore_wiring.py` |
 | 60 | `test_dashboard.py` |
 | 63 | `test_console.py` |
 | 54 | `test_app_dashboard_wiring.py` |
 | 56 | `test_peer_net.py` |
 | 51 | `test_system_log.py` |
-| 51 | `test_peers.py` |
+| 54 | `test_peers.py` |
 | 45 | `test_cli.py` |
 | 41 | `test_app_failover_wiring.py` |
 | 41 | `test_domain_learner.py` |
@@ -966,10 +966,10 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 31 | `test_shell_scripts.py` |
 | 59 | `test_remediation_scripts.py` |
 | 25 | `test_remediation_editor.py` |
-| 16 | `test_ui_catalog.py` |
+| 17 | `test_ui_catalog.py` |
 | 14 | `test_ui_windows.py` |
 | 19 | `test_user_notify.py` |
-| **2787** | **total** |
+| **2792** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

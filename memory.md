@@ -395,3 +395,18 @@ damaged file keeps loaded keys); `parse_message(key_for=...)` verifies against t
 check_docs passes. Loopback CLI smoke: enroll, server, enrolled machine accepted, unenrolled refused
 and counted, keys.json mode 0600.
 Open: symmetric keys (server holds all); never run between two Macs.
+
+## v20 - 2026-10-19 - Console contrast, repair scripts in Repairs menu, stale peer addresses
+
+Delta: 1
+
+Task: three small fixes. Constraints: store build unchanged (no editor, no privileged repairs).
+Done: console transcript/input now white on fixed dark ground (`console_window.py`); dashboard
+Repairs menu lists every valid, enabled `KIND = "repair"` script from the store
+(`App._repair_scripts`, `ui_catalog.group_actions` files stray repairs under Repairs), and
+`_single_step` runs them (failover and custom scripts are not on `step_by_name`'s ladders);
+`PeerRegistry.observe` drops same-hostname rows at other addresses with more than 5 missed
+heartbeats (`MISSED_BEFORE_ADDRESS_DROP`).
+Verified: ruff clean, 2792 tests, check_docs passes. Not verified: the GUI (console colour,
+menu contents) is a manual check.
+Open: running switch_to_backup_network from the menu is a real failover attempt.
