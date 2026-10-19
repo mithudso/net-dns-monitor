@@ -159,3 +159,12 @@ Delta: 1
 Prompt:
 
 > add a headless option so an administrator can load this application onto one of their teammates' computers and have it automatically report to a configured uh, central reporting server, period. Which means this also needs a server setting that receives and listens for uh, uh, calls on the broadcast network. And logs which systems are having problems and what they are and what has been done to resolve them.
+
+## v19 - 2026-10-18 - Per-machine fleet keys as authentication (TASK-428)
+
+Delta: 1
+
+Prompt:
+
+> Yes, for now they share one network unless explicitly set. Set ssl keys unique for each box and have the keys be the authentication.
+> 1. If the program is running headless it should already report to the server, so no. 2. will do.

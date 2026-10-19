@@ -94,7 +94,7 @@ report, because someone will act on it.
 ## Commands — before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2769 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 2787 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -253,6 +253,8 @@ comment that is wrong about why is as expensive as code that is wrong.
   Macs.** `netdns headless` reports to `netdns server` over signed UDP (`fleet_*.py`,
   `headless.py`, `docs/FLEET.md`). Loopback tests and a loopback CLI smoke run passed;
   subnet broadcast, the Local Network prompt and a launchd-loaded agent are unobserved.
+  Each Mac authenticates with its own HMAC key, enrolled on the server
+  (`netdns fleet enroll <name>`, `fleet_keys.py`); symmetric, so the server holds every key.
   A `resolved` event never credits a ladder step, and the server marks an incident closed
   from a heartbeat as `inferred`. The store edition omits these modules
   (`Capabilities.fleet_reporting`).

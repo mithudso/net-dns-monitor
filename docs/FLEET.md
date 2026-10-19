@@ -17,18 +17,16 @@ Two roles, one codebase:
 ## Set up the server (once)
 
 1. Pick a Mac that stays on. Give it a fixed address (a DHCP reservation is enough).
-2. Choose a shared secret. Every reporting machine must use the same one:
-   ```bash
-   export FLEET_SHARED_SECRET="$(openssl rand -hex 24)"
-   ```
-3. Start the server in that same terminal (it reads the secret from the environment):
+2. Start the server:
    ```bash
    python3 -m netdnsmonitor.cli server
    ```
-   Expect `[fleet] listening on UDP 45738`. To keep it running without a terminal,
-   set `fleet_server_enabled: true` in that Mac's config and run
-   `headless --install` there (below): the headless process then hosts the server
-   too, and `--install` saves the secret to the Keychain.
+   Expect `[fleet] listening on UDP 45738`, and a warning that no machines are
+   enrolled yet. To keep it running without a terminal, set `fleet_server_enabled: true`
+   in that Mac's config and run `headless --install` there: the headless process then
+   hosts the server too.
+3. Enroll each teammate's Mac (next section). The server picks up an enrollment or a
+   revocation within a second; no restart.
 
 The server writes two files (paths are `fleet_server_log_path` and
 `fleet_server_state_path`):
@@ -36,26 +34,37 @@ The server writes two files (paths are `fleet_server_log_path` and
 - `fleet/events.jsonl` — every accepted event, one JSON object per line, append-only.
   Rotated to `events.jsonl.1` at 10 MB.
 - `fleet/state.json` — the current picture, one entry per machine.
+- `fleet/keys.json` — the enrolled machines and their keys (`fleet_keys_path`), mode 0600.
 
 ## Put it on a teammate's Mac
 
-1. Install the project on that Mac and copy `config.yaml` to
-   `~/.config/net-dns-monitor/config.yaml`.
-2. In that file set:
+Each Mac has **its own key**, and that key is its login. A report is accepted only if
+it is signed with the key enrolled for the machine name it claims.
+
+1. **On the server, enroll the Mac** under a name you will recognise:
+   ```bash
+   python3 -m netdnsmonitor.cli fleet enroll desk-7
+   ```
+   It prints the key once, with the commands to run on that Mac. It is not printed
+   again; if it is lost, `fleet revoke desk-7` and enroll again.
+2. **On the teammate's Mac,** install the project and copy `config.yaml` to
+   `~/.config/net-dns-monitor/config.yaml`, then set:
    ```yaml
    fleet_reporting_enabled: true
-   fleet_server_address: "192.168.1.50"   # the server's IP address
+   fleet_machine_name: "desk-7"           # must equal the enrolled name
+   fleet_server_address: ""               # empty = broadcast to this subnet
    ```
-   An IP address beats a name: during an outage the name may not resolve. If you
-   leave it empty the machine **broadcasts** to its own subnet, which only reaches
-   a server on the same LAN.
-3. Export the same secret and install the agent:
+   While the Macs share one network, leave `fleet_server_address` empty. Set it to
+   the server's IP address for a machine on another network: a broadcast never
+   crosses a router, so a Mac elsewhere would otherwise look silent. An IP beats a
+   name, because during an outage the name may not resolve.
+3. **Install the agent,** with the key from step 1:
    ```bash
-   export FLEET_SHARED_SECRET="the-same-secret"
+   export FLEET_MACHINE_KEY="<the key>"
    python3 -m netdnsmonitor.cli headless --install
    ```
-   This stores the secret in that Mac's Keychain (the agent has no shell
-   environment, so an exported variable alone would never reach it), writes
+   This stores the key in that Mac's Keychain (the agent has no shell environment, so
+   an exported variable alone would never reach it), writes
    `~/Library/LaunchAgents/com.netdnsmonitor.headless.plist` (`KeepAlive`, so it
    restarts if it stops) and loads it. Remove it with `headless --uninstall`.
 4. Check: the log is `~/Library/Logs/net-dns-monitor-headless.log`, and on the
@@ -99,7 +108,9 @@ lost if the process restarts before then. Heartbeats are not queued.
 ```bash
 python3 -m netdnsmonitor.cli fleet                 # every machine, problems first by name
 python3 -m netdnsmonitor.cli fleet --events 50     # plus the last 50 events
-python3 -m netdnsmonitor.cli fleet --json          # state and events for scripts
+python3 -m netdnsmonitor.cli fleet --json          # state, events and enrolled names
+python3 -m netdnsmonitor.cli fleet keys            # enrolled names (never the keys)
+python3 -m netdnsmonitor.cli fleet revoke desk-7   # refuse that machine from now on
 ```
 
 Example:
@@ -129,17 +140,26 @@ restart of the headless process.
 | `fleet_server_enabled` | false | Run the server inside the headless process. |
 | `fleet_server_log_path` | `.../fleet/events.jsonl` | Server event log. |
 | `fleet_server_state_path` | `.../fleet/state.json` | Server state file. |
+| `fleet_keys_path` | `.../fleet/keys.json` | Server: enrolled machines and their keys. |
 | `fleet_stale_seconds` | 900 | Server: silent after this long. |
 
-The secret is the credential `FLEET_SHARED_SECRET` (environment, then Keychain), set
+A machine's key is the credential `FLEET_MACHINE_KEY` (environment, then Keychain), set
 from the Credentials menu or by `headless --install`. It is never in the config file.
 
 ## Security model
 
-- **Signed.** Every message carries an HMAC-SHA256 over its canonical JSON, keyed by
-  the shared secret. The server refuses a bad or missing signature (unless
-  `fleet_allow_unsigned`) and counts the refusal by reason; it sends no reply, so a
-  scanner learns nothing. `netdns fleet` shows the counts.
+- **A key per machine.** Every message carries an HMAC-SHA256 over its canonical JSON,
+  keyed by the key enrolled for the name the message claims. A machine cannot speak for
+  another, a name that was never enrolled (or was revoked) is refused, and a leaked key
+  exposes one machine, not the fleet. Refusals are counted by reason (`bad_signature`,
+  `unknown_machine`, `unsigned`, `clock_skew`) and shown by `netdns fleet`; a refused
+  datagram gets no reply, so a scanner learns nothing.
+- **Symmetric keys, not an SSL/TLS key pair.** Public-key signatures are not in the
+  Python standard library, and the project's runtime dependencies are fixed at four.
+  The server therefore holds every machine's key: `keys.json` is as sensitive as the
+  keys, is written mode 0600, and should live on a Mac only you can use. A compromised
+  *server* exposes all keys. If you need keys the server cannot reveal, that is a
+  change to the dependency policy, not a setting.
 - **Replay window.** The signed time is the *send* time; the server refuses messages
   more than 10 minutes off its own clock, so a machine with a wrong clock shows up as
   `clock_skew` refusals rather than disappearing silently. A replay inside the window
@@ -151,7 +171,8 @@ from the Credentials menu or by `headless --install`. It is never in the config 
 - **Rate-limited.** One machine name may log 30 events a minute; the server holds at
   most 1000 machines.
 - **Unsigned mode** (`fleet_allow_unsigned`) lets any host on the network claim any
-  machine name. Use it for a first trial, then turn it off.
+  machine name, and the keys then protect nothing. Use it for a first trial, then turn
+  it off.
 
 ## What is not verified
 
@@ -173,6 +194,7 @@ from the Credentials menu or by `headless --install`. It is never in the config 
 |---|---|
 | `netdnsmonitor/fleet_protocol.py` | message format, signing, validation (no sockets) |
 | `netdnsmonitor/fleet_client.py` | reporter: outbox, retry, acknowledgement |
+| `netdnsmonitor/fleet_keys.py` | the enrolled machines and their keys (no sockets) |
 | `netdnsmonitor/fleet_store.py` | server log and state, silence and inference, text report (no sockets) |
 | `netdnsmonitor/fleet_server.py` | UDP listener |
 | `netdnsmonitor/headless.py` | windowless monitor loop, LaunchAgent install |

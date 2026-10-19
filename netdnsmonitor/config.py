@@ -227,8 +227,9 @@ DEFAULT_CONFIG = {
     # --- fleet reporting and the central server --------------------------
     # Headless mode (`netdns headless`) and the server (`netdns server`); see
     # docs/FLEET.md. Everything here is off by default and sends nothing until
-    # fleet_reporting_enabled is true. The shared secret is the credential
-    # FLEET_SHARED_SECRET, never a config key.
+    # fleet_reporting_enabled is true. This machine's own key is the credential
+    # FLEET_MACHINE_KEY (created on the server by `netdns fleet enroll`), never a
+    # config key.
     "fleet_reporting_enabled": False,
     # Where reports go. Empty = broadcast to the local subnet, which only reaches
     # a server on the same LAN. An IP address is more reliable than a name:
@@ -245,6 +246,9 @@ DEFAULT_CONFIG = {
     "fleet_server_enabled": False,
     "fleet_server_log_path": "~/Library/Application Support/net-dns-monitor/fleet/events.jsonl",
     "fleet_server_state_path": "~/Library/Application Support/net-dns-monitor/fleet/state.json",
+    # Server only. The enrolled machines and their keys. Holds every key: keep it
+    # readable by the server's account alone (it is written mode 0600).
+    "fleet_keys_path": "~/Library/Application Support/net-dns-monitor/fleet/keys.json",
     # A machine not heard from for this long is logged as silent.
     "fleet_stale_seconds": 900,
     # --- automatic network failover -------------------------------------
@@ -327,6 +331,7 @@ PATH_KEYS = (
     "remediation_scripts_dir",
     "fleet_server_log_path",
     "fleet_server_state_path",
+    "fleet_keys_path",
 )
 
 # Keys whose consumers iterate them. A str is iterable too, so a bare string is

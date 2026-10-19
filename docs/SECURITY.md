@@ -257,8 +257,10 @@ on `fleet_port`. Both are off by default (`fleet_reporting_enabled`,
 `fleet_server_enabled`) and absent from the store edition. Full description in
 `docs/FLEET.md`.
 
-- **Signed.** HMAC-SHA256 over the canonical JSON with `FLEET_SHARED_SECRET`;
-  `compare_digest`; a signed message is verified even in `fleet_allow_unsigned` mode.
+- **A key per machine.** HMAC-SHA256 over the canonical JSON with the key enrolled for
+  the claimed machine name (`fleet_keys.py`, mode 0600); `compare_digest`; a name with
+  no key is refused as `unknown_machine`; a signed message is verified even in
+  `fleet_allow_unsigned` mode.
 - **Replay.** Signed send time must be within 600 s of the server clock; repeated
   event ids per machine are acknowledged but not logged twice.
 - **Flood.** Datagrams over 4096 bytes are dropped unparsed; 30 events a minute per
@@ -266,9 +268,10 @@ on `fleet_port`. Both are off by default (`fleet_reporting_enabled`,
 - **Content.** Step text is redacted with `sensitive_strings`. No probe results, log
   excerpts, paths or credentials are sent.
 - **Residual.** Not encrypted (host name, classification and step outcomes are
-  readable on the LAN). A shared secret is shared: anyone holding it can claim any
-  machine name. The server trusts a signed machine's self-reported status.
-  `fleet_allow_unsigned` removes all of this protection.
+  readable on the LAN). The server holds every machine's key (symmetric HMAC, not a key pair), so a
+  compromised server exposes them all; a compromised machine exposes only its own. The
+  server trusts a signed machine's self-reported status. `fleet_allow_unsigned` removes
+  all of this protection.
 
 ### 7. Outbound redaction (`escalation.redact`)
 

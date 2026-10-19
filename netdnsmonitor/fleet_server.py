@@ -11,10 +11,12 @@ and dropped. The reader thread survives a receive error the way peer_net's does:
 it ends only when the socket is closed under it, and `alive()` then goes False so
 the owner can rebuild it.
 
-**Trust.** Datagrams are accepted only when their HMAC verifies against the
-shared secret (see fleet_protocol.py). With no secret configured the server
-refuses everything unless `allow_unsigned` is set, in which case any host on the
-network can claim any machine id -- a trial setting, not a deployment.
+**Trust.** A datagram is accepted only when its HMAC verifies against the key
+enrolled for the machine name it claims (`key_for`, backed by fleet_keys.py), so
+no machine can speak for another. A name with no enrolled key is refused and
+counted. With `allow_unsigned` set, an unsigned message is accepted from anyone
+and can claim any name -- a trial setting, not a deployment. The ack is signed
+with the same machine's key; an unsigned sender gets an unsigned ack.
 
 **Silence detection** runs on the same thread: the read timeout is short, and
 each time it fires the store is swept for machines not heard from.
@@ -25,7 +27,8 @@ import socket
 import threading
 import time
 import traceback
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 from netdnsmonitor import fleet_protocol as proto
 from netdnsmonitor.fleet_store import FleetStore
@@ -38,14 +41,14 @@ class FleetServer:
         self,
         store: FleetStore,
         port: int = 45738,
-        secret: Optional[str] = None,
+        key_for: Optional[Callable[[str], Optional[str]]] = None,
         allow_unsigned: bool = False,
         now_fn: Callable[[], float] = time.time,
         bind_host: str = "",
     ):
         self.store = store
         self.port = port
-        self.secret = secret or None
+        self.key_for = key_for or (lambda _machine: None)
         self.allow_unsigned = allow_unsigned
         self.now_fn = now_fn
         self.bind_host = bind_host
@@ -128,7 +131,7 @@ class FleetServer:
     def handle(self, payload: bytes, address: str, port: int = 0) -> Optional[str]:
         """Process one datagram. Returns the store's verdict, or the refusal reason."""
         message, reason = proto.parse_message(
-            payload, self.now_fn(), self.secret, self.allow_unsigned
+            payload, self.now_fn(), None, self.allow_unsigned, key_for=self.key_for
         )
         if message is None:
             self.store.note_refused(reason or proto.REFUSED_MALFORMED)
@@ -146,7 +149,13 @@ class FleetServer:
         if self.socket is None:
             return
         reply = proto.build_message(
-            proto.ACK, "server", "", message["eid"], self.now_fn(), {}, self.secret
+            proto.ACK,
+            "server",
+            "",
+            message["eid"],
+            self.now_fn(),
+            {},
+            self.key_for(message["id"]),
         )
         # To the datagram's source port, not this server's: the client sends from
         # an ephemeral port and listens on that same socket for the ack.

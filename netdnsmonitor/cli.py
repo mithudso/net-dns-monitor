@@ -520,7 +520,7 @@ def cmd_headless(args, config, out) -> int:
         if not os.path.exists(config_path):
             out(f"config file not found: {config_path} (copy config.yaml there first)")
             return 2
-        saved = headless.store_secret_from_environment()
+        saved = headless.store_key_from_environment()
         if saved:
             out(saved)
         out(
@@ -536,7 +536,7 @@ def cmd_server(args, config, out) -> int:
     """Run the central fleet server in the foreground."""
     from netdnsmonitor import headless
 
-    server = headless.start_server(config, headless.fleet_secret(headless.default_credentials()))
+    server = headless.start_server(config)
     if server is None:
         return 1
     stop = threading.Event()
@@ -548,18 +548,66 @@ def cmd_server(args, config, out) -> int:
 
 
 def cmd_fleet(args, config, out) -> int:
-    """Print which machines have problems, what they are, and what was done."""
+    """Which machines have problems, what they are, and what was done; and the
+    keys that let a machine report (`enroll`, `revoke`, `keys`).
+    """
     import time
 
+    from netdnsmonitor.fleet_keys import EnrollmentError, KeyRegistry
     from netdnsmonitor.fleet_store import read_events, read_state, render_events, render_fleet
+
+    registry = KeyRegistry(config["fleet_keys_path"])
+    action = args.action
+    if action in ("enroll", "revoke") and not args.name:
+        out(f"usage: fleet {action} <machine name>")
+        return 2
+    if action == "enroll":
+        try:
+            key = registry.enroll(args.name)
+        except EnrollmentError as exc:
+            out(f"not enrolled: {exc}")
+            return 1
+        out(f"Enrolled {args.name!r}. This key is shown once; it is not printed again:")
+        out("")
+        out(f"    {key}")
+        out("")
+        out(
+            "On that Mac, set it up and install the agent (the config needs "
+            "fleet_reporting_enabled: true and, if the server is not on the same "
+            "subnet, fleet_server_address):"
+        )
+        out(f"    export FLEET_MACHINE_KEY={key}")
+        out("    python3 -m netdnsmonitor.cli headless --install")
+        out(
+            f"and set fleet_machine_name: {args.name!r} in its config.yaml, since that name "
+            "is what the key is enrolled under."
+        )
+        return 0
+    if action == "revoke":
+        if registry.revoke(args.name):
+            out(f"Revoked {args.name!r}: its reports are refused from now on.")
+            return 0
+        out(f"{args.name!r} is not enrolled.")
+        return 1
+    if action == "keys":
+        names = registry.names()
+        out("\n".join(names) if names else "No machines are enrolled.")
+        return 0
 
     state = read_state(config["fleet_server_state_path"])
     events = read_events(config["fleet_server_log_path"], limit=args.events)
+    enrolled = registry.names()
     if args.json:
-        out(json.dumps({"state": state, "events": events}, indent=2, sort_keys=True))
+        out(
+            json.dumps(
+                {"state": state, "events": events, "enrolled": enrolled},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     stale = float(config["fleet_stale_seconds"])
-    out(render_fleet(state, time.time(), stale))
+    out(render_fleet(state, time.time(), stale, enrolled))
     if args.events:
         out("")
         out(f"Last {len(events)} event(s):")
@@ -649,6 +697,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_server)
 
     p = add("fleet", help="which machines have problems, what they are, what was done")
+    p.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=["status", "enroll", "revoke", "keys"],
+        help="status (default); enroll/revoke a machine's key; list enrolled names",
+    )
+    p.add_argument("name", nargs="?", help="machine name for enroll and revoke")
     p.add_argument("--events", type=int, default=20, help="also show the last N logged events")
     p.set_defaults(func=cmd_fleet)
     return parser

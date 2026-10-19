@@ -223,9 +223,9 @@ CREDENTIAL_ITEMS = (
         "The password for smtp_username on smtp_host, used for email alerts.",
     ),
     (
-        "Set fleet shared secret…",
-        "FLEET_SHARED_SECRET",
-        "The secret that signs fleet reports. Every machine and the central server must share it.",
+        "Set fleet machine key…",
+        "FLEET_MACHINE_KEY",
+        "This Mac's own key for fleet reports. The administrator creates it on the server with: netdns fleet enroll <name>.",
     ),
 )
 CREDENTIAL_STORAGE_NOTE = (

@@ -30,6 +30,7 @@ PATH_KEYS = {
     "remediation_scripts_dir",
     "fleet_server_log_path",
     "fleet_server_state_path",
+    "fleet_keys_path",
 }
 
 

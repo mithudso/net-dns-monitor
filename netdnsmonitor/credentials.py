@@ -28,7 +28,7 @@ import os
 from collections.abc import Mapping
 from typing import Callable, Optional, Protocol
 
-NAMES = ("ANTHROPIC_API_KEY", "SLACK_WEBHOOK_URL", "SMTP_PASSWORD", "FLEET_SHARED_SECRET")
+NAMES = ("ANTHROPIC_API_KEY", "SLACK_WEBHOOK_URL", "SMTP_PASSWORD", "FLEET_MACHINE_KEY")
 
 # One Keychain service for the app; the credential name is the account.
 SERVICE = "com.net-dns-monitor.credentials"

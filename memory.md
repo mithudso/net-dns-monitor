@@ -373,3 +373,25 @@ check_docs passes. Loopback CLI smoke (`server` + real reporter + `fleet`) logge
 resolved with steps.
 Open: never run between two Macs (broadcast, Local Network prompt); LaunchAgent never loaded by
 launchctl; menu-bar app does not report; outbox is memory-only.
+
+## v19 - 2026-10-18 - Per-machine fleet keys as authentication (TASK-428)
+
+Delta: 1
+
+Active task: Stele follow-up to TASK-426. Owner: one shared network for now (broadcast default,
+fleet_server_address overrides); a unique key per box is the authentication; menu-bar app need not
+report; owner will test on a second Mac.
+Constraint: four runtime deps, so the key is a per-machine HMAC key (symmetric), not an
+asymmetric key pair; say so plainly.
+Plan: (1) fleet_keys.py registry (0600, enroll/revoke/list); (2) parse_message verifies against the
+claimed id's key, unknown id refused; (3) server signs acks with that key; (4) credential renamed
+FLEET_MACHINE_KEY; (5) CLI fleet enroll/revoke/keys, report lists never-reported machines; (6)
+fleet_keys_path setting + tooltip; (7) docs, tests, gates.
+Done: all seven plan items. `fleet_keys.py` registry (0600, enroll/revoke/names, re-read within 1 s,
+damaged file keeps loaded keys); `parse_message(key_for=...)` verifies against the claimed id's key,
+`unknown_machine` refusal; server acks signed with that machine's key; credential renamed
+`FLEET_MACHINE_KEY`; CLI `fleet enroll|revoke|keys`; report lists enrolled-never-heard machines;
+`fleet_keys_path` setting + tooltip; store build omits `fleet_keys`. Gate: ruff clean, 2787 tests,
+check_docs passes. Loopback CLI smoke: enroll, server, enrolled machine accepted, unenrolled refused
+and counted, keys.json mode 0600.
+Open: symmetric keys (server holds all); never run between two Macs.

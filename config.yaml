@@ -335,8 +335,9 @@ remediation_script_timeout_seconds: 60
 # it reports each incident, what was tried, and the recovery to a central server.
 # `netdns server` is that server: it listens on fleet_port, logs events and keeps
 # the picture of which machines have problems. Nothing is sent unless reporting is
-# on. Reports are signed with the shared secret in the credential
-# FLEET_SHARED_SECRET (environment or Keychain), never in this file.
+# on. Each machine has its own key: on the server run
+# `netdns fleet enroll <machine name>`, then give that machine the key as the
+# credential FLEET_MACHINE_KEY (environment or Keychain), never in this file.
 fleet_reporting_enabled: false
 # Empty = broadcast to the local subnet. An IP address is more reliable than a
 # name: during an outage the name may not resolve.
@@ -351,6 +352,8 @@ fleet_allow_unsigned: false
 fleet_server_enabled: false
 fleet_server_log_path: "~/Library/Application Support/net-dns-monitor/fleet/events.jsonl"
 fleet_server_state_path: "~/Library/Application Support/net-dns-monitor/fleet/state.json"
+# Server only: the enrolled machines and their keys (written mode 0600).
+fleet_keys_path: "~/Library/Application Support/net-dns-monitor/fleet/keys.json"
 # Not heard from for this many seconds = logged as silent.
 fleet_stale_seconds: 900
 

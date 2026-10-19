@@ -144,7 +144,7 @@ def test_describe_reports_presence_and_never_the_value():
         "ANTHROPIC_API_KEY": "set (environment)",
         "SLACK_WEBHOOK_URL": "set (Keychain)",
         "SMTP_PASSWORD": "not set",
-        "FLEET_SHARED_SECRET": "not set",
+        "FLEET_MACHINE_KEY": "not set",
     }
     assert "secret" not in str(described)
 

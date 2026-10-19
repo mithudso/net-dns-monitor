@@ -43,7 +43,7 @@ import os
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from netdnsmonitor import fleet_protocol as proto
 
@@ -372,13 +372,24 @@ def _steps_text(steps) -> str:
     return "; ".join(f"{step.get('name', '?')}: {step.get('outcome', '')}" for step in steps)
 
 
-def render_fleet(state: dict[str, Any], now: float, stale_seconds: float = 900.0) -> str:
+def render_fleet(
+    state: dict[str, Any],
+    now: float,
+    stale_seconds: float = 900.0,
+    enrolled: Optional[list[str]] = None,
+) -> str:
+    # Enrolled but never heard from: a machine that was set up and never reported
+    # is the one a "0 not healthy" headline would otherwise hide.
+    never = sorted(set(enrolled or []) - set((state.get("machines") or {}).keys()))
     machines = sorted(
         (state.get("machines") or {}).values(),
         key=lambda machine: (machine.get("host") or "", machine.get("id") or ""),
     )
     if not machines:
-        return "No machines have reported yet."
+        text = "No machines have reported yet."
+        if never:
+            text += "\n\nEnrolled but never heard from: " + ", ".join(never)
+        return text
     lines = []
     problems = [m for m in machines if machine_status(m, now, stale_seconds) != "healthy"]
     lines.append(f"{len(machines)} machine(s) known; {len(problems)} not healthy.")
@@ -406,6 +417,9 @@ def render_fleet(state: dict[str, Any], now: float, stale_seconds: float = 900.0
                 f"{last.get('duration_seconds')}s{how}"
             )
             lines.append(f"    steps run: {_steps_text(last.get('steps'))}")
+    if never:
+        lines.append("")
+        lines.append("Enrolled but never heard from: " + ", ".join(never))
     refused = state.get("refused") or {}
     if refused:
         lines.append("")

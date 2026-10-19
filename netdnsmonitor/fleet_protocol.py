@@ -13,7 +13,8 @@ signing, the replay window and the size cap be tested without opening a port.
 
 **Signed, because the server log is what an administrator trusts.** Every
 message carries `sig`, an HMAC-SHA256 over the canonical JSON of the rest of
-the message, keyed by the shared secret (credential FLEET_SHARED_SECRET). The
+the message, keyed by that machine's own key (credential FLEET_MACHINE_KEY,
+enrolled on the server by fleet_keys.py). The
 signed `ts` is the moment of *sending*, not of the event: a report queued
 through a long outage is re-signed when it is finally sent, so the replay
 window below never refuses an honest late report. The event's own time travels
@@ -36,6 +37,7 @@ sender before it gets here (CLAUDE.md non-negotiable 6).
 import hashlib
 import hmac
 import json
+from collections.abc import Callable
 from typing import Any, Optional
 
 PROTOCOL = "ndm-fleet/1"
@@ -69,6 +71,7 @@ REFUSED_MALFORMED = "malformed"
 REFUSED_UNSIGNED = "unsigned"
 REFUSED_BAD_SIGNATURE = "bad_signature"
 REFUSED_STALE = "clock_skew"
+REFUSED_UNKNOWN_MACHINE = "unknown_machine"
 
 
 def clean(value, limit: int = MAX_FIELD_TEXT) -> str:
@@ -134,8 +137,13 @@ def parse_message(
     now: float,
     secret: Optional[str] = None,
     allow_unsigned: bool = False,
+    key_for: Optional[Callable[[str], Optional[str]]] = None,
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """(message, None) when accepted; (None, reason) when refused.
+
+    `secret` is the one key to check against (the client verifying an ack).
+    `key_for` looks the key up by the claimed machine id (the server), and takes
+    precedence: one machine's key never verifies another machine's message.
 
     Refusal reasons are the REFUSED_* constants. Nothing in the message is ever
     used as a path, a command or an argument; strings are cleaned and bounded.
@@ -153,6 +161,13 @@ def parse_message(
         return None, REFUSED_MALFORMED
 
     signature = raw.get("sig")
+    if key_for is not None:
+        # The server: each machine signs with its own key, found by the name it
+        # claims. A name with no key (never enrolled, or revoked) cannot be
+        # verified at all, whatever else is true of the message.
+        secret = key_for(clean(raw.get("id"), 64))
+        if secret is None and isinstance(signature, str):
+            return None, REFUSED_UNKNOWN_MACHINE
     if secret:
         if not isinstance(signature, str):
             if not allow_unsigned:

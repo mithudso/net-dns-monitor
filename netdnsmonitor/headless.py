@@ -165,29 +165,29 @@ def default_credentials():
     return credentials.CredentialStore(backend_factory=credentials.make_keychain_backend)
 
 
-def store_secret_from_environment(env=None, credential_store=None) -> Optional[str]:
-    """Move FLEET_SHARED_SECRET from the installer's environment into the Keychain.
+def store_key_from_environment(env=None, credential_store=None) -> Optional[str]:
+    """Move FLEET_MACHINE_KEY from the installer's environment into the Keychain.
 
-    The LaunchAgent starts with no shell environment, so a secret exported in the
+    The LaunchAgent starts with no shell environment, so a key exported in the
     administrator's terminal would never reach it. Returns a line saying what
     happened, or None when the variable is not set. The value is never echoed.
     """
     env = os.environ if env is None else env
-    value = env.get("FLEET_SHARED_SECRET")
+    value = env.get("FLEET_MACHINE_KEY")
     if not value:
         return None
     store = credential_store or default_credentials()
     try:
-        outcome = store.set("FLEET_SHARED_SECRET", value)
+        outcome = store.set("FLEET_MACHINE_KEY", value)
     except Exception as exc:  # noqa: BLE001 - reported as data, class name only
-        return f"failed: the shared secret was not saved to the Keychain ({type(exc).__name__})"
-    return f"shared secret: {outcome}"
+        return f"failed: the machine key was not saved to the Keychain ({type(exc).__name__})"
+    return f"machine key: {outcome}"
 
 
-def fleet_secret(credential_store) -> Optional[str]:
+def fleet_key(credential_store) -> Optional[str]:
     try:
-        return credential_store.get("FLEET_SHARED_SECRET") or None
-    except Exception:  # noqa: BLE001 - no secret means unsigned, which the server decides
+        return credential_store.get("FLEET_MACHINE_KEY") or None
+    except Exception:  # noqa: BLE001 - no key means unsigned, which the server decides
         return None
 
 
@@ -251,7 +251,7 @@ def run_headless(
         remediation_store=remediation_store,
     )
     notifier = app_module.build_notifier(config, env=credential_store.as_env())
-    secret = fleet_secret(credential_store)
+    secret = fleet_key(credential_store)
 
     monitor = HeadlessMonitor(
         config,
@@ -265,7 +265,7 @@ def run_headless(
         monitor.reporter.start()
         if not secret and not config["fleet_allow_unsigned"]:
             print(
-                "[fleet] no FLEET_SHARED_SECRET: reports go out unsigned and a server "
+                "[fleet] no FLEET_MACHINE_KEY: reports go out unsigned and a server "
                 "that requires signatures will refuse them",
                 file=sys.stderr,
                 flush=True,
@@ -273,7 +273,7 @@ def run_headless(
 
     server = None
     if config["fleet_server_enabled"]:
-        server = start_server(config, secret)
+        server = start_server(config)
 
     for name in (signal.SIGTERM, signal.SIGINT):
         with contextlib.suppress(ValueError):  # not the main thread
@@ -289,8 +289,9 @@ def run_headless(
     return 0
 
 
-def start_server(config: dict, secret: Optional[str]):
+def start_server(config: dict):
     """Build and start the fleet server from config. None if it cannot start."""
+    from netdnsmonitor.fleet_keys import KeyRegistry
     from netdnsmonitor.fleet_server import FleetServer
     from netdnsmonitor.fleet_store import FleetStore
 
@@ -299,20 +300,21 @@ def start_server(config: dict, secret: Optional[str]):
         config["fleet_server_state_path"],
         stale_seconds=float(config["fleet_stale_seconds"]),
     )
+    registry = KeyRegistry(config["fleet_keys_path"])
     server = FleetServer(
         store,
         port=config["fleet_port"],
-        secret=secret,
+        key_for=registry.key_for,
         allow_unsigned=config["fleet_allow_unsigned"],
     )
     if not server.start():
         print(f"[fleet] server unavailable: {server.start_error}", file=sys.stderr, flush=True)
         return None
     print(f"[fleet] listening on UDP {server.port}", file=sys.stderr, flush=True)
-    if not secret and not config["fleet_allow_unsigned"]:
+    if not registry.names() and not config["fleet_allow_unsigned"]:
         print(
-            "[fleet] no FLEET_SHARED_SECRET and fleet_allow_unsigned is false: "
-            "every report will be refused",
+            "[fleet] no machines are enrolled, so every report will be refused: "
+            "run `netdns fleet enroll <machine name>`",
             file=sys.stderr,
             flush=True,
         )

@@ -208,6 +208,7 @@ GROUPS = [
             ("fleet_server_enabled", "Run the server in headless mode", "bool"),
             ("fleet_server_log_path", "Server event log", "str"),
             ("fleet_server_state_path", "Server state file", "str"),
+            ("fleet_keys_path", "Server machine keys", "str"),
             ("fleet_stale_seconds", "Silent after (seconds)", "float"),
         ],
     ),
@@ -329,6 +330,7 @@ NEEDS_RESTART = {
     "fleet_server_enabled",
     "fleet_server_log_path",
     "fleet_server_state_path",
+    "fleet_keys_path",
     "fleet_stale_seconds",
     # The Router is built once in App.__init__ but never started there: only
     # Router > Start or the router window starts it. That object is built from

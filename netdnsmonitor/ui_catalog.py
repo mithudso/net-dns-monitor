@@ -109,10 +109,11 @@ SETTING_TIPS = {
     "fleet_port": "UDP port the fleet reports use, on both the machines and the server. Needs a restart.",
     "fleet_heartbeat_seconds": "How often this machine tells the server it is alive. Needs a restart.",
     "fleet_machine_name": "Name shown in the server's log for this Mac. Blank uses the host name. Needs a restart.",
-    "fleet_allow_unsigned": "Server only. Accept reports with no signature. A trial setting: any host on the network can then claim any machine name. Needs a restart.",
+    "fleet_allow_unsigned": "Server only. Accept reports with no signature. A trial setting: any host on the network can then claim any machine name, and the machine keys protect nothing. Needs a restart.",
     "fleet_server_enabled": "Run the central server inside the headless process. Needs a restart.",
     "fleet_server_log_path": "Server only. Append-only log of every incident, resolution and silence. Needs a restart.",
     "fleet_server_state_path": "Server only. The current picture of every machine. Needs a restart.",
+    "fleet_keys_path": "Server only. The enrolled machines and each one's key. Holds every key, so it is written readable by this account alone. Needs a restart.",
     "fleet_stale_seconds": "Server only. A machine not heard from for this long is logged as silent. Needs a restart.",
     # Files and folders
     "reports_dir": "Where incident reports are written. Needs a restart.",
@@ -144,7 +145,7 @@ GROUP_TIPS = {
     "Domain learning": "Names the app adds to its own checks.",
     "Notifications": "Slack and email alerts. Secrets are not stored here.",
     "Remediation scripts": "Where the editable troubleshooting scripts live and how long they may run.",
-    "Fleet reporting": "Headless mode and the central server: where reports go and how the server logs them. The shared secret is a credential, not a setting.",
+    "Fleet reporting": "Headless mode and the central server: where reports go and how the server logs them. This Mac's fleet key is a credential, not a setting.",
     "Files and folders": "Where the app writes its records.",
     "Router (not with the router/ stack)": "The in-app router. Conflicts with the standalone router/ stack.",
 }
@@ -312,9 +313,9 @@ CREDENTIAL_ENTRIES = [
         "Store the password for the SMTP login in the Keychain.",
     ),
     (
-        "Set fleet shared secret…",
-        "cred_FLEET_SHARED_SECRET",
-        "Store the secret that signs fleet reports in the Keychain. The central server and every reporting machine must use the same one.",
+        "Set fleet machine key…",
+        "cred_FLEET_MACHINE_KEY",
+        "Store this Mac's own fleet key in the Keychain. Create it on the server with: netdns fleet enroll <name>.",
     ),
     (
         "Remove saved credentials",

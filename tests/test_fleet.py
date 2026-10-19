@@ -11,9 +11,12 @@ import plistlib
 import threading
 import types
 
+import pytest
+
 from netdnsmonitor import fleet_protocol as proto
 from netdnsmonitor import headless
 from netdnsmonitor.fleet_client import MAX_OUTBOX, FleetReporter, default_transport
+from netdnsmonitor.fleet_keys import EnrollmentError, KeyRegistry
 from netdnsmonitor.fleet_server import FleetServer
 from netdnsmonitor.fleet_store import (
     RATE_LIMIT_EVENTS,
@@ -520,9 +523,24 @@ def test_a_transport_that_raises_is_data_not_an_exception():
 # --- loopback: the real client against the real server ----------------------
 
 
+def quick(port, name, key):
+    """A reporter that waits only briefly for an ack."""
+    return FleetReporter(
+        machine_id=name,
+        host=name,
+        server_address="127.0.0.1",
+        port=port,
+        secret=key,
+        transport=lambda p, t, prt, timeout: default_transport(p, t, prt, 0.3),
+    )
+
+
 def test_real_udp_round_trip_over_loopback(tmp_path):
     store = FleetStore(str(tmp_path / "e.jsonl"), str(tmp_path / "s.json"))
-    server = FleetServer(store, port=0, secret=SECRET, bind_host="127.0.0.1")
+    registry = KeyRegistry(str(tmp_path / "keys.json"))
+    key_1 = registry.enroll("mac-1")
+    key_2 = registry.enroll("mac-2")
+    server = FleetServer(store, port=0, key_for=registry.key_for, bind_host="127.0.0.1")
     assert server.start()
     try:
         r = FleetReporter(
@@ -530,25 +548,32 @@ def test_real_udp_round_trip_over_loopback(tmp_path):
             host="mac-1.local",
             server_address="127.0.0.1",
             port=server.port,
-            secret=SECRET,
+            secret=key_1,
             transport=default_transport,
         )
         r.incident(REPORT)
         assert r.flush() == 1
         assert store.machines["mac-1"]["open_incident"]["classification"] == "dns"
-        # A client with the wrong secret gets no ack and is counted, not logged.
-        wrong = FleetReporter(
-            machine_id="evil",
-            host="evil",
-            server_address="127.0.0.1",
-            port=server.port,
-            secret="nope",
-            transport=lambda p, t, port, timeout: default_transport(p, t, port, 0.3),
-        )
-        wrong.incident(REPORT)
-        assert wrong.flush() == 0
+
+        # A name that was never enrolled is refused, whatever key it signs with.
+        stranger = quick(server.port, "evil", key_1)
+        stranger.incident(REPORT)
+        assert stranger.flush() == 0
         assert "evil" not in store.machines
+        assert store.refused[proto.REFUSED_UNKNOWN_MACHINE] >= 1
+
+        # mac-2's own key cannot speak for mac-1.
+        impostor = quick(server.port, "mac-1", key_2)
+        impostor.resolved("dns", 1.0)
+        assert impostor.flush() == 0
+        assert store.machines["mac-1"]["open_incident"] is not None
         assert store.refused[proto.REFUSED_BAD_SIGNATURE] >= 1
+
+        # Revoking takes effect without restarting the server.
+        registry.revoke("mac-1")
+        late = quick(server.port, "mac-1", key_1)
+        late.heartbeat()
+        assert late.last_error == "no acknowledgement from the server"
     finally:
         server.stop()
 
@@ -557,7 +582,6 @@ def test_server_start_failure_is_reported_not_raised(tmp_path):
     first = FleetServer(
         FleetStore(str(tmp_path / "a"), str(tmp_path / "b")),
         port=0,
-        secret=SECRET,
         bind_host="127.0.0.1",
     )
     assert first.start()
@@ -565,7 +589,6 @@ def test_server_start_failure_is_reported_not_raised(tmp_path):
         second = FleetServer(
             FleetStore(str(tmp_path / "c"), str(tmp_path / "d")),
             port=first.port,
-            secret=SECRET,
             bind_host="127.0.0.1",
         )
         assert second.start() is False
@@ -788,7 +811,7 @@ def test_uninstall_removes_the_plist(tmp_path):
     )
 
 
-def test_secret_moves_from_the_environment_to_the_keychain_and_is_never_echoed():
+def test_key_moves_from_the_environment_to_the_keychain_and_is_never_echoed():
     saved = {}
 
     class Store:
@@ -796,10 +819,10 @@ def test_secret_moves_from_the_environment_to_the_keychain_and_is_never_echoed()
             saved[name] = value
             return "saved to the Keychain"
 
-    line = headless.store_secret_from_environment({"FLEET_SHARED_SECRET": SECRET}, Store())
-    assert saved == {"FLEET_SHARED_SECRET": SECRET}
+    line = headless.store_key_from_environment({"FLEET_MACHINE_KEY": SECRET}, Store())
+    assert saved == {"FLEET_MACHINE_KEY": SECRET}
     assert SECRET not in line
-    assert headless.store_secret_from_environment({}, Store()) is None
+    assert headless.store_key_from_environment({}, Store()) is None
 
 
 # --- command line -----------------------------------------------------------
@@ -813,6 +836,7 @@ def test_fleet_command_prints_the_picture_and_events(tmp_path):
     config = {
         "fleet_server_state_path": store.state_path,
         "fleet_server_log_path": store.log_path,
+        "fleet_keys_path": str(tmp_path / "keys.json"),
         "fleet_stale_seconds": 900,
     }
     lines = []
@@ -834,6 +858,7 @@ def test_fleet_command_json(tmp_path):
         {
             "fleet_server_state_path": store.state_path,
             "fleet_server_log_path": store.log_path,
+            "fleet_keys_path": str(tmp_path / "keys.json"),
             "fleet_stale_seconds": 900,
         },
         lines.append,
@@ -847,3 +872,142 @@ def test_parser_knows_the_new_commands():
     parser = cli.build_parser()
     assert parser.parse_args(["headless", "--install", "--no-start"]).install is True
     assert parser.parse_args(["server"]).func is cli.cmd_server
+
+
+# --- per-machine keys ---------------------------------------------------------
+
+
+def test_each_machine_gets_its_own_key_and_only_that_name_verifies(tmp_path):
+    registry = KeyRegistry(str(tmp_path / "keys.json"))
+    key_a, key_b = registry.enroll("desk-a"), registry.enroll("desk-b")
+    assert key_a != key_b and len(key_a) == 64
+    a_message = proto.build_message(proto.HELLO, "desk-a", "h", "e1", NOW, {}, key_a)
+    _, reason = proto.parse_message(a_message, NOW, key_for=registry.key_for)
+    assert reason is None
+    # desk-b's key signing a message that claims to be desk-a.
+    forged = proto.build_message(proto.HELLO, "desk-a", "h", "e2", NOW, {}, key_b)
+    assert proto.parse_message(forged, NOW, key_for=registry.key_for)[1] == (
+        proto.REFUSED_BAD_SIGNATURE
+    )
+
+
+def test_unenrolled_name_is_refused_even_with_a_valid_looking_signature(tmp_path):
+    registry = KeyRegistry(str(tmp_path / "keys.json"))
+    payload = proto.build_message(proto.HELLO, "ghost", "h", "e1", NOW, {}, "any-key")
+    assert proto.parse_message(payload, NOW, key_for=registry.key_for)[1] == (
+        proto.REFUSED_UNKNOWN_MACHINE
+    )
+
+
+def test_unsigned_is_refused_for_an_enrolled_name_unless_allowed(tmp_path):
+    registry = KeyRegistry(str(tmp_path / "keys.json"))
+    registry.enroll("desk-a")
+    payload = proto.build_message(proto.HELLO, "desk-a", "h", "e1", NOW, {}, None)
+    assert proto.parse_message(payload, NOW, key_for=registry.key_for)[1] == (
+        proto.REFUSED_UNSIGNED
+    )
+    assert proto.parse_message(payload, NOW, None, True, key_for=registry.key_for)[1] is None
+
+
+def test_key_file_is_private_and_holds_no_key_in_listings(tmp_path):
+    path = tmp_path / "fleet" / "keys.json"
+    registry = KeyRegistry(str(path))
+    key = registry.enroll("desk-a")
+    assert (path.stat().st_mode & 0o777) == 0o600
+    assert registry.names() == ["desk-a"]
+    assert key not in " ".join(registry.names())
+
+
+def test_enrolling_twice_is_refused_and_revoke_then_enroll_rotates(tmp_path):
+    registry = KeyRegistry(str(tmp_path / "keys.json"))
+    first = registry.enroll("desk-a")
+    with pytest.raises(EnrollmentError):
+        registry.enroll("desk-a")
+    assert registry.revoke("desk-a") is True
+    assert registry.key_for("desk-a") is None
+    assert registry.revoke("desk-a") is False
+    assert registry.enroll("desk-a") != first
+
+
+@pytest.mark.parametrize("name", ["", "   ", "a\nb", "x" * 65])
+def test_bad_machine_names_are_refused(tmp_path, name):
+    with pytest.raises(EnrollmentError):
+        KeyRegistry(str(tmp_path / "keys.json")).enroll(name)
+
+
+def test_a_second_process_sees_an_enrollment_without_a_restart(tmp_path):
+    clock = Clock(0.0)
+    server_side = KeyRegistry(str(tmp_path / "keys.json"), now_fn=clock)
+    assert server_side.key_for("desk-a") is None
+    key = KeyRegistry(str(tmp_path / "keys.json")).enroll("desk-a")
+    clock.now += 2
+    assert server_side.key_for("desk-a") == key
+
+
+def test_a_damaged_key_file_keeps_the_keys_already_loaded(tmp_path):
+    clock = Clock(0.0)
+    path = tmp_path / "keys.json"
+    registry = KeyRegistry(str(path), now_fn=clock)
+    key = registry.enroll("desk-a")
+    path.write_text("{broken")
+    os.utime(path, (1, 1))
+    clock.now += 2
+    assert registry.key_for("desk-a") == key
+
+
+def test_report_lists_enrolled_machines_that_never_reported(tmp_path):
+    store = make_store(tmp_path)
+    feed(store, proto.HELLO, "h1", machine="mac-ok", data={"status": "healthy"})
+    text = render_fleet(read_state(store.state_path), NOW + 5, 900.0, ["mac-ok", "mac-new"])
+    assert "Enrolled but never heard from: mac-new" in text
+    assert "mac-ok" in text.split("Enrolled but never heard from")[0]
+    assert "Enrolled but never heard from: mac-new" in render_fleet(
+        {"machines": {}}, NOW, 900.0, ["mac-new"]
+    )
+
+
+def test_enroll_command_prints_the_key_once_and_keys_never_does(tmp_path):
+    from netdnsmonitor import cli
+
+    config = {"fleet_keys_path": str(tmp_path / "keys.json")}
+    lines = []
+    parser = cli.build_parser()
+    assert (
+        cli.cmd_fleet(parser.parse_args(["fleet", "enroll", "desk-a"]), config, lines.append) == 0
+    )
+    key = KeyRegistry(config["fleet_keys_path"]).key_for("desk-a")
+    assert key in "\n".join(lines)
+    listing = []
+    assert cli.cmd_fleet(parser.parse_args(["fleet", "keys"]), config, listing.append) == 0
+    assert listing == ["desk-a"]
+    again = []
+    assert (
+        cli.cmd_fleet(parser.parse_args(["fleet", "enroll", "desk-a"]), config, again.append) == 1
+    )
+    assert key not in "\n".join(again)
+
+
+def test_revoke_command_and_missing_name(tmp_path):
+    from netdnsmonitor import cli
+
+    config = {"fleet_keys_path": str(tmp_path / "keys.json")}
+    parser = cli.build_parser()
+    out = []
+    cli.cmd_fleet(parser.parse_args(["fleet", "enroll", "desk-a"]), config, out.append)
+    out.clear()
+    assert cli.cmd_fleet(parser.parse_args(["fleet", "revoke", "desk-a"]), config, out.append) == 0
+    assert cli.cmd_fleet(parser.parse_args(["fleet", "revoke", "desk-a"]), config, out.append) == 1
+    assert cli.cmd_fleet(parser.parse_args(["fleet", "revoke"]), config, out.append) == 2
+
+
+def test_fleet_keys_module_imports_no_network_modules():
+    tree = ast.parse(
+        pathlib.Path(__file__).parent.joinpath("..", "netdnsmonitor", "fleet_keys.py").read_text()
+    )
+    imported = {
+        a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names
+    }
+    imported |= {
+        n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module
+    }
+    assert not imported & {"socket", "subprocess"}

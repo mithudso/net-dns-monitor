@@ -297,6 +297,7 @@ STORE_OMITTED_MODULES = (
     "remediation_window",
     "headless",
     "fleet_client",
+    "fleet_keys",
     "fleet_protocol",
     "fleet_server",
     "fleet_store",
