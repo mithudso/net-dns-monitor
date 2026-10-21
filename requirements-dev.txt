@@ -12,5 +12,7 @@
 -r requirements.txt
 pytest==9.1.1
 ruff==0.16.10
+# Parity test only (tests/test_launchd_supervisor_parity.py skips without it). Private repo.
+macos-launchd-supervisor @ git+https://github.com/mithudso/macos-launchd-supervisor
 # Install pre-commit separately with pipx or uv tool, as documented in
 # .pre-commit-config.yaml; its environment is separate from the app's pins.
