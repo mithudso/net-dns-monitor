@@ -8,5 +8,5 @@
 #
 # Pinned exactly to the versions the LaunchAgent on the dev machine runs with.
 chromadb==1.5.9
-fastmcp==4.0.10
+fastmcp==4.1.4
 watchdog==6.0.0
