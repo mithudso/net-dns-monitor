@@ -54,3 +54,5 @@ Final local verification passes: pinned Ruff lint/format, 3171 pytest passes wit
 explicit owner-deferred architecture limitation. Live App Store approval,
 privileged network changes, notification delivery and between-Mac fleet
 operation remain unverified by this synthetic maintenance.
+
+Fresh [macOS CI](https://github.com/mithudso/net-dns-monitor/actions/runs/43284421759) on source-equivalent 911bfc7 passed 3191 cases and skipped two headless graph rasterization cases. All 22 locally held UDP/Foundation nodes are outside those skips and were exercised. [PR41](https://github.com/mithudso/net-dns-monitor/pull/41) records final-head checks and delivery; the original checkout remains held.

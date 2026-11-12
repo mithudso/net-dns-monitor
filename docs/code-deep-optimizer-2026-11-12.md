@@ -41,7 +41,7 @@ reports and their dispositions remain preserved.
 | Pinned Ruff lint/format | Passed before retained census changes | Full-tree lint/format passed after round 2 | Pass |
 | Guarded pytest, exact 22 deselections | Historical 2792-node baseline: 2768 passed, seven failed, 17 deselected | Round 2: 3105 passed / 22 held; final: 3171 passed / 22 held, 3193 collected | Pass for exercised subset |
 | Static paths/component/count check | Checkpoint CI failed stale census/counts | Refreshed census and exact totals checked locally | Pass |
-| Fresh macOS CI | Checkpoint: 3033 passed, two graph cases skipped, then documentation failed | Final pushed-head run pending | Pending |
+| Fresh macOS CI | Checkpoint: 3033 passed, two graph cases skipped, then documentation failed | Source-equivalent 911bfc7: 3191 passed, two graph cases skipped; final PR-head checks gate delivery | Source pass |
 
 The local process-tree guard denies outbound traffic, OS-management executables
 and writes outside owned worktree/scratch paths. Synthetic factories precede
@@ -54,7 +54,7 @@ operation is part of this maintenance claim.
 
 The original divergent checkout remains held. The separate privileged router timeout risk is unverified; fake process survival would assume the platform behavior being questioned. Notification denial remains final under the existing contract. The bounded-packet recursion claim remains retracted by baseline Python 3.13/3.14/3.15 probes. No enterprise registry, dashboard, license grant or SLA was invented.
 
-Remote PR and merge evidence is added after the final pushed-head checks. The [bootstrap audit](repo-bootstrap-audit-2026-11-12.md) records applicability and retained operating limits.
+Fresh source-equivalent [macOS CI](https://github.com/mithudso/net-dns-monitor/actions/runs/43284421759) passed on 911bfc77f3c39b0846f27be93e19c31692708de6: 3191 passed and two headless graph-rasterization cases skipped. Neither skip is in the 22 local-held nodes, so all 18 UDP and four Foundation nodes ran. The final checks and merge state are recorded on [PR41](https://github.com/mithudso/net-dns-monitor/pull/41); only the final passing head may merge. The [bootstrap audit](repo-bootstrap-audit-2026-11-12.md) records applicability and retained operating limits.
 
 ## Activated review domains
 

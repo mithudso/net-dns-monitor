@@ -1,5 +1,5 @@
 # net-dns-monitor — dated history retrieval map
-> Source: repository worktree · remote URL omitted @ b0a1c81 dirty
+> Source: repository worktree · remote URL omitted @ 911bfc7 dirty
 > Generated: 2026-11-12 by crawl-repo-to-llms v1.2.0 (partial static adapter)
 > Census: 279 enumerated / 0 deep-read / 279 shallow · partial: census only; no deep cards or executable inventory
 

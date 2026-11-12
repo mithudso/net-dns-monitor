@@ -462,3 +462,5 @@ The divergent original checkout and protected resolver configuration stay held.
 PR41 https://github.com/mithudso/net-dns-monitor/pull/41 is the delivery record;
 verify its final checks, merge state and remote content before repeating work.
 The external task receipt retains exact heads, checks, content proof and cleanup.
+
+Fresh source-equivalent macOS CI on 911bfc7 passed 3191 cases with two headless graph skips (run43284421759). All 22 local UDP/Foundation holds were exercised. Final PR41 head checks remain the delivery gate; this entry does not activate or synchronize the protected original checkout.
