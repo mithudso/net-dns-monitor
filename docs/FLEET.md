@@ -208,3 +208,16 @@ from the Credentials menu or by `headless --install`. It is never in the config 
 | `netdnsmonitor/fleet_server.py` | UDP listener |
 | `netdnsmonitor/headless.py` | windowless monitor loop, LaunchAgent install |
 | `tests/test_fleet.py` | the suite for all of the above |
+
+## Persistence under failure
+
+Refusal counters stay accurate in memory while full state-save attempts are
+bounded. The receiver flushes state when its reader exits. Abrupt termination
+can lose pending refusal counts; this is not a durable message queue. A silence
+event must append before the machine becomes silent, and a failed state save is
+retried on a later sweep without appending the same silence event again.
+
+For embedding tests, run_headless accepts build_app_parts(config, capabilities).
+The factory supplies credential_store, state_machine, notifier and optionally
+failover. A stopped synthetic monitor and fake server/reporter isolate startup.
+The normal CLI continues using the existing default builders.

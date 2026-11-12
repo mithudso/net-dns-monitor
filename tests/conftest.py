@@ -13,9 +13,18 @@ Redirecting HOME makes `os.path.expanduser` resolve into a per-test temporary
 directory, so the whole suite is inert against real user data.
 """
 
+import os
 import sys
+import tempfile
 
 import pytest
+
+# Collection imports application modules before autouse fixtures run. Keep
+# import-time path defaults inside a synthetic home as well as per-test paths.
+_SESSION_HOME = tempfile.TemporaryDirectory(prefix="netdns-test-home-")
+os.environ["HOME"] = _SESSION_HOME.name
+os.environ["XDG_CACHE_HOME"] = os.path.join(_SESSION_HOME.name, "cache")
+os.environ["XDG_DATA_HOME"] = os.path.join(_SESSION_HOME.name, "data")
 
 # Test modules whose unit under test IS one of the functions stubbed below. They
 # call the real function with an injected run_fn, so stubbing the module
@@ -143,6 +152,26 @@ class _MemoryKeychain:
         return 0
 
 
+# A default argument captures its callable at function definition. Fixture
+# teardown can also outlive a daemon worker. Establish synthetic fallbacks
+# before collecting test modules so neither path can reach a real framework.
+from netdnsmonitor import credentials, user_notify  # noqa: E402
+
+
+def _memory_keychain(*args, **kwargs):
+    return _MemoryKeychain()
+
+
+for _credential_name in credentials.NAMES:
+    os.environ.pop(_credential_name, None)
+credentials.make_keychain_backend = _memory_keychain
+credentials.CredentialStore.__init__.__defaults__ = (None, _memory_keychain)
+user_notify.load_backend = lambda: None
+user_notify._main_bundle = lambda: (None, None)
+user_notify.post.__defaults__ = (user_notify.load_backend, user_notify._main_bundle)
+user_notify.has_app_bundle.__defaults__ = (user_notify._main_bundle,)
+
+
 @pytest.fixture(autouse=True)
 def no_real_keychain_or_distribution(monkeypatch):
     """Keep the suite off the developer's Keychain, and on the direct build.
@@ -166,7 +195,9 @@ def no_real_keychain_or_distribution(monkeypatch):
     monkeypatch.delenv("NETDNS_DISTRIBUTION", raising=False)
     # Synthetic incidents must never use credentials inherited from the shell.
     # Credential tests set their own values after this fixture runs.
-    for name in ("SLACK_WEBHOOK_URL", "ANTHROPIC_API_KEY", "SMTP_PASSWORD"):
+    from netdnsmonitor.credentials import NAMES
+
+    for name in NAMES:
         monkeypatch.delenv(name, raising=False)
 
 

@@ -100,7 +100,9 @@ jobs:
       # timeouts and process-group kills, and test_peer_net.py sends UDP over
       # loopback.
       - name: pytest
-        run: python -m pytest -q
+        # Report skip reasons so held local host cases can be accounted for on
+        # this fresh runner rather than inferred from a single passing total.
+        run: python -m pytest -q -ra
 
       # Static paths/counts only. Never open the semantic collection or contact
       # Ollama in CI; a missing local index is not an application failure.

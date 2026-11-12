@@ -162,13 +162,14 @@ def test_prune_keeps_everything_during_a_systemic_outage(tmp_path):
 
 def test_prune_never_evicts_a_user_configured_domain(tmp_path):
     store = LearnedDomainStore(str(tmp_path / "learned.json"))
-    store.add(["learned.example.com"])
+    store.add(["configured.example.com", "learned.example.com"])
     pruned = prune_dead_domains(
         store,
         {"configured.example.com": False, "learned.example.com": True},
         configured_domains=["configured.example.com"],
     )
     assert pruned == []
+    assert store.domains == ["configured.example.com", "learned.example.com"]
 
 
 def test_prune_uses_the_anchor_not_the_learned_set(tmp_path):

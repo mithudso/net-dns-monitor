@@ -928,8 +928,12 @@ class SettingsWindow:
             try:
                 message = self.on_save(None)
             except Exception as exc:  # noqa: BLE001 - never raise into AppKit
-                traceback.print_exc()
-                self.set_status(f"Not reloaded -- {type(exc).__name__}: {exc}")
+                # YAML exceptions include source excerpts, which can contain
+                # sensitive_strings that were never successfully loaded.
+                detail = type(exc).__name__
+                if isinstance(exc, ConfigError) and exc.key in DEFAULT_CONFIG:
+                    detail += f" (config key '{exc.key}')"
+                self.set_status(f"Not reloaded -- {detail}")
                 return
             self.set_status(
                 message if isinstance(message, str) and message else "Reloaded from disk."

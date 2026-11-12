@@ -81,6 +81,13 @@ python -m pip install -q --retries 1 --timeout 5 -r "$REPO_DIR/requirements.txt"
     || info "pip install failed -- continuing with the installed set; the import check below decides"
 ok "venv ready"
 
+mkdir -p "$CONFIG_DIR"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    cp "$REPO_DIR/config.yaml" "$CONFIG_FILE"
+    echo "..   wrote recommended defaults to $CONFIG_FILE -- edit 'domains:' before relying on health status"
+fi
+ok "config present at $CONFIG_FILE"
+
 echo "== verifying components =="
 
 # The heredoc imports netdnsmonitor from the current directory, so it must run
@@ -154,13 +161,6 @@ if not config["domains"]:
     )
 PYEOF
 
-mkdir -p "$CONFIG_DIR"
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    cp "$REPO_DIR/config.yaml" "$CONFIG_FILE"
-    echo "..   wrote recommended defaults to $CONFIG_FILE -- edit 'domains:' before relying on health status"
-fi
-ok "config present at $CONFIG_FILE"
-
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
     info "ANTHROPIC_API_KEY not set -- Claude escalation will be skipped (reports still saved)"
 else
@@ -189,6 +189,7 @@ APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/Net-DNS-Monitor"
 build_fingerprint() {
     python - "$REPO_DIR" <<'PYEOF'
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -197,6 +198,9 @@ inputs = [root / name for name in ("setup.py", "requirements.txt", "constraints.
 inputs += [path for path in (root / "netdnsmonitor").rglob("*")
            if path.is_file() and "__pycache__" not in path.parts]
 digest = hashlib.sha256()
+for key, value in sorted(os.environ.items()):
+    if key.startswith("NETDNS_"):
+        digest.update(repr((key, value)).encode("utf-8"))
 for path in sorted(inputs):
     name = path.relative_to(root).as_posix().encode("utf-8")
     data = path.read_bytes()
@@ -271,4 +275,6 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
     fi
     sleep 1
 done
+info "launch remains pending; retaining $START_LOCK. After confirming no pending launch, remove that reservation manually before retrying."
+START_LOCK=""
 fail "launch requested but no Net-DNS-Monitor process appeared; check $LOG_FILE"

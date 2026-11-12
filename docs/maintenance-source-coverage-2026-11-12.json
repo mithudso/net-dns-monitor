@@ -1,0 +1,1890 @@
+{
+  "status": "bounded audit and focused repairs complete; NO_CHANGE, not CLEAN",
+  "maintained_targets": 207,
+  "initial_full_round": 198,
+  "round2_changed_reports": 104,
+  "round2_unchanged_reused": 97,
+  "round3_changed_reports": 49,
+  "round3_unchanged_reused": 158,
+  "final_exact_diagnostic_hash_matches": 176,
+  "files_repaired_after_diagnostic": 31,
+  "max_iterations": 5,
+  "iterations_applied": 3,
+  "blind_attempts_used": 0,
+  "max_blind_attempts": 2,
+  "exclusions": [
+    "Ignored secrets, profiles, reports, runtime state, caches and optional semantic stores are protected and were not indexed.",
+    "Generated/vendor/binary material is excluded from executable per-file passes; static documentation and packaging configuration have their appropriate separate coverage.",
+    "Original primary checkout and resolver configuration are protected; no live operation, signing, model or service activation is validated."
+  ],
+  "residuals": [
+    "Owner-deferred High synchronous incident pipeline.",
+    "Optional Chroma advisory exposure remains unresolved; no patched declared version available in retained same-day metadata.",
+    "Privileged router shell lifetime after osascript timeout remains unverified."
+  ],
+  "files": [
+    {
+      "path": ".github/FUNDING.yml",
+      "final_sha256": "86010f755b9ffe541315030e3dd9c627d9e5a8f9d5ceb83acaaf0638029d2032",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "86010f755b9ffe541315030e3dd9c627d9e5a8f9d5ceb83acaaf0638029d2032",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b0895f015941ae330d56293d2ad2d07264483e0a19384293261501ab3adbe319",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "final_sha256": "dc99c79a891bc25d79a747e0d3eb3d2331335761b75a839e00f4b3ff176c94dc",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "dc99c79a891bc25d79a747e0d3eb3d2331335761b75a839e00f4b3ff176c94dc",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "0622c42a99878e887841cfbde7c36f91285c5b662f24393b94c9508d66dc503f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "final_sha256": "1521f212822cecb54c669e3a85e4a24845c20fa03e246fb4ab46302bd08d999b",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "1521f212822cecb54c669e3a85e4a24845c20fa03e246fb4ab46302bd08d999b",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "f94d0d20db912503a4841de789c19ff4f2809e69c90fe5a2a917384a166847f0",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": ".pre-commit-config.yaml",
+      "final_sha256": "a78eb1166eeaeb8f19782df2670fe564d4f54e674645edc552337d07c9542acb",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "a78eb1166eeaeb8f19782df2670fe564d4f54e674645edc552337d07c9542acb",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "62413b428aa4d498bf2c473a9daec4f819f025feaa934dc3f8bc134853f031a7",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "bootstrap_repo.sh",
+      "final_sha256": "626696586d34533e08a39685a083eb1a78550eb3be504860dc4dcb8d65ac7a0e",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "626696586d34533e08a39685a083eb1a78550eb3be504860dc4dcb8d65ac7a0e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5c32af9eaa9f76a574868fd8a238aa53ec7354e275df7cb440b719cdfc3682a3",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "config.example.yaml",
+      "final_sha256": "e8a4b1ca0f8a8f4007733db5a20de77f316b1879941be5e8ea766c8bac8b8e17",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "e8a4b1ca0f8a8f4007733db5a20de77f316b1879941be5e8ea766c8bac8b8e17",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "3104bd952d3105f1c96a60388ca3b542640ccb5a597268ca5d876dcd6e36e473",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "config.yaml",
+      "final_sha256": "3fc985b844e5c4d19d72af765467973f46a2a836c615041d6c75f977a4879eff",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "3fc985b844e5c4d19d72af765467973f46a2a836c615041d6c75f977a4879eff",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "efdbf41b7b137a0724e73d70a2cc4aa55175d47e733a218ea0180d127f23cc1b",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "constraints.txt",
+      "final_sha256": "d207d5bbd3f73f543d63821fe28fb0f2036ad9446ab96d32ad9c4001bd81996a",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "d207d5bbd3f73f543d63821fe28fb0f2036ad9446ab96d32ad9c4001bd81996a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "05c590a0979598f7a6ec561067b28ff9f11a60cf184dd68c7c1e551236824b54",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/__init__.py",
+      "final_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "7d6b97ccc32890ecd3703594963967b955541a8b4de2e7b47cb0031c72541fb1",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/ai_consent.py",
+      "final_sha256": "c25630cb339f532635cefdce910d43e4edb249289b7f6e1d66a0e7a5c4bfffc8",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "c25630cb339f532635cefdce910d43e4edb249289b7f6e1d66a0e7a5c4bfffc8",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "158615a4102a895971f549117d27f6dc6fefa8c159b222dd6b5fb82b24699b8c",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/alert.py",
+      "final_sha256": "60dc27068d2a6e353298f811fa990aad45e201e92dbbad6bef1459fe51919ab4",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "60dc27068d2a6e353298f811fa990aad45e201e92dbbad6bef1459fe51919ab4",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e21362b7163206b1a714d5bb49ca525286c092ec7566ffae26328be3063c007d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/anthropic_escalator.py",
+      "final_sha256": "bcb17d2d8830cb605d13cd14e7bca57cbfb063cd9fa384242096515492930a0a",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "bcb17d2d8830cb605d13cd14e7bca57cbfb063cd9fa384242096515492930a0a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "adafa26d3eb8d121c516fd5705b9fcb3094261639029ecb3b21261e29dc28b7d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/app.py",
+      "final_sha256": "d652154b38be3ad3eb8bd67aef517c44a8a893274fd2dd5df098f91970270995",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "1c8b25e994d6b4ee3720f8ad2698d23a4978b616e698fb8e09d6abbb7bdd5fe9",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "b3d47dadf2a95f8c0cc19df8ddbcf45df7d9c0b3920cbe8adedab3694b51e61a",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/classifier.py",
+      "final_sha256": "b4cc6147782ea3fd59d2fc275ea76f90f1223ac3a127b2fd850ba8a3f6d445a5",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "b4cc6147782ea3fd59d2fc275ea76f90f1223ac3a127b2fd850ba8a3f6d445a5",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5cae914dd334e54d72d977df1474076a586438162240cc77ced02d136e13cd14",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/cli.py",
+      "final_sha256": "343bb0641c066b2ed5e5a4a2570e28086bf1ff60ef597ac3ef7ac5b8bbfb9ea1",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "ccc4575b946b2d6a2e4f9634c941d2e7a3dd6bbe68ea4b8568c7ccfa12a9d130",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "77f50c65a35504e3ebcceec629e7d2e13d43b307aa1b310d05f80fcedb3f1198",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/cli_console.py",
+      "final_sha256": "731c1ce9319dc33ff29081851cd9fdeef4ca7161995c28d55682dce8b4174423",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "731c1ce9319dc33ff29081851cd9fdeef4ca7161995c28d55682dce8b4174423",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5bb87d0822c398bbd1f5f87d8c4bf6bac99a2a5ac457cf525c5fcea09752103f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/commands.py",
+      "final_sha256": "9e4afcfc77eb70e4767588e488cdd1b512fe43f608a47aa58313c70c99bbc62e",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "9e4afcfc77eb70e4767588e488cdd1b512fe43f608a47aa58313c70c99bbc62e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "a6a67be32639bf6c42c37f0c20f0d352365d06f66963841f8b410fc765c0b19f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/config.py",
+      "final_sha256": "13ef3c165335e24c87043290582a57d2a8f8c21ea215051e429f96702610038e",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "a37f14744310b9ccf2b275cab467a61efa8eca5afd7ac857a60fd718be51d9d3",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "25280a8ec8579bc376d04e60638962ec006af09cffe1100f13cd1e46fbe8983b",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/console.py",
+      "final_sha256": "0b1f727b34103a4f65ee01f1bef408b37d5dfe52faa71d54fe3bdf397c44f142",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "0b1f727b34103a4f65ee01f1bef408b37d5dfe52faa71d54fe3bdf397c44f142",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "979e26ac6daa1d015caaf29fec450014237e590ff07ce718eb6e26b76e2916da",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/console_window.py",
+      "final_sha256": "7941bee4b279caf4f074c850f2f76711e40e47950a6d8268e36d526d2004db6e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "7941bee4b279caf4f074c850f2f76711e40e47950a6d8268e36d526d2004db6e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "8be89c23047aa47841a63ec4cf65fa471b8db5ef6e4946014f84cca86af9e7a8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/credentials.py",
+      "final_sha256": "e0e43707e67d495503f06dacb9fb96c8283047b39a5589acdb9c354cb4a9883c",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "e0e43707e67d495503f06dacb9fb96c8283047b39a5589acdb9c354cb4a9883c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "189acf501ff981749bf13ecdc44dcfff787b8e24adb1f2789c33b83dff16ec7c",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/credentials_prompt.py",
+      "final_sha256": "66e1e1282b58f1e64cf43cae21cfbc8766fb3afde4cf45666dd49a21ce15d614",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "66e1e1282b58f1e64cf43cae21cfbc8766fb3afde4cf45666dd49a21ce15d614",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "62f7c5277c0cd8c1ae727453a7614d04950fc0aaa5e1ed51307f104b88590488",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/dashboard.py",
+      "final_sha256": "3b572b544a85415920afa1f3b3e6ae9c1a937fb55e8417af8d3891e4d75c591e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "3b572b544a85415920afa1f3b3e6ae9c1a937fb55e8417af8d3891e4d75c591e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e70140533e9c003c32ed3463954b4ac75e42bf0ace27b870e8b2cf362ceec99d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/distribution.py",
+      "final_sha256": "90402057cb19b6817b1b1b4ff92433f29e9c5ee747869fa057f26178c3241fc4",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "90402057cb19b6817b1b1b4ff92433f29e9c5ee747869fa057f26178c3241fc4",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "84c58198e95753deaaceff14dec2cd33af6f4e753f5038ad881fcf332d653450",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/dns_query.py",
+      "final_sha256": "12c01868b9531e7fadf1f8a84efcbf00fe6cb79e096fbf556fa339ee681fe07b",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "d4ff59485e315092a00a6df6bde6ac47f7c0dd8f2091818f8e6e7fa569d4331f",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "e3fdb9a6d1e3b3b2551c4e80f7168e943829f7f52bc5fb493b27c3c528e51435",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/dock_icon.py",
+      "final_sha256": "3ac774e33f3b93edcea33b2d1cded7c8afd7d72d26adbbdba084ed94cab7b43a",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "3ac774e33f3b93edcea33b2d1cded7c8afd7d72d26adbbdba084ed94cab7b43a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "70d5bd226e40bc7d020d6b130b9018624aa99949b3ff736ce33f8264a2788051",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/domain_learner.py",
+      "final_sha256": "8c18415c990b6023bec808cd5e3d283c8ed4d94755aaee26a63e7be0bf23a44f",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "ac690e6320e9c357ec69786713b2bca8c50edaa7c4124449829794a5ec037dd5",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "bbf853bf327a3c5e307e3fdfd431acf0705b2abd31d2fe5d7531c160eee5ee70",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/escalation.py",
+      "final_sha256": "671089c21daadfcd828bb261ccbf491a11daaac0e380106241931f4aa28e37b4",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "671089c21daadfcd828bb261ccbf491a11daaac0e380106241931f4aa28e37b4",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "55fec74efbe012c4abd8fde1d1efba925aa198b63f8ae5647002ac5a9aeed01f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/failover.py",
+      "final_sha256": "26831da61b28bcc641d23b65a2e6e6eba10502b8de3b34c1c8dbbe62d2da532e",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "8f8a972e89e5d04217774cab2a84bbbbebdf118fe79031c96bf6ad051bb6ec7e",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "a77663e306acafbef494bba7af7bbafe1da4398614ba3572fd2b3e06e1e75898",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/failover_policy.py",
+      "final_sha256": "b3e212993cc246701e53882418318ab520859bc0254859640f0dd59d9c409283",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "b3e212993cc246701e53882418318ab520859bc0254859640f0dd59d9c409283",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "09248dc3aa99909f3a9a64198cdcdaa7b25c9a6438b7655b0d57f0ebe3bb9255",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/flap_gate.py",
+      "final_sha256": "8b3736e97eede9b0cd8089267c9a4c7d15373b446ced4f68981cc4ba47104157",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "8b3736e97eede9b0cd8089267c9a4c7d15373b446ced4f68981cc4ba47104157",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "1662db6eea95c262def02c1578dd66bddad3f6b5adebba55ab60d63b8b15e4c9",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/fleet_client.py",
+      "final_sha256": "c4937b8581ae21eefe778ac839c87b068f767e054f4e6a4d7c9b4ab4c5ef6550",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "3ad580e43bc7b481463f17f1ffc49e5d007f3aeee7e7117fade7029b41bd870e",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "e9f01c0352a56ba231629deb4e592ca4de2b000df1b463f04ee3e434e520b31d",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/fleet_keys.py",
+      "final_sha256": "3a63e12e22371d64aa3bab5f259ebed1f4c7755e993a24406f73fb80f154f9fd",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "3a63e12e22371d64aa3bab5f259ebed1f4c7755e993a24406f73fb80f154f9fd",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "af211b73457a65af42eb11d2b91b22c0dcd0f69059cf905cef6fd90706985ccb",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/fleet_protocol.py",
+      "final_sha256": "aa8ac210e1678acdb17a93b5a9d34a71284313794c93816f4e0b3bb9b4a587ad",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "aa8ac210e1678acdb17a93b5a9d34a71284313794c93816f4e0b3bb9b4a587ad",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d1dc20e45984450cb19728862a09cf7291e629c45663ffef7b7c102d2bd33259",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/fleet_server.py",
+      "final_sha256": "b5096f71665fdd4b5f45132bb94d20de91e28db1999c8f402092eb451182be00",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "b5096f71665fdd4b5f45132bb94d20de91e28db1999c8f402092eb451182be00",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "24c15807bc6cd5583911340bdd66b55122a948e52eeb87843e0acf0fe87df974",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/fleet_store.py",
+      "final_sha256": "b23b14996c6b9f16d509c409236bd0cee488a7c72fcf07f292b0331b733a3fb3",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "7826e64963bdc13628e2545fa79c08023ea5694c2579c8ef14d6bd432034cb7c",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "392f96e8a054db4c31e5dfb9e9127cc40d6eaf5fab802605970ddbe48424184a",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/forensic_log.py",
+      "final_sha256": "b32c49f46941f9b5581ab4dfbe351c4c5717d5b322d573584878f4b8714ff37c",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "b32c49f46941f9b5581ab4dfbe351c4c5717d5b322d573584878f4b8714ff37c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "12d317ad8161fc7fe5408728bf2c29c362ef86192349c2a6692442c59be72fe2",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/graphs.py",
+      "final_sha256": "b51908a30f0933de279116a07c3fadc53e6f332fefe5cfafe915ed4837109531",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "b51908a30f0933de279116a07c3fadc53e6f332fefe5cfafe915ed4837109531",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "c36cec60b774b2eec37fc043c28ec42e8b2e8dc927e53c662538ebcc6f5c4a10",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/headless.py",
+      "final_sha256": "249524f3838040a39e9cab631020184aa0929b55f4e8317e696b54a5d4a08d3a",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "887539dc0acd501697f2cf98fa7ebc16c5af42c4dbcb919a60ceaaaf11335d94",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "e5e59090efa3f05a95960fa871785048ad4c4d38e5bc2f7cc2e98be446bee9e9",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/history.py",
+      "final_sha256": "31c897b69b9ba469816a60d4a7a89dff3c492c871410cef0f723abf0d80bf6c8",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "31c897b69b9ba469816a60d4a7a89dff3c492c871410cef0f723abf0d80bf6c8",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "379b78a8a5f77ecec5cd1b4484575b531a6b9d62c8da15293982e83ee7e51f78",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/interface_probe.py",
+      "final_sha256": "19230822347114cd3b12a2a74787dbf52b473f3dc36e12a8b68d4e0298bb2f36",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "19230822347114cd3b12a2a74787dbf52b473f3dc36e12a8b68d4e0298bb2f36",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "4227174dfd3c0ce8eb6f1dc3cab73069e1d75edee5074496995b6cdeb325d416",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/ladder.py",
+      "final_sha256": "40e81424d342f6b850c9e3c9549526f5721a7773ea239e7da9634c7f484c1fac",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "40e81424d342f6b850c9e3c9549526f5721a7773ea239e7da9634c7f484c1fac",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "820ea8c956683c31f184c047829e09ab2c4360dcf9a9bbb5dd74d7c612feaeca",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/localize.py",
+      "final_sha256": "d0991c3ac7e4ba8a2454e9524f3b084ef1482270d17a96ea03cbfdc57bff8d50",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "d0991c3ac7e4ba8a2454e9524f3b084ef1482270d17a96ea03cbfdc57bff8d50",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "05bd486074e9e211f0d37a4cd586e999a590480182c21f88f8bf54ae40f1f6a7",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/log_watcher.py",
+      "final_sha256": "27d5d808fe78ae5efd1344fe4fd1f12af16663db17cea5f68dc9e1c23383ceda",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "27d5d808fe78ae5efd1344fe4fd1f12af16663db17cea5f68dc9e1c23383ceda",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "ee1e88663446b581b4b46e2d4da1c3ce409812b64b7efb9e24638f8e21bf4971",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/mini_window.py",
+      "final_sha256": "b1a4936eb12e6ea0859a312ea3ae4e0b1dce013dc44e9e7bba74483b9a43d6ee",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "b1a4936eb12e6ea0859a312ea3ae4e0b1dce013dc44e9e7bba74483b9a43d6ee",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "8e408a9b1fa5720cd1381e174271cb29b270525a931b2870b6831754095e9791",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/net_stats.py",
+      "final_sha256": "4530ccfe566ae4bf6d98ae3ecca5c38daa68fc6afc2c6ba22a95d5e5d8a06f44",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "4530ccfe566ae4bf6d98ae3ecca5c38daa68fc6afc2c6ba22a95d5e5d8a06f44",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "eaab5f8e880fa76b96c75284afb7fef39cf1cb4171153f3fab7dd00f663faf4f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/notifications.py",
+      "final_sha256": "3dd7d81fdb48756de58a74e4442723a60ca3d0b575bf955eed7b8e62897e2747",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "3dd7d81fdb48756de58a74e4442723a60ca3d0b575bf955eed7b8e62897e2747",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "c5abe2d5e768a0824215bdbb641aca1f4cf9f667269ec5d2c35c546ca0ea1ac9",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/peer_net.py",
+      "final_sha256": "63acffe58ad44ca799822ccb9dc1236e59813ea574588c344ab03c1c94e747f6",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "63acffe58ad44ca799822ccb9dc1236e59813ea574588c344ab03c1c94e747f6",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "fa1b90cad6cdd4c2e2ab80048c079c13d331cb1af4753944b78c8d539fdcb9ec",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/peers.py",
+      "final_sha256": "33bbcc35a68371c8d09e130056e09e196ecac3700488d9b9124e5100a79686d4",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "33bbcc35a68371c8d09e130056e09e196ecac3700488d9b9124e5100a79686d4",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5111f89d8355db200324bd8e11535279369e6e5273bdc40137f0ad0120e8c440",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/ping.py",
+      "final_sha256": "a1a8a5368896b6e0bd52421e68323728ad06abaa6b2362e94f116683f50801cf",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "a1a8a5368896b6e0bd52421e68323728ad06abaa6b2362e94f116683f50801cf",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d5f97b6ebd3d6c42017cbd8ffa2df603bfd7826bc7755590124c91b1062a79aa",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/ping_monitor.py",
+      "final_sha256": "4c7ec8fed85a566dfe2a7004736fa917e8d1d9277e4c2c25021c094fab09366a",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "4c7ec8fed85a566dfe2a7004736fa917e8d1d9277e4c2c25021c094fab09366a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6002134d9b0f07b8ed47d349d823c43d3002a75ce3026538eeea8f7f8138492d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/privileges.py",
+      "final_sha256": "b32d4dfb534d450f5ac8518432df45f5391ef4d72a5716a9c2e8d27c2a977280",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "6334216dee68df05dd2412c490d08a4e0fc198a51b9ffddac010e7c1f1514dc4",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "7946119e76064c58fb1b9db9234770ef583da79877ca08c48596cf2a2983484c",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/prober.py",
+      "final_sha256": "7e8b55fa818e2c4030eadda8fce022dd9bbe4fc6d7a71975f01b2c40c7ebe9bd",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "7e8b55fa818e2c4030eadda8fce022dd9bbe4fc6d7a71975f01b2c40c7ebe9bd",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5e9967ae31d5fdc1914057e0795724ee6444a7fd7285600b9551a37e83ee75e6",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/query_log.py",
+      "final_sha256": "30eb492723e4dfd762050f80afa35214567f1d90755ec52faa3496efa6b84285",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "30eb492723e4dfd762050f80afa35214567f1d90755ec52faa3496efa6b84285",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "937497981868d85a70b6f561505bb07ec410563e94d3fe3462f4a5c6e22a5015",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediation_editor.py",
+      "final_sha256": "ebd97c4f49949fc08a8ae44ad289b3cd118c69371d1818953c8cb4ab0d1a42c9",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "ebd97c4f49949fc08a8ae44ad289b3cd118c69371d1818953c8cb4ab0d1a42c9",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "13a2d2a1a343051e8a2f60e71669b6968289009a0c0c835ef148a67d34828d29",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediation_scripts.py",
+      "final_sha256": "a564cec2ff551ea4085b35d59ad54aca0cfb850927537091271f5f56db037a56",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "a564cec2ff551ea4085b35d59ad54aca0cfb850927537091271f5f56db037a56",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6dac6d40114c9baa30f5ec36ab8b5180a762e632442c7c51c2b2b4904cb731d8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediation_window.py",
+      "final_sha256": "73e3240b8460b4199ea982019b8817076f876d0e0f3cc87db54112d1ec426ab5",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "73e3240b8460b4199ea982019b8817076f876d0e0f3cc87db54112d1ec426ab5",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6d18a042f84b1d300cf069121938bf02f2bb82fbfbbc1c83c03dfd4582d4d305",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/__init__.py",
+      "final_sha256": "8562beed349812f23f1585759758a12d87718ab2f5c4a5376bbfd231bda78461",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "8562beed349812f23f1585759758a12d87718ab2f5c4a5376bbfd231bda78461",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d4dd1f41d998d3a05e1badbc474ffbf8fdb24b140b151581818aeb66b7f7cc49",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_configured_dns_servers.py",
+      "final_sha256": "0650ccd42364149b4692d46d57c94565549775ebc33091a186529ee73bf34034",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "0650ccd42364149b4692d46d57c94565549775ebc33091a186529ee73bf34034",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "863199ff0e525e682c030a208996e91eea04dcaf7ac577b2360ff902fe5d77a3",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_default_route.py",
+      "final_sha256": "0726626e8774168d1521f5bc2a228196b67b6bebc9f0a7edf73565655ca846f4",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "0726626e8774168d1521f5bc2a228196b67b6bebc9f0a7edf73565655ca846f4",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "68ad888901fc33bbf26470bbec4fc0430e2032e58acb556384a54ee14d302aa8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_interface_state.py",
+      "final_sha256": "88c30c18b64f8a9fa33bb493228e34ec250a8bc2721432e7fae5f151371ddfa8",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "88c30c18b64f8a9fa33bb493228e34ec250a8bc2721432e7fae5f151371ddfa8",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "1e1d850382596e401dcda5d6c0b7ef1f7d6d286d8b6e329ef36f3497ee675b89",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_resolver_overrides.py",
+      "final_sha256": "fb1c4db3ca56a2dac85c5e711a9b18e5be689986c838bd927d2f89f09e6ca4e9",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "fb1c4db3ca56a2dac85c5e711a9b18e5be689986c838bd927d2f89f09e6ca4e9",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "402febdf5f53dff9ec6095c21c731e97315ba37622d0fe1b8dbcc526ffc80ed7",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/flush_dns_cache.py",
+      "final_sha256": "415f61cd88499b9171197899616a92169a6e166818dfd780d13e9488fe56ee0f",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "415f61cd88499b9171197899616a92169a6e166818dfd780d13e9488fe56ee0f",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "2835e68a593ee3240f893489629fa1276c42928781f693942963c4dd4b01ede2",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/renew_dhcp_lease.py",
+      "final_sha256": "cfa4c1bdca912277d237594ea24e7c4020b93b4963dc8447bc135f11fc895f9e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "cfa4c1bdca912277d237594ea24e7c4020b93b4963dc8447bc135f11fc895f9e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "48099e62d4b012eeccb4877947274c4c21ddbc785c952c9c8c6d1771ac65f64c",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/resolve_against_public_resolver.py",
+      "final_sha256": "d915fa2b740fcb1b6ed18eaaeac1d293d3b5d1c4b780eb2228d0b992c5966752",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "d915fa2b740fcb1b6ed18eaaeac1d293d3b5d1c4b780eb2228d0b992c5966752",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "f7d7d77298d83d4cf9dc8dd55b1c3b7e23f8c4a6610de78a9eb8f5e5d81fb80b",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/switch_to_backup_network.py",
+      "final_sha256": "8f5b776ea8eaff98db6ec920b05981b782be25b23dc5f8fa70db4f4e6c7cf584",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "8f5b776ea8eaff98db6ec920b05981b782be25b23dc5f8fa70db4f4e6c7cf584",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "1aff8ecf21379865e84871549048b04696e5e79302dfeee5058c51e3badfaee6",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/remediations/toggle_network_service.py",
+      "final_sha256": "25e88fc85f2bfea64815167b244c9820e8d586841a9534ddd7862b5999851c51",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "25e88fc85f2bfea64815167b244c9820e8d586841a9534ddd7862b5999851c51",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "426fd0012ab360605b0b1e757aab99580b3b5b3510a86fe2950d002c95bd2857",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/repair_executor.py",
+      "final_sha256": "1169513e0133078db684870271e2d19ba7216092e3bdc0992974f2e98436b97c",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "1169513e0133078db684870271e2d19ba7216092e3bdc0992974f2e98436b97c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "73d1fa75be36cddf6fafb139b6bb38be5a28dd7747aeee596d4e9ef38275f9c0",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/report.py",
+      "final_sha256": "d42f3070b8e6f6415f4767d3bea42ded24aa0d72b6b1d462daed0808cd387443",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "d42f3070b8e6f6415f4767d3bea42ded24aa0d72b6b1d462daed0808cd387443",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "59e639d69776fea4e6a807b100fbafb30f2757d68a95f9694a7548685eb8042c",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/report_storage.py",
+      "final_sha256": "8707d551270b288eea4d19c08f99b6c0059a50d5f08ce9b2b2d5be9ce95d75ea",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "8707d551270b288eea4d19c08f99b6c0059a50d5f08ce9b2b2d5be9ce95d75ea",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d6c65f6beebd09f4dab0511b2761a7657761e2f34415bfa27c26c535bf430129",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/resolution_log.py",
+      "final_sha256": "88363a2a430cc45b7ed7769f291af4ebc53f3083e423e7af4436a2ef7fa4369e",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "88363a2a430cc45b7ed7769f291af4ebc53f3083e423e7af4436a2ef7fa4369e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "ed4c2650985021304b9fa27f084ed60bd8d75b3d228657d7af397961436279b9",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/resolution_prober.py",
+      "final_sha256": "ae6fea81f27a42b62eed1588da1ef80299ac09657a0b87e9f0ff864688a03914",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "ae6fea81f27a42b62eed1588da1ef80299ac09657a0b87e9f0ff864688a03914",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d1bcafaa839a55838afd3da286388921f9d6b2bf73aafb4a79721634417eec7a",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/router.py",
+      "final_sha256": "f29b511224f4697cf26edfc5e0de4e209121d49c023f36ad210595781c672306",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "f29b511224f4697cf26edfc5e0de4e209121d49c023f36ad210595781c672306",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "f67e7c52ba42f9eff7edac2d32c899619069c3681d686948d82bf64f0bb22d4f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/router_window.py",
+      "final_sha256": "d3ab22582a78fd947b355f3e391c84171abc6130446f7800c7ca2953cd826533",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "d3ab22582a78fd947b355f3e391c84171abc6130446f7800c7ca2953cd826533",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "917c145d49a6519d9fd2c3943670a8c524f3bbf93decbc419b5ca7d0c1e57628",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/service_order.py",
+      "final_sha256": "a8246489419d5285e507e6711678f6f1a0a801c56c7fce82c94585c575653e05",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "a8246489419d5285e507e6711678f6f1a0a801c56c7fce82c94585c575653e05",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6dc8c03c3ce47e4c3fc0585a4be2f0526c3086a7e74501909488abe04dbc161a",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/settings_window.py",
+      "final_sha256": "d837de575f1a74519aa04a4cb8c5c42ee292fe98b4a03f779dbff47dc8aa7517",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "d837de575f1a74519aa04a4cb8c5c42ee292fe98b4a03f779dbff47dc8aa7517",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "7758dcd26dbd41f614f2e8aa5071a8ae51cd4749e8ebfe95e5e2a7b483d774ac",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/stall_log.py",
+      "final_sha256": "a08eb3a0576f9c3eb103a60c16350032cf7c0e98f97c8d5d66ada7a8b84bb372",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "a08eb3a0576f9c3eb103a60c16350032cf7c0e98f97c8d5d66ada7a8b84bb372",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b1a97ffa283170c9d7e5cea7a95fe81e1e831dd7232ee7077266160ec8851638",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/state_machine.py",
+      "final_sha256": "57f3ca7f2d0a176e3cb6bfed4f6f84358fcdcff90324926b393ad6e9bcf94ce2",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "57f3ca7f2d0a176e3cb6bfed4f6f84358fcdcff90324926b393ad6e9bcf94ce2",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "1d1e392f9cc969f5960a07dff651dd00d5772cd608b2ffa6ed0e8bed6e7dd67c",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/status.py",
+      "final_sha256": "f6d9f9fea165ae7b8efb3291d1c0089e579bef206d9a64835d87daa2eb9da599",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "f6d9f9fea165ae7b8efb3291d1c0089e579bef206d9a64835d87daa2eb9da599",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "eff7770a13b411d324809a0858de0d15fa28b7f23d571c5ce71a4ade78ce5434",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/system_log.py",
+      "final_sha256": "bf57fbfc515f0d7505c6c3cdf6bbbef9d645533b9a1eeb02f22a72a56f837e4a",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "4c6a4c94a4e1762c3ffd189dd2bde1f48f9e27973fa6963c2c1b5c25bc0ef2b6",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "7017aedfb0db6fc3924c6efea50273c427d2e666477b5361d6f38c065dbea00b",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "netdnsmonitor/throughput.py",
+      "final_sha256": "8d3ff180c6f79d073b8d0985fed7ede7fa2b559c5e4234590ebb58a0016af604",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "8d3ff180c6f79d073b8d0985fed7ede7fa2b559c5e4234590ebb58a0016af604",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9e0c0afc543ac570c62afe701afab5ccbae6ef24d5d45e4fb24d19d2d8bbd663",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/ui_catalog.py",
+      "final_sha256": "4a9931b498f3c33a84bc84cc6688328a4eee485f09aa7cbd32e6657fdd2cc4d3",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "4a9931b498f3c33a84bc84cc6688328a4eee485f09aa7cbd32e6657fdd2cc4d3",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "ebf6e0561691bf73bce706a7ad66139ab6497b5a90da7f6b2b98e0c268a2f5da",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/ui_style.py",
+      "final_sha256": "6a540eb917030ce275e05be99989805a16ef682639588a9d2cd3c2e48c22ec4a",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "6a540eb917030ce275e05be99989805a16ef682639588a9d2cd3c2e48c22ec4a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9c879808be6d7a95ddd9196e89ecb2158c8516caa0c80d3950fe60030e8abc76",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "netdnsmonitor/user_notify.py",
+      "final_sha256": "a7323f62511822f561a76a1b99735686befc9623e8f27a402081200482fa7ea6",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "a7323f62511822f561a76a1b99735686befc9623e8f27a402081200482fa7ea6",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "a09828155a969e704f2224fb9f1d75aeb3f8aff1b090e175a2a1f64b9457c321",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "packaging/appstore/PrivacyInfo.xcprivacy",
+      "final_sha256": "80c30a1700a04362be7df0047774499eed3d0145a690d3eb45efa18da4edad84",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "80c30a1700a04362be7df0047774499eed3d0145a690d3eb45efa18da4edad84",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e68581d9b71050156958ae12684d690765ba42f70af2399bc9051e21a8d26469",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "packaging/appstore/entitlements-helper.plist",
+      "final_sha256": "0da18cc4e5395a9951c474a302d95d4cd50b1394f55b3e947e061ceddbf6ef11",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "0da18cc4e5395a9951c474a302d95d4cd50b1394f55b3e947e061ceddbf6ef11",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e5e9ee419c6d941db2a3a0e220e2b6d4e58373ba8a6d05eff2c2a892fc467586",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "packaging/appstore/entitlements.plist",
+      "final_sha256": "96eaab010680df8dbd42c551f988ae2005e8563c6d3d1ab272276aa3b7694c9e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "96eaab010680df8dbd42c551f988ae2005e8563c6d3d1ab272276aa3b7694c9e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "1892a909f1bd4233fd548b2a55df3a8e99a48e7c3d23f4e28c83f8df8de30efd",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "pytest.ini",
+      "final_sha256": "4551307f5b1a58adb7ec215d513089ba670b1737b81ada5a5863afe796d67343",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "4551307f5b1a58adb7ec215d513089ba670b1737b81ada5a5863afe796d67343",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "a18a6585991350895243d016d68752849bb82b13ec165e86155c4dc0e2548e02",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "requirements-dev.txt",
+      "final_sha256": "e004a82c83fc15eddbacc3326b710172022a9f2b70798a9fbb06c825aaabe6d0",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "e004a82c83fc15eddbacc3326b710172022a9f2b70798a9fbb06c825aaabe6d0",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "64b71aeaf2a9adfca7b11ca88d01d00527ea8c6e804aa0ef1fc567c627d0ebdc",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "requirements-index.txt",
+      "final_sha256": "41a3463da55a3af7d2f6b38e8c24fe9827b4a280625a1f901732a19bed869aa9",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "41a3463da55a3af7d2f6b38e8c24fe9827b4a280625a1f901732a19bed869aa9",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "caed2518787ba5eade3dd20bd60d0d1b2fb7189816d264db1efb718fc5bf3c72",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "requirements.txt",
+      "final_sha256": "124437ff79540d22025ce9e640a574e1cadb6e7f77c40dad1753f9ac363a2847",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "124437ff79540d22025ce9e640a574e1cadb6e7f77c40dad1753f9ac363a2847",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "7243f52810657e53fd9748e68c7305eb47223cdd3d7704ad40d35d7df56302cf",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "router/scripts/enable_nat.sh",
+      "final_sha256": "9fc5dcc68a32d178caeb0d9d13be1b2d05f35debd90a106733b1909c5c2e9250",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "9fc5dcc68a32d178caeb0d9d13be1b2d05f35debd90a106733b1909c5c2e9250",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "540735c1e3668df205e4e82a2986202cd1b7eccb01d5d27aec91c2f35bd05a0a",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "router/scripts/install_persistent_nat.sh",
+      "final_sha256": "d76a0fdc0d9e97e7de1238da8f091a404ff2d32a5ddce863a5f09e80c46dab30",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "057b9cf6fbf4259f264e9b2f28e583af998be27592c0a5b94103cc890a833f16",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "4d66804201143babfae0fe0fae82c0a5f5b80bda306d0d71ae1811c6bdaeabc4",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "router/scripts/test_router.sh",
+      "final_sha256": "e8bcdf1db806fe946f77349dd5bc72cdbc3cec603a37339b8bca0890902ebd53",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "94e57c55edb89a53b6ebec22962d9beea77b74b4fca9662de0b69e4c4ab639db",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "93b8fb88ad00ee1af8e62fba20db7bb8a1e516238522dd28b5cb1f1d7dc6ed86",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "ruff.toml",
+      "final_sha256": "d636f47d3fd9bdf397c47034b5c8c29aebbfb999add6e085da66a4a675d8786f",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "d636f47d3fd9bdf397c47034b5c8c29aebbfb999add6e085da66a4a675d8786f",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b03755bcc8541d8c7d06bea273cc46d38adaf48bcad48886cd492e885eec0565",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/appstore/appkit_draw.py",
+      "final_sha256": "ffd3d6c02985e48fcb9286dd20f15600329c022541b82971b6b5b4be23be7b8a",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "ffd3d6c02985e48fcb9286dd20f15600329c022541b82971b6b5b4be23be7b8a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "4b850edfa60b1dcc1500ec4524dc274fa80ea1eb593bb6b0fd23a3afe16a774a",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/appstore/build_appstore.py",
+      "final_sha256": "e82b374ad08b1bad62ed921cd4c7cda11a1cf47c7b98e10c61d088af31945d85",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "a46f992c2c0901e53843905d0ffb3d5f2937283b5fa538b67e7d1d880731a2ca",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "cc218181f4491f95a8732cd17abb2dae5b0f832ac77f2d3236c4682238dd9d7c",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/appstore/compose_screenshots.py",
+      "final_sha256": "dbe83660b5c19ae46d09ea280968ed51acca63efe45b81a692d6949fa7d64838",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "dbe83660b5c19ae46d09ea280968ed51acca63efe45b81a692d6949fa7d64838",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "50412d8fec247fa955ba5d27a05665ea822ded6ed8143d68260d018ce1a82541",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/appstore/make_icon.py",
+      "final_sha256": "bbddb11fc62232a2ef0ad3a5c309cc28ea60dfed7ea87d44fc59258fbcf85e86",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "bbddb11fc62232a2ef0ad3a5c309cc28ea60dfed7ea87d44fc59258fbcf85e86",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9584232a1b695f1799b50e2bdc22941ec3818929857eb52390094a4f3a39b0f4",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/appstore/record_demo.py",
+      "final_sha256": "e605888a288240c0f1b82181115dbea4b23a98895f6194f0c5deaa482586aa16",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "99a81c5b4b1dcedbefc54b323d01c1081f0034658c82e527449d9455db783aa4",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "f6cf895b0e5240d87d6f2b105c4a17516baf115f733d3df62adb31c58197979c",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/appstore/sandbox_probe.py",
+      "final_sha256": "fd5d04ce428b1ad674de9dbf1c9e3360a387cef371381fa12663c787b98e74e9",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "94c66b271af1c913f12f1cb82e182749dfb40794895cad23d061362a6dfdaa9e",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "63344cb2e9182df1678626b614d55437ec647da2dc70a98be783cf9bd7bc33de",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/appstore/shoot_screenshots.py",
+      "final_sha256": "ef4a46d6b208ffbcc8ef3d7bf78eba55d915df7303399c72e7b75e6e4444c65a",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "7d0c09dfb2fe1dee670c659b3c09a271bc4d1e650314cd2ecfdbb335691eeeef",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "017b5fe27c1231f770b6052457ce99130f5c4b878759173b814cebba2b02e801",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/check_docs.py",
+      "final_sha256": "bca0801ac1363032fa9617ec12559350d3c53b6af9053bde7957ce5199c8a709",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "bca0801ac1363032fa9617ec12559350d3c53b6af9053bde7957ce5199c8a709",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5bc7434c5c95b20fe8a11b9fee88fe473b6238a4b1fa3c7d6d27f6293f285e09",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/generate_static_dossier.py",
+      "final_sha256": "f0f03a2202b3d520d89616a205a9c18c3802db30dccbed111a0fb3c0a31ecdaf",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "f0f03a2202b3d520d89616a205a9c18c3802db30dccbed111a0fb3c0a31ecdaf",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "68294fc5b2b9598b974c88714501611115efca4a07cdb377a17e8d1987371416",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/install.sh",
+      "final_sha256": "04ba9fc294d6349884b480b8e7cb519d069db6cbb2d29cb9f1dd3a3b72c70e97",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "04ba9fc294d6349884b480b8e7cb519d069db6cbb2d29cb9f1dd3a3b72c70e97",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6f81c2b30084d2292d357bb99086036ea82b516c656edb6276874d72cd02abaf",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/install_indexer_daemon.sh",
+      "final_sha256": "d95e15682559c36557020bcd57a6403338701b0657f94d489bd3e6655084054c",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "d95e15682559c36557020bcd57a6403338701b0657f94d489bd3e6655084054c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "c870a35a36c2cba5541f0cb257e38b8d9431aa00f4e5fe4c5781bd6a7f89b888",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/mcp_server.py",
+      "final_sha256": "0069631506d74e994bed2efeca11941a8712886c3c4a0b802c0b0fcfc81ff7c0",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "0069631506d74e994bed2efeca11941a8712886c3c4a0b802c0b0fcfc81ff7c0",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "00529a517e37628559ad9bad6caec02d66ca4b81030eb0800d93d3409706fc0d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/net-dns-monitor-service",
+      "final_sha256": "e8f1c4cb99fdfe74a8ead44df09bda614697863185b91a38751cc2d20ed063b9",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "df24ed171a0a09051a1e7310a71a80fd717e2b0eb95d75a7e6499e06970276a3",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "bc3d2687341e582525e69282315cd94b5afe99b61f9074799a939e4654cc1a32",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/query_index.py",
+      "final_sha256": "def82bc636cd72bb250435884515d0f0b15aa17331b38f14c8359e8e1e579584",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "def82bc636cd72bb250435884515d0f0b15aa17331b38f14c8359e8e1e579584",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "75c26017af964552b189bb2f75fe9cad81cf9efdcfeaa77c9fd2658ccd9ce3fa",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "scripts/rotate_workflow_logs.py",
+      "final_sha256": "5b3a31970e0b197eb15259063f0b251422d412442584952928a1ae6e36c029f7",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "55bdfa7ddc125fe6e7ed62a5a05826187e39b7dd3b8f15bc578a0b2b06e40853",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "a7f99ebb31351a4d4ad2bc990bca11c79f97e94f96ed9f4f48dab31d74e9022a",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/semantic_indexer.py",
+      "final_sha256": "6b31ebe093a576bf9d6bcc31d0ba979cae835c722e3d8710d1055216eeeb249b",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "126a97b49c66b65d9255cd9183127ebd09ae1a62673950247a0f1ff6d7cb785c",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "74fee280bc8421c1073de211e791e1865b23f2737c0c0c863392b5bc246ba0da",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/start.sh",
+      "final_sha256": "cb8393af2adca629b3d9b70feedff771504ccae6e7195d5271d650f16a4b33c8",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "b5683dc54186f9135ab220e36182d2ba36681f43bbed392ed21cae57d50457df",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "c78c167a286d1f56e990771094d8107b442807227fb1b346daeacf7842e11f8a",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "scripts/watch_and_index.py",
+      "final_sha256": "1e80c21a46bafedbb512727441eabb52920c011833e61eb676abd7db19f23256",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "c73e9b79d407333d1312b00a1be931da32dcd11644bc526d360fbded8a3bd48b",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "82e8d713afdc8685d5e9cc5afed076ee7de5db2375fd9d75c5a4e611b09a7f8f",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "setup.py",
+      "final_sha256": "4241107c8e47585c15f103220ea0ec9faa8887b184f0891709d51a8310c0a55f",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "4241107c8e47585c15f103220ea0ec9faa8887b184f0891709d51a8310c0a55f",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "bbb5cec4205dd551d48eb45744bc44cae6969f0ebcbdf0fa30eabb1b55206f0c",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/__init__.py",
+      "final_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d272bbbdff30b2ca9983faab5b439ca629ebbed4687669173327aad228e686ff",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/conftest.py",
+      "final_sha256": "0200fb0688ee2af6eb3878b280ea86736a8041124b08fd9f295388b2d674b57d",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "0200fb0688ee2af6eb3878b280ea86736a8041124b08fd9f295388b2d674b57d",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "0ab24a4d83dfb8b605bd9ef590bb7ed463f88b181192d547074eddd210e1b267",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_ai_consent.py",
+      "final_sha256": "0707bc9b059b31f8758eabf10e45dae9452fe7735d9c5ceaf133b4e25076b514",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "0707bc9b059b31f8758eabf10e45dae9452fe7735d9c5ceaf133b4e25076b514",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b746730917aba723ba46813ec3bdcf063a18ea317436f931129ff2a30ca98265",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_alert.py",
+      "final_sha256": "064fefc403ebba8e27d4602d3d7251a4b6e9551560b4bfb1f5076df541b9466d",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "064fefc403ebba8e27d4602d3d7251a4b6e9551560b4bfb1f5076df541b9466d",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5e6b8f2a71c7e3c53b8ad3cf08b8059d9b1ad0a83e8965ed0ff149210b163c93",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_anthropic_escalator.py",
+      "final_sha256": "833fb57e7f0cf4eb436126c53e9e83d683c0c9c68d4e4e182c3b2de3195b40fc",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "833fb57e7f0cf4eb436126c53e9e83d683c0c9c68d4e4e182c3b2de3195b40fc",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b91b14752db8b158382b2036a1644a043e4046358335079ae38fb45cffd06ae8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_appstore_wiring.py",
+      "final_sha256": "b1cedc8e74b7d2a7e3a6f15bc968f98cd7ce3025f6b83be8d16bbe1f61dcbaaf",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "b1cedc8e74b7d2a7e3a6f15bc968f98cd7ce3025f6b83be8d16bbe1f61dcbaaf",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6cb5375de483cc2bb66a29c85d4e474caf9949082f1c7fab37036bb2e43f0e44",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_audit_fixes.py",
+      "final_sha256": "2a182ab9776a33063eec05cde04b93d9e773d178182c4a0eae530b3f976fb86b",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "2a182ab9776a33063eec05cde04b93d9e773d178182c4a0eae530b3f976fb86b",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "27b0f464545df34aa27768ca9f55a1dd86bd6a8e0cd66bbe3553a5b1287195e3",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_console_wiring.py",
+      "final_sha256": "b7c7d95eda7743dcf08f314336c0827c9e3106f2610938a5984c10a33b4cd8bb",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "b7c7d95eda7743dcf08f314336c0827c9e3106f2610938a5984c10a33b4cd8bb",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e17e9568fc9b4a22b8c12241b7f79dd5177cef49bcdcc3c0e0b6135e93bef8c6",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_dashboard_wiring.py",
+      "final_sha256": "533c6991c43327e4e9570190cf2e751830061c3c19a59f75c3e60531741d0e00",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "533c6991c43327e4e9570190cf2e751830061c3c19a59f75c3e60531741d0e00",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "59415e70a065a5562129d803232c151b638016dbc4364c611ad28db6cd5a29a0",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_failover_wiring.py",
+      "final_sha256": "2576c80470fa6ea4d4e0c8df61eaacb3ca5eec773b145b3a7713c68d9a016a46",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "2576c80470fa6ea4d4e0c8df61eaacb3ca5eec773b145b3a7713c68d9a016a46",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "50f84f40bf063a9d0df9fbfcc4886f59b66d29bd2affbc5af73516d663efc022",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_log_wiring.py",
+      "final_sha256": "7ce9e8f0b3cdbb755a10e5c6ac89eafe3d4b23bfce88b0ef572f771e81094235",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "7ce9e8f0b3cdbb755a10e5c6ac89eafe3d4b23bfce88b0ef572f771e81094235",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "915424665d4738d7e3415bd0c4772ec35ee253c5ad8e707310ea4418831ec688",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_notification_wiring.py",
+      "final_sha256": "e0f6b1ab73644804bbf95b4858b56202917d9b0d79d60b237d41b99557682b61",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "e0f6b1ab73644804bbf95b4858b56202917d9b0d79d60b237d41b99557682b61",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d1e2cbf1ffa77afc1fc17eb9c1e02da5cb304fe2526999d57091285935d3e792",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_peer_wiring.py",
+      "final_sha256": "c1cf5f72b2d60397280a6e0ddedf040ed5d2921e33c9a6fcd368a34c49af656d",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "c1cf5f72b2d60397280a6e0ddedf040ed5d2921e33c9a6fcd368a34c49af656d",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "97b0a387e47753e662cf10ff1f6722f1814e905f4fb72d05cfa0f590e2e08016",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_ping_wiring.py",
+      "final_sha256": "2589762692eb5064ddfb5530c0ae4177eb92eabaa7815f75972c3964a26dc67a",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "2589762692eb5064ddfb5530c0ae4177eb92eabaa7815f75972c3964a26dc67a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6ddc3d5ce3d81813b51a0277bc84de831af21663dfd8d7cf5c34d351f0bfc771",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_privilege_wiring.py",
+      "final_sha256": "930c1f1b57279bcc3577fee04a77dcc2d67418447d4a9d8f3c4ff71c119765bc",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "930c1f1b57279bcc3577fee04a77dcc2d67418447d4a9d8f3c4ff71c119765bc",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "f91f3103a9d7fdf33ea60c2d3e153c54d0e0d2c861987867e16180c667528ba8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_report_storage_wiring.py",
+      "final_sha256": "ec59c995519d806bdd0fdd6cdd862612f568f626d40a9f4297370722579887ec",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "ec59c995519d806bdd0fdd6cdd862612f568f626d40a9f4297370722579887ec",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e7cb588d02b0a1eb54e0049b03078423e28f95d280af005496f718c5356ca230",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_resolution_wiring.py",
+      "final_sha256": "7a61f1186454154b27b08abbbcb163afcefc7324a670b15e8a899a910ad03074",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "7a61f1186454154b27b08abbbcb163afcefc7324a670b15e8a899a910ad03074",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5af14ef450d655cd62e659dfeeddc65554fe7c5fed9a7c88d9ef50f11731b3a3",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_router_wiring.py",
+      "final_sha256": "2303e91d1ed249c276954602c8af34e5181ffc2e28a5b4d8a4661460f7dcdb36",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "2303e91d1ed249c276954602c8af34e5181ffc2e28a5b4d8a4661460f7dcdb36",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "2953dbb90b901d571ba0d49e4bd3e23278609c95ca81861bbb761892fb26c5f8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_settings_wiring.py",
+      "final_sha256": "91b26403b57c2f94be7a0eb1847bd685a8e01b36df1879b925d3f46fce5a3d3a",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "91b26403b57c2f94be7a0eb1847bd685a8e01b36df1879b925d3f46fce5a3d3a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "77f0f7ab8ab93990adb4eb42e8de3be9792f5640a93d5a41c0f75b42509190ae",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_app_status_wiring.py",
+      "final_sha256": "44a95102c927be71b6eceffbb935d4409edb17c8e495fff703538de3c880cdc8",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "44a95102c927be71b6eceffbb935d4409edb17c8e495fff703538de3c880cdc8",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "8ccf1666371277bdb76738fdf2b4944da7d1a3e86be01c18c30676222f52a316",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_appstore_build.py",
+      "final_sha256": "4da18ba87ce34268d382ff322929b9ca4f922e627ab6e715df8b21b96e30ee1e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "4da18ba87ce34268d382ff322929b9ca4f922e627ab6e715df8b21b96e30ee1e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "c4fb624506b43f66415db7eff8a771f1fc739e1ab93fa78ad9102a58a81d3dc6",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_appstore_screenshots.py",
+      "final_sha256": "45906293af89a68f550a0a9e307724970144be1fea43786f8734300bdd376b9a",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "45906293af89a68f550a0a9e307724970144be1fea43786f8734300bdd376b9a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9b0c0d2b923fe46be3795fe7f84578ce3f6ca0044d6a40d51ed28e16254de467",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_check_docs.py",
+      "final_sha256": "277f902b3ad4cfd08faf8e52718327576aea5f39a567ea08627338f1ddb6f360",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "277f902b3ad4cfd08faf8e52718327576aea5f39a567ea08627338f1ddb6f360",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9aa542eba43ed57610df6b95df37beeae87821982a286ebc38ab911bea203e74",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_classifier.py",
+      "final_sha256": "228356d787843e306336f8ab78f9788ac55845ae26f4db8663ac25471741854a",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "228356d787843e306336f8ab78f9788ac55845ae26f4db8663ac25471741854a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "fe182c3367cd5857d35fae01edc2c332e568e378756c5694145b56591880927d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "final_sha256": "74577f23747c6b9521ba40b466630cf55b0824d0482cbb75d9dbeaec5d538b66",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "74577f23747c6b9521ba40b466630cf55b0824d0482cbb75d9dbeaec5d538b66",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "bbc9fe8588f7657c335613cbdf235c9bf005faf6964de5e242c5186dde354a9d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_cli_console.py",
+      "final_sha256": "abfb08e003b6203fe642836b6c4406657f87bf6cbc643cf56d0033f7bef5bc1f",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "abfb08e003b6203fe642836b6c4406657f87bf6cbc643cf56d0033f7bef5bc1f",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "2dff7acb62a35c3c471bb27223bce9ca7e35d0b8c2a419e01f113ea700b52f94",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_config.py",
+      "final_sha256": "2fa1e946f5a7b6d29e26a7d7e926c354e089b90e65658d313cd693fa7669207f",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "2fa1e946f5a7b6d29e26a7d7e926c354e089b90e65658d313cd693fa7669207f",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "7ce4b1e422972ef855132dae849b0e995b4edabc8f22faa6f842e05c4d36a9d8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_console.py",
+      "final_sha256": "a2f648e1b9d8ff1671c61793267fa585622c4924c202987fca51ab374d1d8263",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "a2f648e1b9d8ff1671c61793267fa585622c4924c202987fca51ab374d1d8263",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e1f2c2f100f2e1d67af778f34e42dafd98da0f367f8ada0b485917459d638bc9",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_console_window.py",
+      "final_sha256": "78b5358f65b399cd1d7e838fc9af2ab69d3c8549a722e4f951cd7a451a319b9c",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "78b5358f65b399cd1d7e838fc9af2ab69d3c8549a722e4f951cd7a451a319b9c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "78e37845efa1aeeaea4c33d66a113846dc2750f5ded2948730136e1f4b889d52",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_credentials.py",
+      "final_sha256": "67cd84247bee5e8cebe0692f8849416610d0d3fc104564b6d10ce2aef9d806db",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "67cd84247bee5e8cebe0692f8849416610d0d3fc104564b6d10ce2aef9d806db",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "0b76d9d0f96efd3cb1fccbaadb5f61923320758c844af56bec857801cd10c27e",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_dashboard.py",
+      "final_sha256": "c5bd13b601fb8ab3ef48bce28e6cdef61f5fafc637dfa3accf9a16d751359b96",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "c5bd13b601fb8ab3ef48bce28e6cdef61f5fafc637dfa3accf9a16d751359b96",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "ae4ee17583477502b9130d74a2decb0a2a689e3aa76d619f6c856dcab5e7894e",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_distribution.py",
+      "final_sha256": "c9e2088ca4fcacee86412ffd46498aa558d54a57e4263ed011386237b33892f3",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "c9e2088ca4fcacee86412ffd46498aa558d54a57e4263ed011386237b33892f3",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b2917327c9d021f9c15521f4c041617e915a4cdbb91bf27fa6dfe5065518ca97",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_dns_query.py",
+      "final_sha256": "987692efbfa77027445466d91e3912dcc7cb80aa9f79602e437b8d5141093a69",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "987692efbfa77027445466d91e3912dcc7cb80aa9f79602e437b8d5141093a69",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "5d18df7d44e3d8cc6f58a771fb67d5697ea5b4f10f00f39ac2d76ec847203fe4",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_dock_icon.py",
+      "final_sha256": "00e08c22eb17407492627a66cda20888127c2d5a354e3122f1faa34f430c2e18",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "00e08c22eb17407492627a66cda20888127c2d5a354e3122f1faa34f430c2e18",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6365e5488e2baccc090381e34392dc7c97dfe3e6e2e787e35e81b4ea76728870",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_domain_learner.py",
+      "final_sha256": "5db97a743c0cb83501eb77a54179827ef2e1a035e1fe6835e332905a8251d43e",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "5db97a743c0cb83501eb77a54179827ef2e1a035e1fe6835e332905a8251d43e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b600944f795aaad58db07adbf7411b4b9c27e5805e75c04d82067a9fede47a87",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_escalation.py",
+      "final_sha256": "2b08efd1fb82f0a32cd7805a7163de2e86a8e4d9ecab4da838b14ce8b46a8e29",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "2b08efd1fb82f0a32cd7805a7163de2e86a8e4d9ecab4da838b14ce8b46a8e29",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "f7a7952ffdda81c31b429acdeb504b9a37fca59560f4525e8b3ef431068b0767",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_failover.py",
+      "final_sha256": "5db686eae4ca0c7bf36348984d14276eda50b82df183cd6cc094a74584e8c9d3",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "5db686eae4ca0c7bf36348984d14276eda50b82df183cd6cc094a74584e8c9d3",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "ce3bc1020af5df62e0e4be8a666a92adcce39d60c7c52e213521536744721e03",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_failover_policy.py",
+      "final_sha256": "2036bdffab53d8e39930523b7e2dccb67b28bac79272056a01d6dd021b5c9040",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "2036bdffab53d8e39930523b7e2dccb67b28bac79272056a01d6dd021b5c9040",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "974b0e3f807d337fab7e510d868a96ea8d34fa4b26164707fed1df8e9500773f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_flap_gate.py",
+      "final_sha256": "f3da17aee7409ce4756cf403ff68ed29a3f88a988246cd5c18570919b5e9232b",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "f3da17aee7409ce4756cf403ff68ed29a3f88a988246cd5c18570919b5e9232b",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "a784f51a9887cadfd3a3e572af06df108477602b55b573bd99527f456b0cd679",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_fleet.py",
+      "final_sha256": "d55e542aab88749497f92a10869252cbc010bc0a4f9ef330b19ead22d2508968",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "d55e542aab88749497f92a10869252cbc010bc0a4f9ef330b19ead22d2508968",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "8fc392fb13fa292e6a26cfdb665e16dd3d444398d6554983e27e924eccff2b97",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_forensic_log.py",
+      "final_sha256": "a1561043172904b7a090929caf134b6b28ac43b39faf7d04ebf5ff0e26f1e795",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "a1561043172904b7a090929caf134b6b28ac43b39faf7d04ebf5ff0e26f1e795",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "2a6a280777a3c963575421d5d561c6ac7f6c3155ffb866558f5579091deace7e",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_graphs.py",
+      "final_sha256": "5112a4c020826383b2e1d14127c7fc4f76dd081ba1641758aac7d6c89b304284",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "5112a4c020826383b2e1d14127c7fc4f76dd081ba1641758aac7d6c89b304284",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "6bc169f576f8c39934b561a1cd3d58b1e98e0aa26bc4773c8d3df190b1287d2f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_history.py",
+      "final_sha256": "ed8c78a365bd03691dbb8a861e5394be0ffc9b6b4f6b1a15eee70f0ae3d67426",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "ed8c78a365bd03691dbb8a861e5394be0ffc9b6b4f6b1a15eee70f0ae3d67426",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "a9e20dfc6ebfb77da963e41b2ba41d9d149055ee9da6f4da4d0c857b7d28e457",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_indexer_scripts.py",
+      "final_sha256": "a987d9b5cebf4ee0195f5c64d87f689a0268c7c3c93d88c1b5be080cd84e32bd",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "561722f04c366d8412ac1772a8e7319c8ec609f8695f64cb23e23a9847854886",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "16c4b9908a256ee116c04c088b5568826f6a3b312194056738cd4358cfca781e",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_interface_probe.py",
+      "final_sha256": "d0a34fb4e6e5f5e6cdf9f5a4fde21111aee74f12204f90a7e8fc0264960428de",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "d0a34fb4e6e5f5e6cdf9f5a4fde21111aee74f12204f90a7e8fc0264960428de",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "bb4e2e5e7f39a8fa95897e3ababbaff4f0e4d9582cf174af22e1135cae0a0cdd",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_ladder.py",
+      "final_sha256": "55f0266002ad2b5f3e6c6dbe97c62298236b3ffeb5abd356119e173d01022f14",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "55f0266002ad2b5f3e6c6dbe97c62298236b3ffeb5abd356119e173d01022f14",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "693a513b2cbe2c2152fb21c36d3c96799504fb43998912ec7c07ccec81886d60",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_localize.py",
+      "final_sha256": "a6be143bbab95afae8731c840bd8b955b1f79a92da93d2da5c7b06a9b7cb936c",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "a6be143bbab95afae8731c840bd8b955b1f79a92da93d2da5c7b06a9b7cb936c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "245b7e4d182e7f2dcd278bf91ffded2a556e6ca27b3521686637d8ab1d89baa8",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_log_watcher.py",
+      "final_sha256": "6bc02526707cad489115fb45c03c3ef886fc865409bfd181a90c3b03b92e9d87",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "6bc02526707cad489115fb45c03c3ef886fc865409bfd181a90c3b03b92e9d87",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "2a9f799c99a9c3a4a46a6e8eed1b3d679f5b58190d8f24bbf4052f7138955db4",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_maintenance_app_regressions.py",
+      "final_sha256": "f9e37e06ba3212439429b14f3b8d092d197a9d4b5e97952179657642890a3097",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "f9e37e06ba3212439429b14f3b8d092d197a9d4b5e97952179657642890a3097",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "ecc8b265bee2ca8e874889397245fcc503bf409d5b4bd2fa4a84af4e3c0769ab",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_maintenance_core_regressions.py",
+      "final_sha256": "6ab824132a2ed5c22687ff0e5cdb0dfda70a82224c01a73a6176f338d162cac4",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "6ab824132a2ed5c22687ff0e5cdb0dfda70a82224c01a73a6176f338d162cac4",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "fe40722c27ff6b5d00b27ef0de7f141c35748240e74ab5c0a50a22737193ea74",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_maintenance_resume_core.py",
+      "final_sha256": "69cf111c3679a8e6ee1dcab81ab06d1e9168bd3ba9b112b4cf31b9de5d221055",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "ae9f848ab738688f435037fff0a237d6029eb0e076456489ed6352a9bac90684",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "b5c8628b3dd3d5460803897ccc061cfe6a54c5aa407a0ddc88e28451e7693a1e",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_maintenance_resume_fleet.py",
+      "final_sha256": "c8674587ddf713f2db6f7bd96a4823b0daa81dbed499ecbd838c242f4d5eb5a0",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "4610705d206082c48493c2f689695845b3fa08d6ac7a8144eb5cac62f1b99fbc",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "99afba23ce39e4e150440d05fb480020df787903fc7bb63156ade89f6b94bf3f",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_maintenance_resume_journal.py",
+      "final_sha256": "158a18ee9048f10d71d1f613cd436d06366a21cb0201496840e884be0879d611",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "6c9a157db9e5b3f4d859b06d03291f0d7b7168829374b646e301cb13ddc96160",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "10e211119c7a2643a44b44afef27a11279f9613ae57ba728bc9fc6d1695e902e",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_maintenance_resume_safety.py",
+      "final_sha256": "a9a7242535ab05fe6f7d28e3065cb973d5e76d653430da3878891e7fba7be44c",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "a9a7242535ab05fe6f7d28e3065cb973d5e76d653430da3878891e7fba7be44c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "f6276842b6efc3801d82b21573394119eb3028c17c3985851bfdf4752ba659ed",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_maintenance_resume_shell.py",
+      "final_sha256": "93cdbc9066cf2ca5a889bedca7d94b958be421c1f49ec87efd31a67580a548b5",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "147353a2c2132f2d471a03011fcac605df2c006cc6c6782901f0e5d455c0078e",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "ac2fae742e997e8945fc60276f20c98211ae99e93f5d685011177e3f9418bf5f",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_maintenance_resume_tooling.py",
+      "final_sha256": "cee7f3070a5ef9d453532df98198cedc23072d5aeae4cb3cf9da3c4dc811e371",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "5a3763e18c3076f2361c5457d2e41b3e96e585a69847c6d98dde4ee3a07ca7bb",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "684302103cf13b62a7d74e7f3d40a07f3b34a942b3c796040b12af54e7a6ff85",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_maintenance_tooling_regressions.py",
+      "final_sha256": "9db222dde15a24704d8cc3ca0a4707c7c2ee0784ddd86140d8019c3102b2cc5f",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "d32fd4c3a57b116c7b3cd6dc8f8bdf840acbca0d363285d2665f9004e24bd2d4",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "252f50e2fa105eb422a57d262d269b4372ef40bf5694060bd9eb5abbf0ebab5d",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_mini_window.py",
+      "final_sha256": "acfeec4c8011e091e6c2896f4e97dfef7b6e83bd6de3c5009b0b23fc1502bad4",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "acfeec4c8011e091e6c2896f4e97dfef7b6e83bd6de3c5009b0b23fc1502bad4",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9551c3f4cb77b642e675e5a6d963c7dc8a5d488135ab4e1ba4f0f8bce7a8c371",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_net_stats.py",
+      "final_sha256": "89aeb6cb8a6760fa4f819b32f53b3aec4c5a36ccbd2e2469ea0dba139f7c36d3",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "89aeb6cb8a6760fa4f819b32f53b3aec4c5a36ccbd2e2469ea0dba139f7c36d3",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "43d10e404c686a7b592192a171978ae83eddcf7eb739b37ef0c86cafaec61f94",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_notifications.py",
+      "final_sha256": "4799345b76bce8d45e02c496bbec38b9abc24c2f284433f81f70d02ed228392e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "4799345b76bce8d45e02c496bbec38b9abc24c2f284433f81f70d02ed228392e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "dda21ba8bc7be5e526d305ce361cd45f22ecbcb015d8b70f0a9a48be86359010",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_peer_net.py",
+      "final_sha256": "197ba2656b36119712077b01f7b40da1974bcddf9b5dea10a413075f7e0bbbeb",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "197ba2656b36119712077b01f7b40da1974bcddf9b5dea10a413075f7e0bbbeb",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "a0d294058f0958bd7321ae44895b055d7e722e4cf5c3bdb682578378401eec79",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_peers.py",
+      "final_sha256": "286453eb632960aa991455d63681775f921069bb6ad0f0dee83c2baeb1ece231",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "286453eb632960aa991455d63681775f921069bb6ad0f0dee83c2baeb1ece231",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "0c013a31eefc3dc8a8078a25228ce7266c3a5cd9e7e49aa0ab1824eb095a09c6",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_ping.py",
+      "final_sha256": "0dcf252b05552a7d2011d7e2cc54dd9c4da9a1e932b4898bf6e8bcb11c2c4c9c",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "0dcf252b05552a7d2011d7e2cc54dd9c4da9a1e932b4898bf6e8bcb11c2c4c9c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "7a4a985c39b0a60e0090a19481a426a6201f2a3578d95ac1b62f3ea235fbed85",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_ping_monitor.py",
+      "final_sha256": "86d5f829c6c1a50b4427348f67cb3ee67685029b578004e92789e53e9d0ea37e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "86d5f829c6c1a50b4427348f67cb3ee67685029b578004e92789e53e9d0ea37e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "88fc58b449765be3c666673923121491c2e014e1f8e2a116d6db74c7755ed746",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_privileges.py",
+      "final_sha256": "a49265435ae14f133586006c5d00e42c1d2c495c1711d3b64589110cdd34ca45",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "a49265435ae14f133586006c5d00e42c1d2c495c1711d3b64589110cdd34ca45",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "07fea4b98894e7953a84cd4839b3fa234688a0024221f5a01f14cc8dadd77a36",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_prober.py",
+      "final_sha256": "106e267be22a0f8789ea76021ee441e1b9463f0e4985a1fbd6c2aa7159703c44",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "106e267be22a0f8789ea76021ee441e1b9463f0e4985a1fbd6c2aa7159703c44",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "8f520879e17dda9a4c3fecc75a67f1b51de21ec78dbcdb2dd119dfbb24089053",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_query_log.py",
+      "final_sha256": "2c17c5ddffba2073979a7577bc265b3055231f1e20fb8cdf796e4e03ad3985f0",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "2c17c5ddffba2073979a7577bc265b3055231f1e20fb8cdf796e4e03ad3985f0",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "65dc1f98002b020e975e69b284aa093ae95117797f1911cc0625dca058386327",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_record_demo.py",
+      "final_sha256": "fdde04fbbc8c36ab2e9e30f4f1cca7ca5002d189db371b33d91fe902b84cc5d5",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "fdde04fbbc8c36ab2e9e30f4f1cca7ca5002d189db371b33d91fe902b84cc5d5",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "ca0016394dae23a13d495020f2fd101df2f26f78b10be38f798a200bda5dfd5f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_remediation_editor.py",
+      "final_sha256": "a13389029649f67ae7eb36ab2d844af826afafc1f38a230adbfbd59cc97ba55a",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "a13389029649f67ae7eb36ab2d844af826afafc1f38a230adbfbd59cc97ba55a",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "dbe5bbcffaf74e63905e08683e9f32bea32f400185d10bd5bb81d7ab276693a6",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_remediation_scripts.py",
+      "final_sha256": "c5e37f15b4aafda5e50b9bec57b2e3030e674c74887b4120228019bf2c2c355f",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "c5e37f15b4aafda5e50b9bec57b2e3030e674c74887b4120228019bf2c2c355f",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "7dd3d1154a089b3a75d4cc6b959ecb0788c07bbaac89c29ac419cd3d4046569a",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_repair_executor.py",
+      "final_sha256": "b4eda195fdb000730f8c80869513c53bf8b6d37e1779af93aded614ebe061615",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "b4eda195fdb000730f8c80869513c53bf8b6d37e1779af93aded614ebe061615",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "69321df8f5438cce92dde6882d5f43021a631dc796f9f75c61a4a34394b3eff2",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_report.py",
+      "final_sha256": "73a3e0798710ee3969d616e50b172f194cdebc7338a4775b58f6780028b01128",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "73a3e0798710ee3969d616e50b172f194cdebc7338a4775b58f6780028b01128",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "906fe7b6fd4e07cc2df9129382a4f87e244387c48f29b0ed294514196c52bfb2",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_report_storage.py",
+      "final_sha256": "ca1e459a001c744548fff6587d424a410ac39f8fb78be310023ddda2329d2017",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "ca1e459a001c744548fff6587d424a410ac39f8fb78be310023ddda2329d2017",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "4d03fd0010023162e313edd53bcfbbab71f78902974d800b18e06fa34e243b22",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_resolution_log.py",
+      "final_sha256": "f8d26ed0dc00175d7f007f9dc436851d544c0851ba20dffadab3416fe4d434fe",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "f8d26ed0dc00175d7f007f9dc436851d544c0851ba20dffadab3416fe4d434fe",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "300e48d7d78d2e75bddd7c89d086b37db1d18a90274501fe43f0e89b5449ec60",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_resolution_prober.py",
+      "final_sha256": "5425e4828bd9676fd1c8c7823ea08e27f2a81cfbdcd0d5f09e36614dacba7359",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "5425e4828bd9676fd1c8c7823ea08e27f2a81cfbdcd0d5f09e36614dacba7359",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "e1bc0e9176248cb095cb4daf74c3b1637b8dc2a8cc5b389c531844ba6f3be68b",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_rotate_workflow_logs.py",
+      "final_sha256": "b3da25ecacea98c649b98b5551ffa61b46b000393a2a5c326a17e63a43d89f73",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "b3da25ecacea98c649b98b5551ffa61b46b000393a2a5c326a17e63a43d89f73",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "d9701069efe29c914b97519056aff5d4701c4cb70828fde310916493f2807e49",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_router.py",
+      "final_sha256": "02a413fd00f178a3635ab2e4d5d2b46bdfa2f39f97039c9d2ee0af9f2e232d85",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "02a413fd00f178a3635ab2e4d5d2b46bdfa2f39f97039c9d2ee0af9f2e232d85",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "f256bfec0c55c9fa1a932efc443f01278f406d65b322a3c68085548e679fcbb9",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_router_configs.py",
+      "final_sha256": "45fde678e4439417f4033b0c28bb82e520f80107f41b927f27a87575aae1e2b0",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "45fde678e4439417f4033b0c28bb82e520f80107f41b927f27a87575aae1e2b0",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "2a9b4abfb1b5148e482a03a1c71c64002b98bbfcd3f0c6c4e9c1886e95d2e8bf",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_router_scripts.py",
+      "final_sha256": "d8ef6824ff7faa04d2469a723458d8674b32c136ccd64632b6bd883fa4407686",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "dd9ba1169e99fd7724ba6626e2994b135b5a4550c7f4f475dea3b78aa94b9f15",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "ed7c8007d8807e56f200ad41ade299a4c791087db644d61f894041227c105983",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    },
+    {
+      "path": "tests/test_router_window.py",
+      "final_sha256": "3d1a7087b8af14361b1b35129e19f30d70fd178b3450a19dd4594f1a32a472e8",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "3d1a7087b8af14361b1b35129e19f30d70fd178b3450a19dd4594f1a32a472e8",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "0f4b8d681586411421621bbac11a51e981f3c616c5e7bde2518d0870c691785f",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_sandbox_probe.py",
+      "final_sha256": "2579fcd0bbbd3aeaf87fd3bb6cc19ecfe479327eedd334920a0f407bbc8e7624",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "2579fcd0bbbd3aeaf87fd3bb6cc19ecfe479327eedd334920a0f407bbc8e7624",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "fd60c19d6aecc52a0e67911aa97dd372a99dbab721e0d24676aa14bf1412af6a",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_service_order.py",
+      "final_sha256": "9eca8ed48948642027fd0fa61ee79a34d0bc290c763952dfac46a6c27c941881",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "9eca8ed48948642027fd0fa61ee79a34d0bc290c763952dfac46a6c27c941881",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "acccff56a53f32e9357336a24d2911665422040b2972ab74872f62bc750d3c2b",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_settings_window.py",
+      "final_sha256": "6ba9dd8d946d4151e753fcefb502130da1ed83cdc3cf5b34272aafed417b306c",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "6ba9dd8d946d4151e753fcefb502130da1ed83cdc3cf5b34272aafed417b306c",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9f02cd53de6f4a23ee8a105cc481cab9de2e61356840eaf3d410760b841bd099",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_shell_scripts.py",
+      "final_sha256": "e7590e0da0e9efd3b25d86c1de8cdcba39bd99e5abaea1b500b460e849e96b70",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "e7590e0da0e9efd3b25d86c1de8cdcba39bd99e5abaea1b500b460e849e96b70",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9180d351811f6ed5cad03f4a84f282ce890c4079b23597c6e85e2c284e6e3508",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_stall_log.py",
+      "final_sha256": "e5794b75ab5b2780f5297a14e9c2db0d28f02cad2f1d332568ea01abc1cf3a32",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "e5794b75ab5b2780f5297a14e9c2db0d28f02cad2f1d332568ea01abc1cf3a32",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "dc32321040301de9f5add167f1af2a7da5d060a0867fb534d95baec7c5ac402e",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_state_machine.py",
+      "final_sha256": "b9a3d955e7dd8ede71eef43e912ea45ba60eaecdb5aef7148cab185d08ac7927",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "b9a3d955e7dd8ede71eef43e912ea45ba60eaecdb5aef7148cab185d08ac7927",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "70aa7ce2d64c2174d4b23ec19419a3eb4577cc8a3e6ad58735710e0637888e07",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_status.py",
+      "final_sha256": "349de1aeb7530aeda3e0895ddfd1bdb73316602812334522bdfb99fc3de06269",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "349de1aeb7530aeda3e0895ddfd1bdb73316602812334522bdfb99fc3de06269",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "9c60bed6802b86b1e9aa40be3732223293df59e23b3330223588650ecc0ff8b9",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_system_log.py",
+      "final_sha256": "be28b52718ba321422fd8d353b4ed7bf6a4cb1aea633f7d5bfbda5e957c605f2",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "be28b52718ba321422fd8d353b4ed7bf6a4cb1aea633f7d5bfbda5e957c605f2",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "99c585de92c933b91618ae1c8aef8f23781d63dbcf689062a46ac35b952315b0",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_throughput.py",
+      "final_sha256": "5a76a59a5490b8cd9fb872984b61db5015a675f793c1375377ea77e5bc54b75e",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "5a76a59a5490b8cd9fb872984b61db5015a675f793c1375377ea77e5bc54b75e",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "a724242b9dc85bef46730388e62c2ddf9085259cc69db34e2d6ac4ad1181507d",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_ui_catalog.py",
+      "final_sha256": "9a5d33f34b1833fe87b75968781ba0662bc146e078db6f9dba0e05d03808b330",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "9a5d33f34b1833fe87b75968781ba0662bc146e078db6f9dba0e05d03808b330",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "31b64104fa5fcc37f39c8c05ba92c413cce02dacddd5f58d232a66d21ebca980",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_ui_windows.py",
+      "final_sha256": "401a18dcd2bd5120a2d9ad44cef1341a01309885afe1c5dd9d6a2e72c6c65226",
+      "last_full_diagnostic_round": 1,
+      "diagnostic_sha256": "401a18dcd2bd5120a2d9ad44cef1341a01309885afe1c5dd9d6a2e72c6c65226",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "b1f37e7229b4c212b73f2916fecbf28d393304edf983e859a7c2abf38ed661d0",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "tests/test_user_notify.py",
+      "final_sha256": "6a7f2ff0563c50a2d6f935e142e562a428bf6fa5a471e16b7f03197def9537f5",
+      "last_full_diagnostic_round": 2,
+      "diagnostic_sha256": "6a7f2ff0563c50a2d6f935e142e562a428bf6fa5a471e16b7f03197def9537f5",
+      "diagnostic_matches_final": true,
+      "substantive_report_sha256": "0b9511d5e2644e1405705b01f9c56ae221eaaed137ac64c82a756a30608c8ca1",
+      "post_diagnostic_state": "unchanged exact hash"
+    },
+    {
+      "path": "unbound/install.sh",
+      "final_sha256": "bd0e6080decf962c6f18e3f8e9d8e2ed02919a36b4656efd35d3ab84838c1e8f",
+      "last_full_diagnostic_round": 3,
+      "diagnostic_sha256": "01e964ac48e4a96dc905c20da8e87b46562dac2c60122b773696c77036930657",
+      "diagnostic_matches_final": false,
+      "substantive_report_sha256": "eb39df79aa5927eda706ed2c724cac44d1b941d0e5463ff2327c50d95f219659",
+      "post_diagnostic_state": "focused corroborated repair; owned diff reviewed; regression and final full-suite validation"
+    }
+  ]
+}

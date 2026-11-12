@@ -19,8 +19,12 @@ echo "========================================="
 # `brew` may not be on PATH (for example under sudo), so fall back rather than fail.
 PREFIX="$(brew --prefix 2>/dev/null || true)"
 if [ -z "$PREFIX" ]; then
-    PREFIX=/opt/homebrew
-    warn "brew --prefix unavailable; assuming $PREFIX"
+    case "$(uname -m)" in
+        arm64) PREFIX=/opt/homebrew ;;
+        x86_64) PREFIX=/usr/local ;;
+        *) fail "Cannot determine Homebrew prefix"; exit 1 ;;
+    esac
+    warn "brew --prefix unavailable; using architecture fallback $PREFIX"
 fi
 
 # 1. IP Forwarding
@@ -31,7 +35,9 @@ else
 fi
 
 # 2. Apple Internet Sharing (Conflict Check)
-if defaults read /Library/Preferences/SystemConfiguration/com.apple.nat NAT 2>/dev/null | grep -q 'Enabled = 1'; then
+if ! NAT_INFO="$(defaults read /Library/Preferences/SystemConfiguration/com.apple.nat NAT 2>/dev/null)"; then
+    warn "Apple Internet Sharing not checked (preference probe failed)"
+elif grep -q 'Enabled = 1' <<<"$NAT_INFO"; then
     warn "Apple Internet Sharing is ENABLED. This may hijack port 53 via mDNSResponder."
 else
     pass "Apple Internet Sharing is DISABLED (No conflicts)"
@@ -44,7 +50,7 @@ fi
 if launchctl print system/com.apple.bootpd >/dev/null 2>&1; then
     fail "bootpd launchd job is loaded: launchd holds UDP 67, so dnsmasq cannot bind it."
 else
-    pass "bootpd launchd job not loaded (UDP 67 not held by launchd)"
+    warn "bootpd state unknown: launchd probe failed or job is absent"
 fi
 
 # 2c. Zombie Bridge Check
@@ -53,7 +59,7 @@ fi
 if ifconfig bridge100 >/dev/null 2>&1; then
     warn "bridge100 exists. If the LAN adapter is a member it will swallow its traffic (ifconfig bridge100)."
 else
-    pass "No zombie bridge100 detected"
+    warn "bridge100 state unknown: interface probe failed or interface is absent"
 fi
 
 # 3. Packet Filter (PF) NAT Rules
@@ -126,8 +132,10 @@ if awk '
     function trim(value) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); return value }
     {
         sub(/[[:space:]]*#.*/, "")
-        if (split($0, fields, /[=,]/) != 4 || trim(fields[1]) != "dhcp-range" ||
-            trim(fields[2]) != "192.168.4.50" || trim(fields[4]) == "") next
+        count = split($0, fields, /[=,]/)
+        if ((count != 4 && count != 5) || trim(fields[1]) != "dhcp-range" ||
+            trim(fields[2]) != "192.168.4.50" || trim(fields[count]) == "") next
+        if (count == 5 && trim(fields[4]) != "255.255.255.0") next
         end = trim(fields[3])
         if (end !~ /^192\.168\.4\.[0-9]+$/) next
         split(end, octets, /\./)

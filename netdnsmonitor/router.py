@@ -142,6 +142,11 @@ def validate(wan_if, lan_if, lan_ip, lan_netmask, dhcp_start, dhcp_end) -> Route
     # on it; a loopback, link-local, public or /0 network is never a LAN.
     if not lan.is_private or lan.is_loopback or lan.is_link_local or lan.is_unspecified:
         raise ValueError(f"lan_ip {lan} is not a private LAN address")
+    if not any(
+        network.subnet_of(ipaddress.IPv4Network(block))
+        for block in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    ):
+        raise ValueError("lan_netmask must keep the whole subnet in private LAN space")
     if not MIN_PREFIX <= network.prefixlen <= MAX_PREFIX:
         raise ValueError(
             f"lan_netmask /{network.prefixlen} is outside /{MIN_PREFIX} to /{MAX_PREFIX}"

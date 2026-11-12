@@ -281,11 +281,11 @@ PLIST_EOF
     mv -f "$staged" "$PLIST"
 }
 
-# bootout fails when the job isn't loaded and bootstrap fails when it already
-# is, so both are tolerated. Re-bootstrapping is how a rewritten plist takes
-# effect -- launchd caches the old one otherwise.
+# A successful bootstrap is required to apply the rewritten plist.
 reload_agent() {
-    launchctl bootout "$SERVICE" 2>/dev/null || true
+    if ! launchctl bootout "$SERVICE" 2>/dev/null; then
+        is_loaded && die "could not remove the loaded $LABEL; replacement was not loaded"
+    fi
     local attempt
     for attempt in 1 2 3; do
         if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
@@ -293,8 +293,7 @@ reload_agent() {
         fi
         sleep 1
     done
-    # Already loaded is a success for our purposes; anything else is not.
-    is_loaded || die "could not bootstrap $LABEL (try: launchctl bootstrap gui/$(id -u) '$PLIST')"
+    die "could not bootstrap $LABEL (try: launchctl bootstrap gui/$(id -u) '$PLIST')"
 }
 
 # Replace the installed bundle with $SOURCE_BUNDLE as a whole-bundle swap.
@@ -312,6 +311,23 @@ reload_agent() {
 # resource forks, symlinks and ad-hoc code signature, which cp -R can invalidate.
 replace_installed_bundle() {
     local staged="$INSTALLED_APP.new" previous="$INSTALLED_APP.old"
+    local source_real staged_real previous_real installed_real
+    source_real="$(cd "$SOURCE_BUNDLE" && pwd -P)" || die "cannot resolve source bundle"
+    staged_real="$(cd "$(dirname "$staged")" && pwd -P)/$(basename "$staged")"
+    previous_real="$(cd "$(dirname "$previous")" && pwd -P)/$(basename "$previous")"
+    # Resolve existing swap directories too, including symlink aliases.
+    if [ -d "$staged" ]; then staged_real="$(cd "$staged" && pwd -P)"; fi
+    if [ -d "$previous" ]; then previous_real="$(cd "$previous" && pwd -P)"; fi
+    case "$source_real/" in
+        "$staged_real/"*|"$previous_real/"*) die "source bundle overlaps a reserved swap directory" ;;
+    esac
+    installed_real="$(cd "$(dirname "$INSTALLED_APP")" && pwd -P)/$(basename "$INSTALLED_APP")"
+    if [ -d "$INSTALLED_APP" ]; then installed_real="$(cd "$INSTALLED_APP" && pwd -P)"; fi
+    case "$staged_real/" in "$source_real/"*) die "source bundle contains a reserved swap directory" ;; esac
+    case "$previous_real/" in "$source_real/"*) die "source bundle contains a reserved swap directory" ;; esac
+    if [ "$source_real" != "$installed_real" ]; then
+        case "$source_real/" in "$installed_real/"*) die "source bundle is inside the installed bundle" ;; esac
+    fi
     rm -rf "$staged" "$previous"
     if ! ditto "$SOURCE_BUNDLE" "$staged"; then
         rm -rf "$staged"

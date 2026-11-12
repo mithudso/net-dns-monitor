@@ -2,10 +2,11 @@
 
 Text-level assertions read the code with comments removed. Behavioural ones
 lift a function or loop out of the script and run it under bash with stub
-commands first on PATH, so no system tool (launchctl, route, sleep) is called.
+commands as shell functions, so no system tool (launchctl, route, sleep) is called.
 """
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -148,13 +149,11 @@ def test_service_plist_is_linted_before_it_replaces_the_working_one():
 def _running_pid(tmp_path, print_output, calls):
     code = _code(SERVICE)
     fn = "running_pid() {\n" + _function(code, "running_pid") + "}\n"
-    _stub(
-        tmp_path,
-        "launchctl",
-        f'echo "$@" >> "{calls}"\n'
-        "if [ \"$1\" = print ]; then cat <<'OUT'\n" + print_output + "\nOUT\nexit 0\nfi\nexit 1",
+    stub = (
+        f'launchctl() {{ echo "$@" >> {shlex.quote(str(calls))}; '
+        f'printf "%s\\n" {shlex.quote(print_output)}; }}\n'
     )
-    script = "SERVICE=gui/501/com.example\n" + fn + "running_pid"
+    script = "SERVICE=gui/501/com.example\n" + stub + fn + "running_pid"
     return subprocess.run(
         ["bash", "-c", script],
         env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
@@ -186,10 +185,9 @@ def test_wan_wait_loop_survives_a_missing_default_route(tmp_path):
     pipeline killed the script on the first pass instead of waiting."""
     loop = re.search(r'^WAN="".*?^done$', ENABLE_NAT.read_text(), re.S | re.M)
     assert loop
-    _stub(tmp_path, "route", "exit 1")
-    _stub(tmp_path, "sleep", f'echo slept >> "{tmp_path}/sleep.log"')
+    stubs = f'route() {{ return 1; }}\nsleep() {{ echo slept >> "{tmp_path}/sleep.log"; }}\n'
     result = subprocess.run(
-        ["bash", "-c", "set -euo pipefail\n" + loop.group(0) + "\necho FELL_THROUGH"],
+        ["bash", "-c", "set -euo pipefail\n" + stubs + loop.group(0) + "\necho FELL_THROUGH"],
         env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
         capture_output=True,
         text=True,
@@ -201,10 +199,9 @@ def test_wan_wait_loop_survives_a_missing_default_route(tmp_path):
 
 def test_wan_wait_loop_returns_the_interface_when_a_route_exists(tmp_path):
     loop = re.search(r'^WAN="".*?^done$', ENABLE_NAT.read_text(), re.S | re.M).group(0)
-    _stub(tmp_path, "route", "printf '   gateway: 10.0.0.1\\n  interface: en7\\n'")
-    _stub(tmp_path, "sleep", "exit 0")
+    stubs = "route() { printf '   gateway: 10.0.0.1\\n  interface: en7\\n'; }\nsleep() { :; }\n"
     result = subprocess.run(
-        ["bash", "-c", "set -euo pipefail\n" + loop + '\necho "WAN=$WAN"'],
+        ["bash", "-c", "set -euo pipefail\n" + stubs + loop + '\necho "WAN=$WAN"'],
         env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
         capture_output=True,
         text=True,

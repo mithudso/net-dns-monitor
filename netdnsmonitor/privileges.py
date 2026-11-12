@@ -498,13 +498,15 @@ def parse_granted_commands(stdout: str) -> list[str]:
     specs: list[str] = []
     for line in (stdout or "").splitlines():
         runas = _RUNAS_RE.match(line)
-        if runas is None or not _runs_as_root(runas.group(0)):
+        if runas is None:
             continue
         rest = line[runas.end() :]
         if "(" in rest:
             # Mixed runas columns need a complete sudoers parser. Their
             # restrictions may supersede earlier grants; do not retain them.
             specs.clear()
+            continue
+        if not _runs_as_root(runas.group(0)):
             continue
         passwordless = False
         for part in rest.split(","):
@@ -618,7 +620,7 @@ def granted_interfaces_from(specs: Iterable[str]) -> list[str]:
     prefix = f"{IPCONFIG} set "
     suffix = " DHCP"
     specs = list(specs)
-    if "ALL" in specs:
+    if "ALL" in specs or IPCONFIG in specs:
         # A blanket NOPASSWD covers every interface, but this function's contract is to
         # name the ones the *file* enumerates. Returning [] here would make the window say
         # "granted" and "covers no interfaces" simultaneously, so say what is true instead.

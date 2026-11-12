@@ -9,11 +9,14 @@ Usage:
 
 from __future__ import annotations
 
+import fcntl
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TextIO
 
@@ -37,13 +40,53 @@ def process_command(pid: int) -> str | None:
     return name if done.returncode == 0 and name else None
 
 
-def is_screencapture(pid: int, ps_fn=process_command) -> bool:
+def is_screencapture(pid: int, ps_fn=process_command) -> bool | None:
     """A recycled PID belongs to some other program; never signal it."""
     name = ps_fn(pid)
+    if name is None:
+        return None
     return bool(name) and name.rsplit("/", 1)[-1] == "screencapture"
 
 
+def recording_identity(pid: int) -> str | None:
+    """Creation time and full command distinguish another capture using this PID."""
+    try:
+        done = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "lstart=", "-o", "args="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = done.stdout.strip()
+    return value if done.returncode == 0 and value else None
+
+
+@contextmanager
+def lifecycle_lock():
+    DEMO_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(DEMO_DIR / ".lifecycle.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit("Recording lifecycle operation already in progress") from None
+        yield
+    finally:
+        os.close(fd)
+
+
+class CaptureCleanupUnconfirmed(SystemExit):
+    """Keep the reservation when the owned child could not be reaped."""
+
+
 def start() -> None:
+    with lifecycle_lock():
+        _start()
+
+
+def _start() -> None:
     DEMO_DIR.mkdir(parents=True, exist_ok=True)
     try:
         reservation = PID_FILE.open("x", encoding="utf-8")
@@ -54,10 +97,14 @@ def start() -> None:
     try:
         with reservation:
             _start_recording(reservation)
-    except BaseException:
+    except BaseException as exc:
         # An empty reservation means capture never started. Once a PID was
         # recorded, keep it until exit is confirmed so the operator can retry.
-        if PID_FILE.exists() and not PID_FILE.read_text().strip():
+        if (
+            not isinstance(exc, CaptureCleanupUnconfirmed)
+            and PID_FILE.exists()
+            and not PID_FILE.read_text().strip()
+        ):
             PID_FILE.unlink()
         raise
 
@@ -82,8 +129,19 @@ def _start_recording(reservation: TextIO) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    reservation.write(str(proc.pid))
-    reservation.flush()
+    try:
+        reservation.write(str(proc.pid))
+        reservation.flush()
+    except BaseException:
+        # This Popen object establishes ownership even if no PID could be saved.
+        try:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            raise CaptureCleanupUnconfirmed(
+                "Capture cleanup unconfirmed after PID persistence failure"
+            ) from None
+        raise
     # screencapture exits at once when Screen Recording permission is missing or
     # the path is unwritable; a PID file alone would claim a recording that
     # never started.
@@ -96,18 +154,51 @@ def _start_recording(reservation: TextIO) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    identity = recording_identity(proc.pid)
+    if identity is None:
+        try:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            raise CaptureCleanupUnconfirmed(
+                "Capture identity unavailable; cleanup unconfirmed, PID retained"
+            ) from None
+        raise SystemExit("Capture identity unavailable; owned capture stopped, PID retained")
+    try:
+        reservation.seek(0)
+        reservation.write(json.dumps({"pid": proc.pid, "identity": identity}))
+        reservation.truncate()
+        reservation.flush()
+    except BaseException:
+        try:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            raise CaptureCleanupUnconfirmed(
+                "Capture cleanup unconfirmed after identity persistence failure"
+            ) from None
+        raise
     print(f"Recording running in background (PID {proc.pid}).")
 
 
 def stop() -> None:
+    with lifecycle_lock():
+        _stop()
+
+
+def _stop() -> None:
     if not PID_FILE.exists():
         print("No active recording found (no PID file).", file=sys.stderr)
         sys.exit(1)
 
     pid_str = PID_FILE.read_text().strip()
     try:
-        pid = int(pid_str)
-        if pid <= 0 or not is_screencapture(pid):
+        record = json.loads(pid_str)
+        pid = int(record["pid"]) if isinstance(record, dict) else int(record)
+        identity = is_screencapture(pid) if pid > 0 else False
+        if identity is None:
+            raise OSError("process identity unknown; preserving PID file")
+        if not identity:
             PID_FILE.unlink()
             print(
                 f"PID {pid} is not a screencapture process (stale PID file); "
@@ -115,6 +206,11 @@ def stop() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        if not isinstance(record, dict) or not record.get("identity"):
+            raise OSError("legacy PID has no verified recording identity; preserving PID file")
+        current = recording_identity(pid)
+        if current is None or current != record["identity"]:
+            raise OSError("recording identity changed or unavailable; preserving PID file")
         os.kill(pid, signal.SIGINT)
         print(f"Sent SIGINT to process {pid}. Waiting for file finalize...")
         # screencapture writes the moov atom on exit; a fixed sleep let ffmpeg
@@ -132,21 +228,28 @@ def stop() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-    except (OSError, ValueError) as exc:
-        print(f"Process {pid_str} shutdown unconfirmed ({type(exc).__name__})", file=sys.stderr)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print(f"Process shutdown unconfirmed ({type(exc).__name__}): {exc}", file=sys.stderr)
         sys.exit(1)
 
     PID_FILE.unlink()
 
     if RAW_VIDEO.exists() and RAW_VIDEO.stat().st_size > 0:
         print(f"Raw recording saved: {RAW_VIDEO} ({RAW_VIDEO.stat().st_size // 1024} KB)")
-        process()
+        _process()
     else:
         print("Raw recording file empty or missing.", file=sys.stderr)
         sys.exit(1)
 
 
 def process() -> None:
+    with lifecycle_lock():
+        _process()
+
+
+def _process() -> None:
+    if PID_FILE.exists():
+        raise SystemExit("Recording may still be active; stop it before transcoding")
     if not RAW_VIDEO.exists():
         print(f"File not found: {RAW_VIDEO}", file=sys.stderr)
         sys.exit(1)

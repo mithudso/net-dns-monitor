@@ -109,7 +109,7 @@ a real default.
 ## `tests/`
 
 Plain pytest functions with injected fakes. The suite runs offline;
-`docs/TESTING.md` has the commands and the count (`2792`).
+`docs/TESTING.md` has the commands and the count (`3193`).
 
 `tests/conftest.py` (high) holds four autouse fixtures. Each one keeps every
 test away from something real:
@@ -243,3 +243,18 @@ NAT in pf anchor `com.apple/custom_nat`. It is a separate implementation from
 | `SECURITY.md` | | How to report a vulnerability. |
 | `PULL_REQUEST_TEMPLATE.md` | | Pull request checklist. |
 | `ISSUE_TEMPLATE/bug_report.md`, `ISSUE_TEMPLATE/feature_request.md` | | Issue templates. The bug report asks which build (direct or Mac App Store); the feature request asks whether the idea works in the store build. |
+
+## Current fleet and remediation components
+
+The complete runtime module map is [COMPONENTS.md](COMPONENTS.md), checked against
+the current source census. `fleet_protocol.py`, `fleet_keys.py`, `fleet_client.py`,
+`fleet_server.py` and `fleet_store.py` implement per-machine HMAC authentication,
+signed acknowledgements, bounded retry queues and local rotated event storage.
+`headless.py` composes the monitor and optional receiver outside the menu-bar run
+loop. `remediation_scripts.py`, `remediation_editor.py`, `remediation_window.py`
+and `remediations/` implement validated script metadata, an injected execution
+context and the existing direct-build editor. `ui_catalog.py`, `ui_style.py` and
+`user_notify.py` supply the current UI actions, layout helpers and notification
+backend. The source census includes packaging privacy metadata and maintenance
+regressions. Static dossier cards remain shallow; a complete path census does
+not claim full deep retrieval cards.

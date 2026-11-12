@@ -111,6 +111,15 @@ class FleetServer:
         )
 
     def _read_loop(self) -> None:
+        try:
+            self._receive_loop()
+        finally:
+            try:
+                self.store.save()
+            except Exception:  # noqa: BLE001 - shutdown persistence is best effort
+                traceback.print_exc()
+
+    def _receive_loop(self) -> None:
         sock = self.socket
         if sock is None:
             return

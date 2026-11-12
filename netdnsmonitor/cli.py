@@ -204,10 +204,15 @@ def build_context(config: dict, run_fn: Callable = default_run):
 
 
 def list_services(run_fn: Callable) -> list:
+    services, _ = _discover_services(run_fn)
+    return services
+
+
+def _discover_services(run_fn: Callable) -> tuple[list, bool]:
     result = run_fn(["networksetup", "-listnetworkserviceorder"])
     if getattr(result, "returncode", 1) != 0:
-        return []
-    return parse_service_order(getattr(result, "stdout", "") or "")
+        return [], False
+    return parse_service_order(getattr(result, "stdout", "") or ""), True
 
 
 def run_catalog_command(key: str, values: dict, run_fn: Callable = subprocess.run) -> str:
@@ -300,14 +305,30 @@ def interface_rows(run_fn, prober, meter=None, measure: bool = False, services=N
 
 def cmd_interfaces(args, config, out) -> int:
     prober, meter, _, run_fn = build_context(config)
-    rows = interface_rows(run_fn, prober, meter, measure=args.bench)
+    services, discovered = _discover_services(run_fn)
+    if not discovered:
+        out(
+            json.dumps({"error": "service discovery failed"})
+            if args.json
+            else "failed: could not read the network service order"
+        )
+        return 1
+    rows = interface_rows(run_fn, prober, meter, measure=args.bench, services=services)
     out(json.dumps(rows, indent=2) if args.json else render_interfaces(rows))
     return 0
 
 
 def cmd_bench(args, config, out) -> int:
     prober, meter, _, run_fn = build_context(config)
-    rows = interface_rows(run_fn, prober, meter, measure=True)
+    services, discovered = _discover_services(run_fn)
+    if not discovered:
+        out(
+            json.dumps({"error": "service discovery failed"})
+            if args.json
+            else "failed: could not read the network service order"
+        )
+        return 1
+    rows = interface_rows(run_fn, prober, meter, measure=True, services=services)
     out(json.dumps(rows, indent=2) if args.json else render_interfaces(rows))
     return 0
 
@@ -524,6 +545,8 @@ def cmd_headless(args, config, out) -> int:
         saved = headless.store_key_from_environment()
         if saved:
             out(saved)
+            if saved.startswith("failed:"):
+                return 1
         result = headless.install_agent(
             config_path, sys.executable, source_root, start=not args.no_start
         )

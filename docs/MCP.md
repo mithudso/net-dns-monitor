@@ -57,3 +57,11 @@ embedding function; it does not expose a Chroma HTTP server. That describes the
 implemented boundary, not a certification that the dependency is safe. Recheck
 upstream advisories before deliberately enabling the optional tools. Keep
 existing indexes and paused services unchanged during static maintenance.
+
+The watcher batches from the first pending event with one timer and serial
+execution, so ongoing saves cannot postpone all work indefinitely. Directory
+move/deletion events reconcile eligible descendants. An explicit watcher root
+is passed through the indexer CLI and selects that root's own .chroma_db;
+default calls remain anchored to this checkout. Root-specific source keys,
+locks and collection selection must stay aligned. Synthetic tests use fake
+collections and embedding factories; they do not validate a live index.

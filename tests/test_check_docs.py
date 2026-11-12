@@ -180,44 +180,16 @@ def test_static_census_excludes_even_tracked_ignored_private_files(tmp_path, mon
     subprocess.run(
         ["git", "add", "--force", "private.txt"], cwd=tmp_path, check=True, capture_output=True
     )
-    empty_hooks = tmp_path / "empty-template"
-    effective = subprocess.check_output(
-        [
-            "git",
-            "-c",
-            f"core.hooksPath={empty_hooks}",
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-path",
-            "hooks",
-        ],
-        cwd=tmp_path,
-        text=True,
-    ).strip()
-    assert Path(effective) == empty_hooks and not list(empty_hooks.iterdir())
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            f"core.hooksPath={empty_hooks}",
-            "-c",
-            "user.name=Synthetic Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "commit",
-            "-m",
-            "Synthetic documentation fixture",
-        ],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-    )
+    # Staged files are sufficient for the census; no fixture commit is needed.
     spec = importlib.util.spec_from_file_location(
         "fixture_dossier",
         Path(__file__).resolve().parent.parent / "scripts/generate_static_dossier.py",
     )
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
+    monkeypatch.setattr(
+        generator, "git", lambda *args: "synthetic" if args[0] == "rev-parse" else ""
+    )
     monkeypatch.setattr(generator, "ROOT", tmp_path)
     monkeypatch.setattr(generator, "OUT", tmp_path / "docs/llms")
     generator.main()

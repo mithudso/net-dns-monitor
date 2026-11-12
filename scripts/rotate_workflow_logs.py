@@ -77,7 +77,26 @@ def swap_files(path: Path) -> list[Path]:
 
 
 def split_sections(text: str) -> tuple[str, list[str]]:
-    starts = [m.start() for m in SECTION.finditer(text)]
+    # Journal prompts often quote Markdown examples. A version heading inside
+    # a fenced block belongs to its containing entry, not to the archive index.
+    starts = []
+    fence = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
+        if fence is not None:
+            if (
+                marker
+                and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence)
+                and not marker[2].strip()
+            ):
+                fence = None
+        elif marker and (marker[1][0] != "`" or "`" not in marker[2]):
+            fence = marker[1]
+        elif SECTION.match(line):
+            starts.append(offset)
+        offset += len(line)
     if not starts:
         return text, []
     bounds = starts + [len(text)]
@@ -114,6 +133,8 @@ def rotate(
     dry_run: bool = False,
 ) -> str:
     """Return a one-line outcome. Never raises for a missing or locked journal."""
+    if keep < 1:
+        raise ValueError("keep must be at least 1")
     if not path.exists():
         return f"{path.name}: missing, skipped"
     with journal_lock(path):

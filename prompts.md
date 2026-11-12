@@ -191,3 +191,13 @@ Prompt:
 Delta: 1
 
 User override: “Stop after you finish this repo.” The release in progress selected by the coordinator is YouTube. Pause NetDNS at a recoverable draft checkpoint; do not finish or merge it.
+
+## v23 - 2026-11-12 - Selected maintenance resume
+
+Delta: 1
+
+Prompt scope from the owner, preserved by the selected resume coordinator:
+
+> Run repo-bootstrapper and code-deep-optimizer on exactly skills-explorer, mdb-expertise-search, net-dns-monitor, storytui and skills-tui using agent fan-out.
+
+This checkout owns only NetDNS. The parent receipt retains the exact full request.

@@ -166,7 +166,7 @@ ok "built $BUNDLE"
 # analysis is static, so a module reached only dynamically can silently vanish.
 for module in app dashboard forensic_log peers peer_net ping net_stats history graphs settings_window mini_window; do
     [ -f "$BUNDLE/Contents/Resources/lib/python3."*"/netdnsmonitor/$module.py" ] \
-        || warn "netdnsmonitor/$module.py is not in the bundle"
+        || die "required netdnsmonitor/$module.py is not in the bundle"
 done
 ok "bundle contents verified"
 

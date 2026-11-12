@@ -148,7 +148,9 @@ def bootpd_status(run_fn: RunFn = subprocess.run) -> str:
         return f"bootpd job: not checked ({type(exc).__name__})"
     if getattr(result, "returncode", 1) == 0:
         return "bootpd job loaded (UDP 67 held)"
-    return "bootpd job not loaded"
+    if getattr(result, "returncode", 1) == 113:
+        return "bootpd job not loaded"
+    return "bootpd job: not checked (inspection failed)"
 
 
 def collect_diagnostics(run_fn: RunFn, wan: Optional[str], lan: Optional[str]) -> list:
@@ -259,7 +261,7 @@ def _router_target_class():
                 self._controller.on_ai_check()
 
             def onSaveConfig_(self, sender):
-                self._controller.on_save_config()
+                self._controller.on_save_config_async()
 
         _ROUTER_TARGET_CLASS = _RouterTarget
     return _ROUTER_TARGET_CLASS
@@ -630,6 +632,20 @@ class RouterWindowController:
         ok, message = self._save(values)
         self.append_log(message)
         return ok
+
+    def on_save_config_async(self) -> None:
+        """Capture UI values, then save inside the existing router action slot.
+
+        The synchronous bool API remains available to programmatic callers.
+        AppKit callbacks must not wait for reads, backups or config writes.
+        """
+        values = self._form_values()
+
+        def save():
+            _ok, message = self._save(values)
+            return message
+
+        self._router_action("Save config", save)
 
     def _router_action(self, label: str, action: Callable[[], object]) -> None:
         starter = getattr(self.app, "_start_router_worker", None)

@@ -175,11 +175,11 @@ def test_watcher_spawns_the_running_interpreter_not_bare_python3(tmp_path):
     assert timeout == watcher.INDEXER_TIMEOUT_SECONDS
 
 
-def test_watcher_spawns_nothing_for_a_shared_object_or_a_directory(tmp_path):
+def test_watcher_spawns_nothing_for_a_shared_object_or_directory_modification(tmp_path):
     ran = []
     run = lambda argv, timeout, check: ran.append(argv)  # noqa: E731
     watcher.handle_event("modified", str(tmp_path / "m.so"), "", False, str(tmp_path), run)
-    watcher.handle_event("created", str(tmp_path / "pkg"), "", True, str(tmp_path), run)
+    watcher.handle_event("modified", str(tmp_path / "pkg"), "", True, str(tmp_path), run)
     watcher.handle_event("modified", str(tmp_path / "dist" / "a.py"), "", False, str(tmp_path), run)
     assert ran == []
 
@@ -321,7 +321,7 @@ def test_a_burst_of_events_for_one_path_runs_once():
     for timer in FakeTimer.made:
         timer.fire()
     assert handled == [("modified", "/r/a.py", "", False), ("modified", "/r/b.py", "", False)]
-    assert [t.delay for t in FakeTimer.made] == [1.0] * 4
+    assert [t.delay for t in FakeTimer.made] == [1.0]
 
 
 def test_a_handler_error_does_not_escape_the_timer(capsys):

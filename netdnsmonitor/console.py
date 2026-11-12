@@ -573,6 +573,26 @@ def _directory_argument(argument: str) -> str:
     return "".join(expanded)
 
 
+def _has_shell_operator(argument: str) -> bool:
+    quote = None
+    index = 0
+    while index < len(argument):
+        char = argument[index]
+        if char == "\\" and quote != "'" and index + 1 < len(argument):
+            following = argument[index + 1]
+            if quote is None or following in ("$", "`", '"', "\\", "\n"):
+                index += 2
+                continue
+        if char in ("'", '"') and (quote is None or quote == char):
+            quote = None if quote == char else char
+        elif (quote != "'" and (char == "`" or argument.startswith("$(", index))) or (
+            quote is None and char in ";&|><\n"
+        ):
+            return True
+        index += 1
+    return False
+
+
 def _change_directory(argument: str, state: ConsoleState) -> str:
     """`cd` cannot be a subprocess: the child's directory dies with the child.
 
@@ -585,7 +605,7 @@ def _change_directory(argument: str, state: ConsoleState) -> str:
     # it: handing the whole tail to the directory check reports `no such
     # directory: /tmp && ls`, which reads as "that directory is missing" rather
     # than "this console did not run your second command". Say which it is.
-    if any(token in argument for token in SHELL_METACHARACTERS):
+    if _has_shell_operator(argument):
         return (
             "cd: this is a built-in and cannot chain -- run the `cd` on its own "
             "line, then the rest."

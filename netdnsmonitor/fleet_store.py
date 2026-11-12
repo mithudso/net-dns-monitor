@@ -84,6 +84,8 @@ class FleetStore:
         self.machines: dict[str, dict[str, Any]] = {}
         self.refused: dict[str, int] = {}
         self.started_at = now_fn()
+        self._refused_saved_at = float("-inf")
+        self._silence_save_pending = False
         self._recent: dict[str, deque[float]] = {}
         self.load()
 
@@ -148,7 +150,10 @@ class FleetStore:
 
     def note_refused(self, reason: str) -> None:
         self.refused[reason] = self.refused.get(reason, 0) + 1
-        self.save()
+        now = self.now_fn()
+        if now - self._refused_saved_at >= 30.0:
+            self._refused_saved_at = now
+            self.save()
 
     def _rate_ok(self, machine_id: str, now: float) -> bool:
         window = self._recent.setdefault(machine_id, deque())
@@ -209,6 +214,19 @@ class FleetStore:
         version = message["data"].get("version")
         if version:
             machine["version"] = version
+        if was_silent:
+            self._event(
+                ONLINE,
+                machine,
+                now,
+                status=message["data"].get("status") or machine.get("status", proto.STATUS_UNKNOWN),
+                signed=message["signed"],
+            )
+            # Retain successful return-append progress before a possible second
+            # append (inferred resolution). Do not retain this message's ID yet.
+            # This is retry progress within this process, not crash atomicity.
+            previous.update(machine)
+
         if message["eid"] and not duplicate:
             machine["recent_event_ids"] = (machine["recent_event_ids"] + [message["eid"]])[
                 -RECENT_EVENT_IDS:
@@ -221,7 +239,7 @@ class FleetStore:
 
         kind = message["t"]
         if kind == proto.HELLO:
-            self._on_hello(machine, message, now, is_new, was_silent)
+            self._on_hello(machine, message, now, is_new)
         elif kind == proto.INCIDENT:
             self._on_incident(machine, message, now)
         elif kind == proto.RESOLVED:
@@ -247,10 +265,10 @@ class FleetStore:
             }
         )
 
-    def _on_hello(self, machine, message, now, is_new, was_silent) -> None:
+    def _on_hello(self, machine, message, now, is_new) -> None:
         status = message["data"].get("status") or proto.STATUS_UNKNOWN
         machine["status"] = status
-        if is_new or was_silent:
+        if is_new:
             self._event(ONLINE, machine, now, status=status, signed=message["signed"])
         if status == proto.STATUS_HEALTHY and machine.get("open_incident"):
             # The resolved event was lost, or never sent. Close on the heartbeat's
@@ -327,8 +345,6 @@ class FleetStore:
             last = machine.get("last_seen_epoch")
             if last is None or machine.get("silent") or now - last <= self.stale_seconds:
                 continue
-            machine["silent"] = True
-            newly_silent.append(machine["id"])
             self._event(
                 SILENT,
                 machine,
@@ -337,8 +353,14 @@ class FleetStore:
                 last_status=machine.get("status"),
                 open_incident=bool(machine.get("open_incident")) or None,
             )
-        if newly_silent:
+            machine["silent"] = True
+            newly_silent.append(machine["id"])
+            self._silence_save_pending = True
+        if self._silence_save_pending:
+            # The event is already appended. Retry only its state save after a
+            # disk error, including when no further transition arrives.
             self.save()
+            self._silence_save_pending = False
         return newly_silent
 
 

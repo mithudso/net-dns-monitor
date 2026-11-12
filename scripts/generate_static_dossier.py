@@ -105,12 +105,26 @@ def census_paths(root: Path | None = None) -> list[str]:
     return [path for path in tracked_paths(root) if not path.startswith("docs/llms/")]
 
 
+def text_path(path: str) -> str:
+    """Frame control characters and dossier syntax in an unambiguous JSON string."""
+    return json.dumps(path, ensure_ascii=True)
+
+
+def safe_output(path: Path) -> None:
+    relative = path.relative_to(ROOT)
+    current = ROOT
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"unsafe dossier output: symlink {current}")
+
+
 def provenance(path: str) -> str:
     try:
         size = (ROOT / path).stat().st_size
     except FileNotFoundError:
         return "[src: git]"
-    return f"[src: {path}#L1]" if size else "[src: git]"
+    return f"[src: {text_path(path)}#L1]" if size else "[src: git]"
 
 
 def role(path: str) -> str:
@@ -128,6 +142,7 @@ def role(path: str) -> str:
 
 
 def main() -> None:
+    safe_output(OUT / "manifest.json")
     if OUT.exists() and (OUT / "manifest.json").exists():
         previous = json.loads((OUT / "manifest.json").read_text())
         if previous.get("generator") != "scripts/generate_static_dossier.py":
@@ -195,14 +210,14 @@ def main() -> None:
         "[src: scripts/semantic_indexer.py#L1]\n",
         "llms-filemap.txt": header("complete source census with shallow cards")
         + "\n".join(
-            f"- {card['path']} | {card['role']} | {card['importance']} | shallow. "
+            f"- {text_path(card['path'])} | {card['role']} | {card['importance']} | shallow. "
             f"{card['provenance']} Role and importance are retrieval hints. [asserted]"
             for card in cards
         )
         + "\n",
         "llms-infra.txt": header("infrastructure retrieval map")
         + "\n".join(
-            f"- {card['path']}. {card['provenance']}"
+            f"- {text_path(card['path'])}. {card['provenance']}"
             for card in cards
             if card["role"] in {"infra", "config", "tooling"}
         )
@@ -246,6 +261,12 @@ def main() -> None:
         "redactions": ["absolute checkout path omitted; ignored paths and symlinks excluded"],
         "budget_used": "Static local census; no semantic service or source execution.",
     }
+    destinations = [OUT / name for name in emitted]
+    destinations += [
+        ROOT / name for name in ("llms.txt", "llms-small.txt", "llms-facts.txt", "llms-full.txt")
+    ]
+    for destination in destinations:
+        safe_output(destination)
     OUT.mkdir(parents=True, exist_ok=True)
     for name, content in texts.items():
         (OUT / name).write_text(content, encoding="utf-8")

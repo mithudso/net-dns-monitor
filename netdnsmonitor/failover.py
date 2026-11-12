@@ -22,6 +22,7 @@ Three properties this module is built around:
    which case the stale record is discarded and the reason is reported.
 """
 
+import fcntl
 import json
 import logging
 import math
@@ -34,6 +35,7 @@ from typing import Callable, Optional
 
 from netdnsmonitor.failover_policy import (
     BACKUP,
+    BUDGET_WINDOW_SECONDS,
     FAILBACK,
     FAILOVER,
     PREFERRED,
@@ -199,6 +201,41 @@ def apply_service_order(run_fn, services, new_order: list[str]) -> str:
     return f"ok: service order now starts with '{new_order[0]}'"
 
 
+class _SwitchLock:
+    """Nonblocking thread and process exclusion across the whole switch."""
+
+    def __init__(self, path):
+        self.path = path + ".lock"
+        self.thread_lock = threading.Lock()
+        self.descriptor = None
+        self.error = None
+
+    def acquire(self, blocking=False):
+        if not self.thread_lock.acquire(blocking=blocking):
+            return False
+        self.error = None
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            self.descriptor = os.open(self.path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as exc:
+            if not isinstance(exc, BlockingIOError):
+                self.error = (
+                    "failed: could not acquire switch state lock (" + type(exc).__name__ + ")"
+                )
+            if self.descriptor is not None:
+                os.close(self.descriptor)
+                self.descriptor = None
+            self.thread_lock.release()
+            return False
+
+    def release(self):
+        os.close(self.descriptor)
+        self.descriptor = None
+        self.thread_lock.release()
+
+
 class FailoverStore:
     """Persists only what cannot be re-derived from the live system: the order
     that was in place before the first failover, the switch timestamps the
@@ -288,7 +325,7 @@ class FailoverStore:
                         "original_order": self.original_order,
                         "enabled_by_us": self.enabled_by_us,
                         "last_switch_at": self.last_switch_at,
-                        "switch_times": self.switch_times[-32:],
+                        "switch_times": self.switch_times,
                         "failback_paused": self.failback_paused,
                     },
                     indent=2,
@@ -326,6 +363,7 @@ class FailoverStore:
 
     def record_switch(self, at: float) -> None:
         self.last_switch_at = at
+        self.switch_times = [t for t in self.switch_times if at - t < BUDGET_WINDOW_SECONDS]
         self.switch_times.append(at)
         self.save()
 
@@ -387,7 +425,7 @@ class NetworkFailover:
         # pre-write order, self-heals the record away, and the switch that then
         # lands can never be failed back. Acquired non-blocking, so a tick
         # never waits behind a switch that takes several subprocess timeouts.
-        self._lock = threading.Lock()
+        self._lock = _SwitchLock(self.store.path)
         # Set once an attempt reaches the write, so the tick only surfaces
         # outcomes that changed (or tried to change) something.
         self._wrote = False
@@ -554,7 +592,7 @@ class NetworkFailover:
         if not self.auto_enabled:
             return "disabled: automatic switching is off (manual switching still works)"
         if not self._lock.acquire(blocking=False):
-            return _BUSY
+            return self._lock.error or _BUSY
         try:
             self.store.refresh()
             return self._attempt(classification=classification, allow=FAILOVER)
@@ -575,7 +613,7 @@ class NetworkFailover:
         failback; attempt_failback says why and what ends the pause.
         """
         if not self._lock.acquire(blocking=False):
-            return _BUSY
+            return self._lock.error or _BUSY
         try:
             self.store.refresh()
             return self._switch_now(target, service)

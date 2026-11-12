@@ -164,6 +164,7 @@ def log_show_command(window: str, errors_only: bool = True) -> list[str]:
     return [
         "/usr/bin/log",
         "show",
+        *([] if errors_only else ["--info", "--debug"]),
         "--style",
         "compact",
         "--last",
@@ -284,6 +285,11 @@ def coalesce(entries: Iterable[dict]) -> list[dict]:
             grouped[key] = row
             continue
         existing["count"] += 1
+        severity_rank = {"error": 1, "fault": 2}
+        if severity_rank.get(entry.get("severity"), 0) > severity_rank.get(
+            existing.get("severity"), 0
+        ):
+            existing["severity"] = entry["severity"]
         # Later entries arrive in log order, so the last one seen is the newest.
         existing["time"] = entry.get("time", existing.get("time", ""))
         existing["timestamp"] = entry.get("timestamp", existing.get("timestamp", ""))
@@ -415,6 +421,8 @@ class LogBuffer:
             self._seen.add(key)
             self._entries.append(entry)
             added.append(entry)
+        # Stable sorting keeps equal-timestamp input order and accepts clock rollback.
+        self._entries.sort(key=lambda entry: entry.get("timestamp", ""))
         self._trim()
         if poll_keys:
             self._previous_poll = poll_keys

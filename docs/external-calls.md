@@ -1,6 +1,6 @@
 # External calls
 
-This is the inventory of every call in `netdnsmonitor/` and `scripts/appstore/`
+This is the maintained inventory of effectful call families in `netdnsmonitor/` and `scripts/appstore/`
 that leaves the Python process: subprocesses, sockets, HTTP, SMTP, the Anthropic
 SDK, and the macOS framework calls with an effect outside the app (NSWorkspace,
 the Keychain, notifications, the Dock). `docs/integrations-and-assumptions.md`
@@ -9,7 +9,9 @@ describes the services and hosts behind these calls.
 Line numbers were checked against the working tree on 2026-09-14, at commit
 `a6aab33`. Each number points at the call or at its
 argument list. Numbers drift with every edit. If a number no longer matches,
-search the file for the quoted argv.
+search the file for the quoted argv. The current-symbol supplement below
+records the later fleet, headless and remediation boundaries. Historical line
+anchors have not all been remeasured.
 
 ## How to read the columns
 
@@ -159,3 +161,22 @@ and to source runs only.
 - The router shell scripts (`router/scripts/`, `unbound/install.sh`). They are
   not Python and no test runs them; `docs/integrations-and-assumptions.md` lists
   their assumptions.
+
+## Current-symbol supplement — 2026-11-12
+
+| Boundary | Timeout and retry | Idempotency / failure / observation | Coverage |
+|---|---|---|---|
+| `fleet_client.default_transport`, `FleetReporter._deliver` | Bounded acknowledgement wait; two send attempts per delivery, then queued heartbeat retries | Event IDs preserve acknowledgement identity. Bounded outbox can drop oldest entries; counters and `last_error` expose failures. Sending does not prove persistence. | `tests/test_fleet.py`, loopback integration on fresh CI |
+| `FleetServer.start`, `_read_loop`, `_ack` | Socket receive timeout permits shutdown; no promise of delivery for an individual UDP acknowledgement | Authentication precedes acceptance. Duplicate IDs can be acknowledged without replaying accepted state. Refused malformed packets are data. Storage failures are recorded; no crash-atomic exactly-once claim. | `tests/test_fleet.py` |
+| `FleetStore._append` | Local filesystem; no network retry | Rotates at the configured implementation bound. Recovery inference is labeled. Disk errors do not establish a saved event. | `tests/test_fleet.py` with scratch stores |
+| `headless.install_agent`, `uninstall_agent` | Bounded injected launchctl runner | Writes/removes only the requested user LaunchAgent. Returns explicit status; CLI returns failure for failed status. No automatic maintenance activation. | `tests/test_fleet.py`, core regressions with fake runners |
+| `remediation_scripts` executor/context | Per-step configured timeout through injected runner | Script results retain `failed`, `partial`, `NEEDS_PRIVILEGE` and `NOT_AUTOMATED`. A recovery does not credit the last step. | `tests/test_remediation_scripts.py`, `test_repair_executor.py` |
+| `dns_query._answer_result`, `query_public_dns_any` | Shared query deadline and fallback resolver budget | NXDOMAIN and successful no-A answers are negative. SERVFAIL, REFUSED, malformed and mismatched replies are unknown (`None`), so fallback can continue. | `tests/test_dns_query.py`, core regressions |
+
+Other call families retain their documented per-operation policy above: no
+universal retry or central-server guarantee is implied. Local logs, structured
+results and the existing dashboard are the observability surfaces. Python source
+and these inventories document operations; no Node operations registry, new
+datastore or server dashboard is introduced. Requests that need a live host,
+privilege prompt, Keychain, signing identity or actual delivery remain manual
+operating procedures and are outside automated maintenance validation.

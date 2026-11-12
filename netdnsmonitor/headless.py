@@ -231,7 +231,11 @@ def run_headless(
     stop: Optional[threading.Event] = None,
     build_app_parts: Optional[Callable[..., dict]] = None,
 ) -> int:
-    """Build everything from the config and run until stopped. Exit code."""
+    """Build everything from the config and run until stopped. Exit code.
+
+    build_app_parts(config, capabilities) may supply credential_store,
+    state_machine, notifier and failover instead of the default builders.
+    """
     from netdnsmonitor import app as app_module
     from netdnsmonitor import distribution
     from netdnsmonitor.config import load_config
@@ -246,18 +250,25 @@ def run_headless(
         print(f"config error: {config_path}: {type(exc).__name__}", file=sys.stderr)
         return 2
 
-    credential_store = app_module.default_credential_store()
-    failover = app_module.build_failover(config)
-    remediation_store = app_module.build_remediation_store(capabilities, config=config)
-    state_machine = app_module.build_state_machine(
-        config,
-        failover,
-        capabilities=capabilities,
-        credential_store=credential_store,
-        consent=None,
-        remediation_store=remediation_store,
-    )
-    notifier = app_module.build_notifier(config, env=credential_store.as_env())
+    if build_app_parts is not None:
+        parts = build_app_parts(config, capabilities)
+        credential_store = parts["credential_store"]
+        failover = parts["failover"]
+        state_machine = parts["state_machine"]
+        notifier = parts["notifier"]
+    else:
+        credential_store = app_module.default_credential_store()
+        failover = app_module.build_failover(config)
+        remediation_store = app_module.build_remediation_store(capabilities, config=config)
+        state_machine = app_module.build_state_machine(
+            config,
+            failover,
+            capabilities=capabilities,
+            credential_store=credential_store,
+            consent=None,
+            remediation_store=remediation_store,
+        )
+        notifier = app_module.build_notifier(config, env=credential_store.as_env())
     secret = fleet_key(credential_store)
 
     monitor = HeadlessMonitor(
@@ -267,32 +278,34 @@ def run_headless(
         failover=failover,
         failback_enabled=bool(failover and capabilities.network_order_write),
     )
-    if config["fleet_reporting_enabled"]:
-        monitor.reporter = build_reporter(config, secret, monitor.status)
-        monitor.reporter.start()
-        if not secret and not config["fleet_allow_unsigned"]:
-            print(
-                "[fleet] no FLEET_MACHINE_KEY: reports go out unsigned and a server "
-                "that requires signatures will refuse them",
-                file=sys.stderr,
-                flush=True,
-            )
-
     server = None
-    if config["fleet_server_enabled"]:
-        server = start_server(config)
-
-    for name in (signal.SIGTERM, signal.SIGINT):
-        with contextlib.suppress(ValueError):  # not the main thread
-            signal.signal(name, lambda *_: stop.set())
-    print("[headless] running; Ctrl-C to stop", file=sys.stderr, flush=True)
     try:
+        if config["fleet_reporting_enabled"]:
+            monitor.reporter = build_reporter(config, secret, monitor.status)
+            monitor.reporter.start()
+            if not secret and not config["fleet_allow_unsigned"]:
+                print(
+                    "[fleet] no FLEET_MACHINE_KEY: reports go out unsigned and a server "
+                    "that requires signatures will refuse them",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        if config["fleet_server_enabled"]:
+            server = start_server(config)
+
+        for name in (signal.SIGTERM, signal.SIGINT):
+            with contextlib.suppress(ValueError):  # not the main thread
+                signal.signal(name, lambda *_: stop.set())
+        print("[headless] running; Ctrl-C to stop", file=sys.stderr, flush=True)
         monitor.run(stop)
     finally:
-        if monitor.reporter is not None:
-            monitor.reporter.stop()
-        if server is not None:
-            server.stop()
+        try:
+            if monitor.reporter is not None:
+                monitor.reporter.stop()
+        finally:
+            if server is not None:
+                server.stop()
     return 0
 
 
@@ -406,6 +419,22 @@ def install_agent(
     return f"installed and running: {path}"
 
 
+def _unload_agent(target: str, run_fn: Callable) -> Optional[str]:
+    """Return failure data unless launchctl confirms removal or an absent job."""
+    try:
+        result = run_fn([LAUNCHCTL, "bootout", target], capture_output=True, text=True, timeout=20)
+        if result.returncode == 0:
+            return None
+        # A failed bootout can also mean the job was already absent. Only an
+        # explicit not-found diagnostic on a separate read establishes that.
+        status = run_fn([LAUNCHCTL, "print", target], capture_output=True, text=True, timeout=20)
+        if status.returncode != 0 and "Could not find service" in (status.stderr or ""):
+            return None
+        return "failed: service unload was not confirmed; the service may remain active"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"failed: service unload was not confirmed ({type(exc).__name__}); the service may remain active"
+
+
 def uninstall_agent(
     agents_dir: Optional[str] = None,
     run_fn: Callable = subprocess.run,
@@ -413,8 +442,9 @@ def uninstall_agent(
 ) -> str:
     path = agent_path(agents_dir)
     domain = f"gui/{os.getuid() if uid is None else uid}"
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        run_fn([LAUNCHCTL, "bootout", f"{domain}/{AGENT_LABEL}"], capture_output=True, timeout=20)
+    failure = _unload_agent(f"{domain}/{AGENT_LABEL}", run_fn)
+    if failure:
+        return failure
     try:
         os.remove(path)
     except FileNotFoundError:

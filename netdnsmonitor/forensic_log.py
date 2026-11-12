@@ -42,6 +42,7 @@ import json
 import os
 import sys
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -93,8 +94,8 @@ class ForensicRecorder:
         self.max_journal_bytes = int(max_journal_bytes)
         self._episode: Optional[dict] = None
         self._observations_kept = 0
-        # Exception class name of the latest failed journal append, or None once
-        # an append succeeds. Never the message.
+        # Exception class name of the latest failed timestamp or journal append,
+        # or None once an append succeeds. Never the message.
         self.journal_error: Optional[str] = None
 
     @property
@@ -122,8 +123,13 @@ class ForensicRecorder:
         incident pipeline, and losing the network is not a reason to also lose
         the monitor.
         """
+        try:
+            at = self.clock().isoformat()
+        except Exception as exc:  # noqa: BLE001 - injected clock is a recording dependency
+            self.journal_error = type(exc).__name__
+            return None
         event = {
-            "at": self.clock().isoformat(),
+            "at": at,
             "kind": kind,
             "detector": detector,
             "reason": reason,
@@ -215,7 +221,7 @@ class ForensicRecorder:
     def _write_episode(self, episode: dict) -> Optional[dict]:
         try:
             os.makedirs(self.episodes_dir, exist_ok=True)
-            stamp = episode["started_at"].replace(":", "-")
+            stamp = episode["started_at"].replace(":", "-") + "-" + uuid.uuid4().hex
             json_path = os.path.join(self.episodes_dir, f"{stamp}-episode.json")
             markdown_path = os.path.join(self.episodes_dir, f"{stamp}-episode.md")
             self.writer(json_path, json.dumps(episode, indent=2, default=str))

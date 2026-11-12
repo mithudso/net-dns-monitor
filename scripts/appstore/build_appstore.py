@@ -134,7 +134,10 @@ def minimum_system_version(
     Raising the plist to the binary's minos would silently drop macOS 26 buyers;
     lowering the binary's minos by hand would crash on 26. So the build stops.
     """
-    if tuple(highest) > tuple(supported):
+    width = max(len(highest), len(supported))
+    binary_floor = tuple(highest) + (0,) * (width - len(highest))
+    supported_floor = tuple(supported) + (0,) * (width - len(supported))
+    if binary_floor > supported_floor:
         raise SystemExit(
             f"a bundled binary needs macOS {format_version(highest)}, above the supported "
             f"{format_version(supported)}. Build from a python-build-standalone venv "
@@ -348,12 +351,32 @@ def _imported_package_modules(node: ast.AST) -> list[str]:
     return []
 
 
+def module_nodes(tree):
+    """Walk statements executed during import, excluding deferred bodies."""
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.If) and (
+            isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+            or isinstance(node.test, ast.Attribute)
+            and isinstance(node.test.value, ast.Name)
+            and node.test.value.id == "typing"
+            and node.test.attr == "TYPE_CHECKING"
+        ):
+            for statement in node.orelse:
+                yield statement
+                yield from module_nodes(statement)
+            continue
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            yield from module_nodes(node)
+
+
 def module_level_imports_of_omitted(
     package: Path, omitted: Iterable[str] = STORE_OMITTED_MODULES
 ) -> list[str]:
     """Remaining modules that import an omitted module before any function runs.
 
-    Only the module body is read, so an import inside a function (which the
+    Module-executed compound statements are read; an import inside a function (which the
     store build never reaches) is allowed and one at the top of a file (which
     would raise ImportError at launch) is not.
     """
@@ -363,7 +386,7 @@ def module_level_imports_of_omitted(
         if source.stem in omitted:
             continue
         tree = ast.parse(source.read_text(encoding="utf-8"))
-        for node in tree.body:
+        for node in module_nodes(tree):
             for name in _imported_package_modules(node):
                 if name in omitted:
                     problems.append(f"{source.name}:{node.lineno} -> {name}")
@@ -522,15 +545,19 @@ def icns_types(data: bytes) -> set[str]:
     if len(data) < 8 or data[:4] != b"icns":
         raise ValueError("not an ICNS file")
     total = int.from_bytes(data[4:8], "big")
+    if total != len(data):
+        raise ValueError("corrupt ICNS container length")
     types: set[str] = set()
     offset = 8
     while offset + 8 <= min(total, len(data)):
         kind = data[offset : offset + 4].decode("ascii", "replace")
         length = int.from_bytes(data[offset + 4 : offset + 8], "big")
-        if length < 8:
+        if length < 8 or offset + length > total:
             raise ValueError(f"corrupt ICNS element {kind!r}")
         types.add(kind)
         offset += length
+    if offset != total:
+        raise ValueError("corrupt ICNS trailing bytes")
     return types
 
 
@@ -845,35 +872,51 @@ def strip_external_rpaths(app: Path, binaries: Iterable[Path]) -> int:
     """
     removed = 0
     for binary in binaries:
-        for rpath in external_rpaths(parse_rpaths(capture(["otool", "-l", binary]))):
+        for rpath in dict.fromkeys(external_rpaths(parse_rpaths(capture(["otool", "-l", binary])))):
             run(["install_name_tool", "-delete_rpath", rpath, binary])
             removed += 1
     return removed
 
 
+def otool_slices(output: str) -> dict[str, str]:
+    """Keep universal-binary load commands in their architecture namespace."""
+    slices: dict[str, list[str]] = {}
+    arch = ""
+    for line in output.splitlines():
+        match = re.search(r"\(architecture ([^)]+)\):$", line)
+        if match:
+            arch = match.group(1)
+        slices.setdefault(arch, []).append(line)
+    return {arch: "\n".join(lines) for arch, lines in slices.items()}
+
+
 def check_linkage(app: Path, binaries: Iterable[Path]) -> list[str]:
     problems = []
     for binary in binaries:
-        libraries = parse_otool_libraries(capture(["otool", "-L", binary]))
-        rpaths = parse_rpaths(capture(["otool", "-l", binary]))
-        own = ""
-        id_output = capture(["otool", "-D", binary]).splitlines()
-        if len(id_output) > 1:
-            own = id_output[-1].strip()
-        where = binary.relative_to(app)
-        for rpath in external_rpaths(rpaths):
-            problems.append(f"{where} searches {rpath}")
-        for name in libraries:
-            if name == own:
-                continue
-            if name.startswith("@rpath/"):
-                if resolve_rpath_library(binary, name, rpaths, app) is None:
-                    problems.append(f"{where} links {name}, which no bundle rpath resolves")
-            elif name.startswith(BUNDLE_RELATIVE_RPATH_PREFIXES):
-                if resolve_direct_library(binary, name, app) is None:
-                    problems.append(f"{where} links {name}, which is missing or outside the bundle")
-            elif name in disallowed_libraries([name]):
-                problems.append(f"{where} links {name}")
+        libraries = otool_slices(capture(["otool", "-L", binary]))
+        loads = otool_slices(capture(["otool", "-l", binary]))
+        identities = otool_slices(capture(["otool", "-D", binary]))
+        for arch, output in libraries.items():
+            names = parse_otool_libraries(output)
+            rpaths = parse_rpaths(loads.get(arch, ""))
+            id_output = identities.get(arch, "").splitlines()
+            own = id_output[-1].strip() if len(id_output) > 1 else ""
+            where = str(binary.relative_to(app)) + (f" ({arch})" if arch else "")
+            for rpath in external_rpaths(rpaths):
+                problems.append(f"{where} searches {rpath}")
+            for name in names:
+                if name == own:
+                    continue
+                if name.startswith("@rpath/"):
+                    if resolve_rpath_library(binary, name, rpaths, app) is None:
+                        problems.append(f"{where} links {name}, which no bundle rpath resolves")
+                elif name.startswith(BUNDLE_RELATIVE_RPATH_PREFIXES):
+                    if resolve_direct_library(binary, name, app) is None:
+                        problems.append(
+                            f"{where} links {name}, which is missing or outside the bundle"
+                        )
+                elif name in disallowed_libraries([name]):
+                    problems.append(f"{where} links {name}")
     return problems
 
 

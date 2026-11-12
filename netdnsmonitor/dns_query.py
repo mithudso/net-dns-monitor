@@ -53,10 +53,10 @@ def _default_send_recv(packet: bytes, server: str, port: int, timeout: float) ->
 def _encode_query(domain: str, transaction_id: int) -> bytes:
     header = struct.pack(">HHHHHH", transaction_id, 0x0100, 1, 0, 0, 0)
     question = b""
-    for label in domain.strip(".").split("."):
-        # IDNA, not ASCII: a Unicode name has a wire form (xn-- labels), and a
-        # name that is merely unusual is not a name that failed to resolve.
-        encoded = label.encode("idna")
+    # Encode the complete name first: IDNA also maps Unicode dot equivalents
+    # to label separators. A single terminal root dot is optional.
+    ascii_domain = domain.encode("idna").removesuffix(b".")
+    for encoded in ascii_domain.split(b"."):
         # A label is at most 63 bytes on the wire: length bytes of 192 and
         # above are compression pointers, so a 200-byte label would encode as
         # a pointer into the packet and be answered as some other name. (255
@@ -129,6 +129,7 @@ def _answer_result(response: bytes, packet: bytes) -> Optional[bool]:
         offset += 4
         aliases = {}
         addresses = set()
+        referral = False
         for index in range(answers + authority + additional):
             owner, offset = _decode_name(response, offset)
             kind, record_class, _ttl, size = struct.unpack_from(">HHIH", response, offset)
@@ -136,6 +137,8 @@ def _answer_result(response: bytes, packet: bytes) -> Optional[bool]:
             end = offset + size
             if end > len(response):
                 return None
+            if kind == 2 and record_class == 1 and answers <= index < answers + authority:
+                referral = True
             if kind == 1 and record_class == 1:
                 if size != 4:
                     return None
@@ -166,7 +169,7 @@ def _answer_result(response: bytes, packet: bytes) -> Optional[bool]:
             if name in addresses:
                 return None if name in aliases else True
             if name not in aliases:
-                return False
+                return None if referral or name != expected_name else False
             name = aliases[name]
         return None
     except (IndexError, TypeError, ValueError, struct.error):

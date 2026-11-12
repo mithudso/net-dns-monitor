@@ -82,4 +82,4 @@ def test_keychain_item_is_deleted_when_read_raises(monkeypatch):
     monkeypatch.setattr(cred, "make_keychain_backend", lambda service: Backend())
     with pytest.raises(OSError):
         sp.keychain_round_trip()
-    assert calls == ["delete", "delete"]
+    assert calls == ["delete"]

@@ -140,7 +140,7 @@ def test_the_bootpd_check_reads_the_launchd_job_not_the_process_list():
     block = re.split(r"\bfi\b", block, maxsplit=1)[0]
     loaded, _, not_loaded = block.partition("else")
     assert "fail " in loaded and "UDP 67" in loaded
-    assert "pass " in not_loaded
+    assert "warn " in not_loaded and "unknown" in not_loaded
 
 
 def _check_block(code, tool):
@@ -186,13 +186,16 @@ def test_unbound_install_validates_sources_before_deploying_and_backs_up():
     assert "set -euo pipefail" in code
     check = code.index('unbound-checkconf "$UNBOUND_SRC"')
     test = code.index('dnsmasq --test -C "$DNSMASQ_SRC"')
-    first_deploy = code.index('deploy "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"')
+    first_deploy = code.index("\ndeploy_pair\n")
     assert check < first_deploy and test < first_deploy
-    assert code.index('deploy "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"') > first_deploy
+    pair = _function(code, "deploy_pair")
+    assert pair.index('deploy "$UNBOUND_SRC" "$first"') < pair.index(
+        'if ! deploy "$DNSMASQ_SRC" "$second"'
+    )
     deploy = _function(code, "deploy")
-    assert deploy.index('backup "$dst"') < deploy.index('cp "$src" "$dst"')
+    assert deploy.index('backup "$dst"') < deploy.index('cp -p "$src" "$staged"')
     # The only config copy is the guarded one inside deploy().
-    assert re.findall(r'\bcp "', code) == ['cp "']
+    assert re.findall(r'\bcp -p "\$src"', code) == ['cp -p "$src"']
 
 
 def test_unbound_install_never_copies_through_a_symlink():
@@ -202,7 +205,7 @@ def test_unbound_install_never_copies_through_a_symlink():
     """
     code = _code_lines(UNBOUND_INSTALL)
     deploy = _function(code, "deploy")
-    copy = deploy.index('cp "$src" "$dst"')
+    copy = deploy.index('cp -p "$src" "$staged"')
     assert deploy.index('"$src" -ef "$dst"') < copy
     refuse = _function(code, "refuse_foreign_link")
     assert '-L "$dst"' in refuse and 'readlink "$dst"' in refuse and "exit 1" in refuse

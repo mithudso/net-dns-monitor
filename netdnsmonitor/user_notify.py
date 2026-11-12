@@ -33,6 +33,7 @@ Every side effect enters as a parameter with a real default (`backend_fn`,
 status carries an exception message.
 """
 
+import contextlib
 import sys
 import threading
 import uuid
@@ -80,7 +81,9 @@ _last_outcome = ""
 
 
 def _log(message: str) -> None:
-    print(f"[user_notify] {message}", file=sys.stderr, flush=True)
+    # A diagnostic stream failure must not escape an asynchronous native callback.
+    with contextlib.suppress(Exception):
+        print(f"[user_notify] {message}", file=sys.stderr, flush=True)
 
 
 def _main_bundle() -> tuple[Optional[str], Optional[str]]:

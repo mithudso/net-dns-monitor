@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import os
 import re
+import stat
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -73,6 +74,11 @@ def source_key(filepath: str, root: str = None) -> str:
 
 def should_index(path: str, root: str = None) -> bool:
     rel = source_key(path, root)
+    return eligible_source(rel)
+
+
+def eligible_source(rel: str) -> bool:
+    """Apply privacy rules to the exact root-relative source used for reading."""
     if rel.startswith(os.pardir + os.sep) or rel == os.pardir:
         return False
     if not rel.endswith(EXTS):
@@ -97,13 +103,14 @@ def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) 
     return chunks
 
 
-def open_collection():
+def open_collection(root: str = None):
     try:
         import chromadb
         from chromadb.utils import embedding_functions
     except ImportError as exc:
         raise ImportError(f"{exc.name} is not installed; {REQUIREMENTS_HINT}") from exc
-    client = chromadb.PersistentClient(path=DB_PATH)
+    database = DB_PATH if root is None else os.path.join(os.path.realpath(root), ".chroma_db")
+    client = chromadb.PersistentClient(path=database)
     ollama_ef = embedding_functions.OllamaEmbeddingFunction(
         url="http://localhost:11434/api/embeddings", model_name="nomic-embed-text"
     )
@@ -111,11 +118,13 @@ def open_collection():
 
 
 @contextmanager
-def source_lock(filepath: str, root: str = None) -> Iterator[None]:
+def source_lock(filepath: str, root: str = None, *, source: str = None) -> Iterator[None]:
     """Serialize reading and replacing one source's chunks across processes."""
     directory = os.path.join(root or REPO_ROOT, ".semantic-index-locks")
     os.makedirs(directory, exist_ok=True)
-    key = hashlib.sha256(source_key(filepath, root).encode("utf-8")).hexdigest()
+    key = hashlib.sha256(
+        (source if source is not None else source_key(filepath, root)).encode("utf-8")
+    ).hexdigest()
     fd = os.open(os.path.join(directory, key), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -131,32 +140,46 @@ def remove_file(filepath: str, collection=None, root: str = None) -> None:
 
 def _remove_file(filepath: str, collection=None, root: str = None) -> None:
     src = source_key(filepath, root)
-    collection = collection if collection is not None else open_collection()
+    collection = collection if collection is not None else open_collection(root)
     collection.delete(where={"source": src})
     print(f"Removed chunks for {src}")
 
 
 def index_file(filepath: str, collection=None, root: str = None) -> None:
-    # Preserve the no-write skip path. Recheck after taking the lock because
-    # the source can disappear while another writer finishes.
-    if not os.path.isfile(filepath) or not should_index(filepath, root):
+    root = os.path.realpath(root or REPO_ROOT)
+    canonical = os.path.realpath(filepath)
+    src = os.path.relpath(canonical, root)
+    if not os.path.isfile(canonical) or not eligible_source(src):
         print(f"Skipping non-indexable file: {filepath}")
         return
-    with source_lock(filepath, root):
-        _index_file(filepath, collection, root)
+    with source_lock(canonical, root, source=src):
+        _index_file(canonical, collection, root, source=src)
 
 
-def _index_file(filepath: str, collection=None, root: str = None) -> None:
-    if not os.path.isfile(filepath) or not should_index(filepath, root):
+def _index_file(filepath: str, collection=None, root: str = None, *, source: str = None) -> None:
+    src = source if source is not None else source_key(filepath, root)
+    if not os.path.isfile(filepath) or not eligible_source(src):
         print(f"Skipping non-indexable file: {filepath}")
         return
-
-    src = source_key(filepath, root)
     print(f"Indexing: {src}")
-    with open(filepath, encoding="utf-8", errors="replace") as f:
-        text = f.read()
+    directory = os.open(root or REPO_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parts = src.split(os.sep)
+        if os.pardir in parts or os.path.isabs(src):
+            raise ValueError("source escaped root")
+        for part in parts[:-1]:
+            next_dir = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = next_dir
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise ValueError("source is not a regular file")
+            text = f.read()
+    finally:
+        os.close(directory)
     chunks = chunk_text(text)
-    collection = collection if collection is not None else open_collection()
+    collection = collection if collection is not None else open_collection(root)
     ids = [f"{src}_chunk_{i}" for i in range(len(chunks))]
     # Upsert first, then delete only this source's ids that are no longer
     # produced. Delete-then-upsert left the file with no chunks at all if the
@@ -178,18 +201,55 @@ def _index_file(filepath: str, collection=None, root: str = None) -> None:
     print(f"Successfully indexed {len(chunks)} chunks for {src}")
 
 
+def reconcile_directory(path: str, collection=None, root: str = None) -> None:
+    """Reconcile a directory event, including descendants absent from disk."""
+    root = os.path.realpath(root or REPO_ROOT)
+    path = os.path.realpath(path)
+    rel = os.path.relpath(path, root)
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return
+    if set(rel.split(os.sep)) & EXCLUDED:
+        return
+    collection = collection if collection is not None else open_collection(root)
+    prefix = "" if rel == "." else rel + os.sep
+    metadata = collection.get(include=["metadatas"]).get("metadatas") or []
+    sources = {
+        item.get("source") for item in metadata if item and isinstance(item.get("source"), str)
+    }
+    for source in sorted(sources):
+        candidate = os.path.join(root, source)
+        if source.startswith(prefix) and eligible_source(source) and not os.path.isfile(candidate):
+            remove_file(candidate, collection, root)
+    for directory, dirs, files in os.walk(path, followlinks=False):
+        dirs[:] = [
+            d for d in dirs if d not in EXCLUDED and not os.path.islink(os.path.join(directory, d))
+        ]
+        for name in files:
+            candidate = os.path.join(directory, name)
+            if not os.path.islink(candidate):
+                index_file(candidate, collection, root)
+
+
 def main(argv: list[str]) -> int:
+    root = None
+    if len(argv) > 1 and argv[1] == "--root":
+        if len(argv) < 4:
+            return 2
+        root = os.path.realpath(argv[2])
+        argv = [argv[0], *argv[3:]]
     if len(argv) < 2:
         print("Usage: python3 semantic_indexer.py [--remove] <filepath>", file=sys.stderr)
         return 2
     try:
-        if argv[1] == "--remove":
+        if argv[1] == "--reconcile" and len(argv) == 3:
+            reconcile_directory(argv[2], root=root)
+        elif argv[1] == "--remove":
             if len(argv) < 3:
                 print("Usage: python3 semantic_indexer.py --remove <filepath>", file=sys.stderr)
                 return 2
-            remove_file(argv[2])
+            remove_file(argv[2], root=root)
         else:
-            index_file(argv[1])
+            index_file(argv[1], root=root)
     except ImportError as exc:
         print(exc, file=sys.stderr)
         return 1

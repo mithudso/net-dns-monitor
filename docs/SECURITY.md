@@ -208,7 +208,7 @@ Mitigations in the code:
   holds the output pipes after the shell exits.
 - `MAX_OUTPUT_BYTES` caps output at 64 KB.
 - `child_env` always removes `ANTHROPIC_API_KEY`, `SLACK_WEBHOOK_URL` and
-  `SMTP_PASSWORD` (`credentials.NAMES`), so `env` in the console cannot print
+  `SMTP_PASSWORD` and `FLEET_MACHINE_KEY` (`credentials.NAMES`), so `env` in the console cannot print
   them. In the built app it also removes the py2app launcher variables
   (`FROZEN_ONLY_ENVIRONMENT`), so a child does not inherit the bundle's
   `PYTHONHOME`.

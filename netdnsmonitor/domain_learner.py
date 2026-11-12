@@ -77,7 +77,7 @@ SUCCESS_MARKERS = ("completed", "succeeded", " success", "resolved to", "answer 
 # ASCII letters; a lookalike name would pass here, then fail idna encoding in the
 # probe worker.
 _HOSTNAME_RE = re.compile(
-    r"(?<![a-z0-9_.-])((?:[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})\.?\b",
+    r"(?<![a-z0-9_.-])((?:[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})\.?(?![a-z0-9_.-])",
     re.IGNORECASE | re.ASCII,
 )
 
@@ -178,6 +178,8 @@ class LearnedDomainStore:
             # second cap slot on the same name.
             normalized = []
             for entry in data:
+                if len(normalized) >= max(0, self.max_domains):
+                    break
                 if not isinstance(entry, str):
                     continue
                 domain = entry.strip().strip(".").lower()

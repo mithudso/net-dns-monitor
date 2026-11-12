@@ -107,7 +107,9 @@ def test_dossier_preserves_literal_git_paths_and_tracked_deletions(
     dossier.main()
     cards = json.loads((dossier.OUT / "filemap.json").read_text())
     assert [card["path"] for card in cards] == [filename]
-    assert cards[0]["provenance"] == ("[src: git]" if missing else f"[src: {filename}#L1]")
+    assert cards[0]["provenance"] == (
+        "[src: git]" if missing else f"[src: {dossier.text_path(filename)}#L1]"
+    )
 
 
 def test_probe_nonzero_ping_is_unknown(monkeypatch):
@@ -168,9 +170,12 @@ def test_recorder_unconfirmed_shutdown_keeps_pid_and_never_transcodes(
     tmp_path, monkeypatch, failure
 ):
     pid = tmp_path / "pid"
-    pid.write_text("123")
+    record = json.dumps({"pid": 123, "identity": "synthetic capture"})
+    pid.write_text(record)
+    monkeypatch.setattr(recorder, "recording_identity", lambda pid: "synthetic capture")
     raw = tmp_path / "raw.mov"
     raw.write_bytes(b"not-yet-final")
+    monkeypatch.setattr(recorder, "DEMO_DIR", tmp_path)
     monkeypatch.setattr(recorder, "PID_FILE", pid)
     monkeypatch.setattr(recorder, "RAW_VIDEO", raw)
     monkeypatch.setattr(recorder, "is_screencapture", lambda pid: True)
@@ -183,11 +188,11 @@ def test_recorder_unconfirmed_shutdown_keeps_pid_and_never_transcodes(
 
     monkeypatch.setattr(recorder.os, "kill", kill)
     processed = []
-    monkeypatch.setattr(recorder, "process", lambda: processed.append(True))
+    monkeypatch.setattr(recorder, "_process", lambda: processed.append(True))
     with pytest.raises(SystemExit) as exc:
         recorder.stop()
     assert exc.value.code == 1
-    assert pid.read_text() == "123"
+    assert pid.read_text() == record
     assert processed == []
 
 
@@ -207,9 +212,13 @@ def test_recorder_reserves_pid_before_spawning_and_rejects_overlap(tmp_path, mon
         return types.SimpleNamespace(pid=123, poll=lambda: None)
 
     monkeypatch.setattr(recorder.subprocess, "Popen", spawn)
+    monkeypatch.setattr(recorder, "recording_identity", lambda pid: "synthetic capture")
     recorder.start()
     assert launches == [True]
-    assert recorder.PID_FILE.read_text() == "123"
+    assert json.loads(recorder.PID_FILE.read_text()) == {
+        "pid": 123,
+        "identity": "synthetic capture",
+    }
 
 
 @pytest.mark.parametrize(
@@ -247,7 +256,7 @@ def test_rpath_cannot_follow_a_symlink_outside_bundle(tmp_path):
     )
 
 
-def test_cancelled_debounce_callback_does_not_consume_replacement():
+def test_batch_timer_consumes_latest_generation_without_postponement():
     timers, handled = [], []
 
     class Timer:
@@ -265,8 +274,7 @@ def test_cancelled_debounce_callback_does_not_consume_replacement():
     coalescer.add("created", "/r/a.py", "", False)
     coalescer.add("modified", "/r/a.py", "", False)
     timers[0].fn(*timers[0].args)
-    assert handled == []
-    timers[1].fn(*timers[1].args)
+    assert len(timers) == 1
     assert handled == [("modified", "/r/a.py", "", False)]
 
 
@@ -376,7 +384,29 @@ def test_rotator_persists_archive_rename_before_journal_replace(tmp_path, monkey
     assert events[j + 1 :] == [("directory-sync", None)]
 
 
-def test_index_writers_cannot_delete_newer_chunks(tmp_path):
+@pytest.mark.parametrize("disable_acquisition", [False, True])
+def test_index_writers_cannot_delete_newer_chunks(tmp_path, disable_acquisition):
+    import inspect
+
+    code = (
+        "import sys, importlib.util, types\nfrom pathlib import Path\nimport pytest\n"
+        + f"spec = importlib.util.spec_from_file_location('indexer', {str(ROOT / 'scripts/semantic_indexer.py')!r})\n"
+        + "indexer = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(indexer)\n"
+        + ("indexer.fcntl.flock = lambda *a: None\n" if disable_acquisition else "")
+        + inspect.getsource(_assert_index_writers_cannot_delete_newer_chunks)
+        + "\n_assert_index_writers_cannot_delete_newer_chunks(Path(sys.argv[1]), pytest.MonkeyPatch())\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, timeout=12
+    )
+    if disable_acquisition:
+        assert result.returncode != 0
+        assert "newer writer must reach the lock boundary" in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _assert_index_writers_cannot_delete_newer_chunks(tmp_path, monkeypatch):
     import threading
 
     source = tmp_path / "doc.md"
@@ -387,6 +417,21 @@ def test_index_writers_cannot_delete_newer_chunks(tmp_path):
         threading.Event(),
     )
     documents, failures = {}, []
+    newer_at_lock = threading.Event()
+    flock = indexer.fcntl.flock
+
+    def observed_lock(fd, operation):
+        if threading.current_thread().name == "newer":
+            assert operation == indexer.fcntl.LOCK_EX
+            try:
+                flock(fd, operation | indexer.fcntl.LOCK_NB)
+            except BlockingIOError:
+                newer_at_lock.set()
+            else:
+                raise AssertionError("newer writer acquired the lock before older cleanup finished")
+        return flock(fd, operation)
+
+    monkeypatch.setattr(indexer.fcntl, "flock", observed_lock)
 
     class Collection:
         def upsert(self, documents: list, metadatas, ids):
@@ -421,7 +466,8 @@ def test_index_writers_cannot_delete_newer_chunks(tmp_path):
         assert first_at_cleanup.wait(2)
         source.write_text("x" * 1100)
         new.start()
-        second_upsert.wait(0.1)
+        assert newer_at_lock.wait(2), "newer writer must reach the lock boundary"
+        assert not second_upsert.is_set(), "newer writer must still be blocked"
     finally:
         release_first.set()
         old.join(3)
@@ -578,6 +624,7 @@ def test_nat_rollback_restores_helper_and_preserves_failed_backup(tmp_path, fail
     cleanup = cleanup.replace("/bin/rm", "safe_rm").replace("/bin/mv", "safe_mv")
     prefix = """
 TMP_PLIST=""; HELPER_TMP=""; ROLLBACK_ARMED=1; HELPER_CHANGED=1; PLIST_CHANGED=1
+WAS_LOADED=1; INSTALL_LOCK=""
 PLIST_PATH="$PWD/plist"; HELPER_PATH="$PWD/helper"
 OLD_PLIST_BACKUP="$PWD/plist.old"; OLD_HELPER_BACKUP="$PWD/helper.old"
 launchctl() { printf '%s\\n' "$*" >> "$PWD/launch.log"; }
@@ -721,9 +768,11 @@ def test_atomic_journal_write_failure_preserves_old_output_and_existing_symlink(
 
 def test_recorder_confirmed_shutdown_transcodes_once_after_pid_removal(tmp_path, monkeypatch):
     pid_file = tmp_path / "pid"
-    pid_file.write_text("123")
+    pid_file.write_text(json.dumps({"pid": 123, "identity": "synthetic capture"}))
+    monkeypatch.setattr(recorder, "recording_identity", lambda pid: "synthetic capture")
     raw = tmp_path / "raw.mov"
     raw.write_bytes(b"finalized")
+    monkeypatch.setattr(recorder, "DEMO_DIR", tmp_path)
     monkeypatch.setattr(recorder, "PID_FILE", pid_file)
     monkeypatch.setattr(recorder, "RAW_VIDEO", raw)
     monkeypatch.setattr(recorder, "is_screencapture", lambda pid: True)
@@ -740,7 +789,7 @@ def test_recorder_confirmed_shutdown_transcodes_once_after_pid_removal(tmp_path,
         assert not pid_file.exists()
         processed.append(raw.read_bytes())
 
-    monkeypatch.setattr(recorder, "process", process)
+    monkeypatch.setattr(recorder, "_process", process)
     recorder.stop()
     assert signals == [recorder.signal.SIGINT, 0]
     assert processed == [b"finalized"]

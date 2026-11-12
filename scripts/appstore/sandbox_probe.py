@@ -27,9 +27,11 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 READ_ONLY_COMMANDS = {
     "ping": ["/sbin/ping", "-c", "1", "-t", "3", "1.1.1.1"],
@@ -97,8 +99,21 @@ def tcp_connect():
 
 
 def getaddrinfo():
-    infos = socket.getaddrinfo("api.anthropic.com", 443, proto=socket.IPPROTO_TCP)
-    return {"ok": bool(infos), "addresses": len(infos)}
+    result = {}
+
+    def resolve():
+        def lookup():
+            infos = socket.getaddrinfo("api.anthropic.com", 443, proto=socket.IPPROTO_TCP)
+            return {"ok": bool(infos), "addresses": len(infos)}
+
+        result.update(timed(lookup))
+
+    worker = threading.Thread(target=resolve, daemon=True)
+    worker.start()
+    worker.join(5)
+    if worker.is_alive():
+        return {"ok": None, "note": "resolution deadline exceeded"}
+    return result
 
 
 def udp_dns():
@@ -109,13 +124,28 @@ def udp_dns():
     return {"ok": answer, "answer": answer}
 
 
-def https_request():
+def _https_request():
     try:
         with urllib.request.urlopen("https://api.anthropic.com/", timeout=8) as response:
             return {"ok": True, "status": response.status}
     except urllib.error.HTTPError as exc:
         # Any HTTP status proves TLS and the network path worked.
         return {"ok": True, "status": exc.code}
+
+
+def https_request():
+    # The socket timeout does not include system name resolution.
+    result = {}
+
+    def request():
+        result.update(timed(_https_request))
+
+    worker = threading.Thread(target=request, daemon=True)
+    worker.start()
+    worker.join(8)
+    if worker.is_alive():
+        return {"ok": None, "note": "HTTPS deadline exceeded"}
+    return result
 
 
 def default_route_interface():
@@ -201,8 +231,7 @@ def keychain_round_trip():
     from netdnsmonitor.credentials import make_keychain_backend
 
     backend = make_keychain_backend(service="com.net-dns-monitor.sandbox-probe")
-    account = "probe"
-    backend.delete(account)
+    account = "probe-" + uuid.uuid4().hex
     try:
         added = backend.add(account, b"probe-value")
         status, value = backend.read(account)
@@ -210,7 +239,13 @@ def keychain_round_trip():
         # The throwaway item must not outlive a failed read.
         deleted = backend.delete(account)
     return {
-        "ok": added == 0 and status == 0 and value == b"probe-value" and deleted == 0,
+        "ok": (
+            None
+            if any(
+                code not in {0, -25293, -25300, -34018, -25299} for code in (added, status, deleted)
+            )
+            else added == 0 and status == 0 and value == b"probe-value" and deleted == 0
+        ),
         "add_status": added,
         "read_status": status,
         "delete_status": deleted,

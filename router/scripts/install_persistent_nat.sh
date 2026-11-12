@@ -44,10 +44,29 @@ if [[ -L "$HELPER_DIR" || -L "$HELPER_PATH" ]]; then
     exit 1
 fi
 
+# Every existing path component must be protected before privileged writes.
+trusted_helper_directory() {
+    local path="$HELPER_DIR" owner mode
+    while [[ "$path" != / ]]; do
+        [[ ! -L "$path" ]] || return 1
+        if [[ -e "$path" ]]; then
+            [[ -d "$path" ]] || return 1
+            owner="$(/usr/bin/stat -f '%u' "$path")" || return 1
+            mode="$(/usr/bin/stat -f '%Lp' "$path")" || return 1
+            [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] || return 1
+            (( (8#$mode & 0022) == 0 )) || return 1
+        fi
+        path="$(dirname "$path")"
+    done
+}
+trusted_helper_directory || { echo "Refusing unsafe helper directory ancestry" >&2; exit 1; }
+
 TMP_PLIST=""
 HELPER_TMP=""
 OLD_PLIST_BACKUP=""
 OLD_HELPER_BACKUP=""
+WAS_LOADED=0
+INSTALL_LOCK=""
 ROLLBACK_ARMED=0
 HELPER_CHANGED=0
 PLIST_CHANGED=0
@@ -55,8 +74,8 @@ PLIST_CHANGED=0
 # Recovery covers both installation artifacts. Retain a backup whose restore
 # fails so an I/O failure does not also destroy the operator's recovery copy.
 cleanup() {
-    local rc=$? restore_failed=0
-    /bin/rm -f "$TMP_PLIST" "$HELPER_TMP"
+    local rc=$? restore_failed=0 cleanup_failed=0
+    /bin/rm -f "$TMP_PLIST" "$HELPER_TMP" || cleanup_failed=1
     if [[ $rc -ne 0 && $ROLLBACK_ARMED -eq 1 ]]; then
         echo "ERROR: install failed; restoring the previous helper and daemon" >&2
         if [[ $PLIST_CHANGED -eq 1 ]]; then
@@ -71,7 +90,7 @@ cleanup() {
         fi
         if [[ -n "$OLD_PLIST_BACKUP" ]]; then
             if /bin/mv -f "$OLD_PLIST_BACKUP" "$PLIST_PATH"; then
-                if [[ $restore_failed -eq 0 ]]; then
+                if [[ $restore_failed -eq 0 && $WAS_LOADED -eq 1 ]]; then
                     launchctl load -w "$PLIST_PATH" || restore_failed=1
                 fi
             else
@@ -84,12 +103,24 @@ cleanup() {
     if [[ $restore_failed -eq 1 ]]; then
         echo "ERROR: rollback incomplete; inspect $PLIST_PATH and $HELPER_PATH. Recovery backups: $OLD_PLIST_BACKUP $OLD_HELPER_BACKUP" >&2
     else
-        [[ -z "$OLD_PLIST_BACKUP" ]] || /bin/rm -f "$OLD_PLIST_BACKUP"
-        [[ -z "$OLD_HELPER_BACKUP" ]] || /bin/rm -f "$OLD_HELPER_BACKUP"
+        [[ -z "$OLD_PLIST_BACKUP" ]] || /bin/rm -f "$OLD_PLIST_BACKUP" || cleanup_failed=1
+        [[ -z "$OLD_HELPER_BACKUP" ]] || /bin/rm -f "$OLD_HELPER_BACKUP" || cleanup_failed=1
+    fi
+    [[ -z "$INSTALL_LOCK" ]] || /bin/rmdir "$INSTALL_LOCK" || cleanup_failed=1
+    if [[ $cleanup_failed -ne 0 ]]; then
+        echo "ERROR: temporary-file or lock cleanup failed" >&2
+        [[ $rc -ne 0 ]] || rc=1
     fi
     return $rc
 }
 trap cleanup EXIT
+# Fail closed on stale reservations; never steal another installer's lock.
+LOCK_CANDIDATE="/Library/LaunchDaemons/.com.custom.router.nat.install.lock"
+/bin/mkdir "$LOCK_CANDIDATE" 2>/dev/null || { echo "Another NAT install owns $LOCK_CANDIDATE" >&2; exit 1; }
+INSTALL_LOCK="$LOCK_CANDIDATE"
+if launchctl print system/com.custom.router.nat >/dev/null 2>&1; then
+    WAS_LOADED=1
+fi
 
 echo "=> Installing a root-owned copy of enable_nat.sh at $HELPER_PATH..."
 /usr/bin/install -d -o root -g wheel -m 755 "$HELPER_DIR"

@@ -31,7 +31,7 @@ echo "=> Deploying configurations (existing files are backed up)..."
 STAMP="$(date +%Y%m%d-%H%M%S)"
 backup() {
     if [[ -f "$1" ]]; then
-        cp -p "$1" "$1.bak.$STAMP"
+        cp -p "$1" "$1.bak.$STAMP" || return 1
         echo "   backed up $1 -> $1.bak.$STAMP"
     fi
 }
@@ -56,16 +56,50 @@ deploy() {
         echo "   $dst already resolves to $src; not copied"
         return 0
     fi
-    backup "$dst"
-    cp "$src" "$dst"
+    backup "$dst" || return 1
+    local staged
+    staged="$(mktemp "${dst}.new.XXXXXX")" || return 1
+    if ! cp -p "$src" "$staged"; then
+        rm -f "$staged"
+        return 1
+    fi
+    if ! mv -f "$staged" "$dst"; then
+        rm -f "$staged"
+        return 1
+    fi
 }
 
 refuse_foreign_link "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"
 refuse_foreign_link "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"
 
 mkdir -p "$UNBOUND_CONF_DIR"
-deploy "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"
-deploy "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"
+deploy_pair() {
+    local first="$UNBOUND_CONF_DIR/unbound.conf" second="$DNSMASQ_CONF_DIR/dnsmasq.conf"
+    local restore="" existed=0
+    if [[ "$UNBOUND_SRC" -ef "$first" ]]; then
+        deploy "$DNSMASQ_SRC" "$second"
+        return $?
+    fi
+    if [[ -e "$first" ]]; then
+        existed=1
+        restore="$(mktemp "${first}.rollback.XXXXXX")" || return 1
+        if ! cp -p "$first" "$restore"; then rm -f "$restore"; return 1; fi
+    fi
+    if ! deploy "$UNBOUND_SRC" "$first"; then
+        [[ -z "$restore" ]] || rm -f "$restore"
+        return 1
+    fi
+    if ! deploy "$DNSMASQ_SRC" "$second"; then
+        if [[ $existed -eq 1 ]]; then
+            mv -f "$restore" "$first" || echo "ERROR: restore failed; recovery copy: $restore" >&2
+        else
+            rm -f "$first" || echo "ERROR: failed to remove newly deployed $first" >&2
+        fi
+        return 1
+    fi
+    [[ -z "$restore" ]] || rm -f "$restore"
+}
+deploy_pair
 
 echo "=> Clearing old PF NAT rules..."
 sudo pfctl -a com.apple/unbound_dns -F all 2>/dev/null || true

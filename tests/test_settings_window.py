@@ -742,7 +742,9 @@ def test_a_failed_reload_is_reported_and_not_claimed():
 
     def refuse(values):
         assert values is None
-        raise ValueError("config key 'probe_timeout_seconds' must be a number greater than 0")
+        from netdnsmonitor.config import ConfigError
+
+        raise ConfigError("probe_timeout_seconds", "must be a number greater than 0")
 
     window = SettingsWindow(on_save=refuse)
     window._target.invoke_(_button(window, "reload"))

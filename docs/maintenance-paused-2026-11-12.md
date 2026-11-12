@@ -1,6 +1,10 @@
-# Maintenance paused at the owner's request
+# Historical maintenance pause checkpoint
 
-Status: **PAUSED_USER — unfinished draft checkpoint**. The owner requested
+Current disposition: **resumed by the owner on 2026-11-12**. This document
+preserves the earlier PAUSED_USER checkpoint below; the dated maintenance
+reports and final delivery receipt supersede its active-pause status.
+
+Historical status: **PAUSED_USER — unfinished draft checkpoint**. The owner requested
 “Stop after you finish this repo”; the active YouTube release was selected.
 No NetDNS merge, activation or completion is authorized while paused.
 

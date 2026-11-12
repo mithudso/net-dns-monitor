@@ -51,7 +51,7 @@ class KeyRegistry:
 
     # --- reading -----------------------------------------------------------
 
-    def _refresh(self) -> None:
+    def _refresh(self, *, strict: bool = False) -> None:
         now = self.now_fn()
         if now - self._checked_at < RECHECK_SECONDS:
             return
@@ -63,10 +63,20 @@ class KeyRegistry:
             self._keys = {}
             return
         except (OSError, ValueError):
+            if strict:
+                raise
             # A half-written or damaged file must not log every machine out:
             # keep what was loaded last time and look again next check.
             return
         machines = raw.get("machines") if isinstance(raw, dict) else None
+        if strict and (
+            not isinstance(machines, dict)
+            or any(
+                not isinstance(name, str) or not isinstance(key, str) or not key
+                for name, key in machines.items()
+            )
+        ):
+            raise EnrollmentError("invalid registry structure")
         self._keys = (
             {
                 name: key
@@ -96,7 +106,7 @@ class KeyRegistry:
             raise EnrollmentError("a machine name must be 1 to 64 printable characters")
         with self._lock, self._writer_lock():
             self._checked_at = float("-inf")
-            self._refresh()
+            self._refresh(strict=True)
             if name in self._keys:
                 raise EnrollmentError(
                     f"{name!r} is already enrolled; revoke it first to rotate its key"
@@ -109,7 +119,7 @@ class KeyRegistry:
         """Remove `name`. False if it was not enrolled."""
         with self._lock, self._writer_lock():
             self._checked_at = float("-inf")
-            self._refresh()
+            self._refresh(strict=True)
             if name not in self._keys:
                 return False
             self._write({k: v for k, v in self._keys.items() if k != name})

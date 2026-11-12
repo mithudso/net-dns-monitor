@@ -428,3 +428,37 @@ Correction during corroboration: the original combined probe run had six failure
 Delta: 1
 
 Status: PAUSED_USER. The owner requested stop after the active YouTube release. NetDNS source and all child readers are stopped; no further fixes, diagnostics, blind gates or merge will run. The initial198-target round and first repair batch are preserved. The changed-source round has37/104 complete reports,67 remaining, plus97 unchanged hash-matching reports; no blind attempt has started. Last aggregate:3035 collected across84 modules,3013 passed and22 explicitly held for isolated fresh CI. Fenced journal headings have a confirmed synthetic red and remain unfixed. Documentation/static dossier and final reports remain unfinished. See docs/maintenance-paused-2026-11-12.md and the private batch netdns-pause-continuation.json. Keep this task and queued modernization active but paused; retain the divergent primary, live resolver hashes, guard proofs, snapshots and limits. Resume only on explicit owner instruction.
+
+## v23 - 2026-11-12 - Selected maintenance resume
+
+Delta: 1
+
+Active task: TASK-1779, resumed by TASK-1942 / KNOW-1943. Retired claim handoff verified; clean PR41 checkpoint b0a1c818 retained. Continue missing 67/104 changed-source reviews with two contexts; preserve 198/198 initial reports, five-iteration cap and two unused blind attempts. Primary master remains divergent and live resolver hashes protected. Tests use the existing combined network/exec/filesystem guard with fake Keychain/scratch HOME. Eighteen UDP and four Foundation tests remain local-held pending fresh macOS CI. The synchronous GUI pipeline remains explicitly deferred. No live service, model, semantic or installer activation. Next: finish reviews, corroborate findings, fix journal fenced headings, refresh factual docs/static census, verify and deliver PR41.
+
+## v24 - 2026-11-12 - Bounded maintenance delivery candidate
+
+Delta: 1
+
+Task TASK-1779 continues the selected owner resume. The initial full audit covered
+198 targets; the next rounds completed 104 changed reports and 49 changed reports.
+All 207 maintained targets are accounted for. Final source hashes match 176
+diagnostic reports; 31 files contain focused post-diagnostic repairs with owned
+diff review and passing regressions. The canonical per-file app comparison is
+STABLE-REWRITE at 0.0051, yielding NO_CHANGE after three of five iterations. The
+High synchronous incident pipeline remains explicitly owner-deferred. No blind
+attempt was used and no CLEAN claim is made.
+
+Final local verification: 3171 passed, 22 explicitly held, 3193 collected in
+90 modules; pinned Ruff lint/format and the static paths/component/count guard
+pass. Held cases remain 18 UDP integrations and four Foundation PNG atomic writes.
+Shared test setup establishes scratch HOME and captured synthetic credential and
+notification defaults before collection. Fresh-process sentinels verify this.
+Actual models, indexes, Keychain items, router/service state, signing and
+privileged network actions were not activated.
+
+The static dossier remains shallow and partial. Optional Chroma advisories and
+the unverified privileged-shell timeout lifetime remain explicit residuals.
+The divergent original checkout and protected resolver configuration stay held.
+PR41 https://github.com/mithudso/net-dns-monitor/pull/41 is the delivery record;
+verify its final checks, merge state and remote content before repeating work.
+The external task receipt retains exact heads, checks, content proof and cleanup.

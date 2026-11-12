@@ -94,6 +94,10 @@ def write_isolated_config(out: Path) -> Path:
     for child in out.rglob("*"):
         if child.is_symlink():
             raise ValueError(f"unsafe screenshot destination: symlink {child}")
+        if not child.is_file() and not child.is_dir():
+            raise ValueError(f"unsafe screenshot destination: special file {child}")
+        if child.is_file() and child.stat().st_nlink > 1:
+            raise ValueError(f"unsafe screenshot destination: hardlink {child}")
     config = yaml.safe_load((REPO / "config.example.yaml").read_text()) or {}
     data_dir = out / "app-data"
     # PATH_KEYS, not every key ending in _path: failover_speedtest_path is a
@@ -315,6 +319,7 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__)
         return 2
+    started = time.monotonic()
     out = Path(argv[1]).resolve()
     refuse_owner_dir(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -329,6 +334,7 @@ def main(argv: list[str]) -> int:
     subprocess.run(
         [sys.executable, str(REPO / "scripts" / "appstore" / "make_icon.py"), str(icon_path)],
         check=True,
+        timeout=max(0.001, RUN_DEADLINE - (time.monotonic() - started)),
     )
     shown: dict = {}
 
@@ -351,11 +357,20 @@ def main(argv: list[str]) -> int:
         return app
 
     watchdog = threading.Timer(
-        RUN_DEADLINE, hard_exit, args=(f"still running after {RUN_DEADLINE} s",)
+        max(0.001, RUN_DEADLINE - (time.monotonic() - started)),
+        hard_exit,
+        args=(f"still running after {RUN_DEADLINE} s",),
     )
     watchdog.daemon = True
     watchdog.start()
-    appmod.main(app_factory=factory, config_path=str(config_path))
+    try:
+        appmod.main(app_factory=factory, config_path=str(config_path))
+    finally:
+        watchdog.cancel()
+    missing = [name for name in CAPTURES if not (out / name).is_file()]
+    if missing:
+        print("Missing captures: " + ", ".join(missing), file=sys.stderr)
+        return 1
     return 0
 
 
