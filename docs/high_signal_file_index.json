@@ -1,5 +1,5 @@
 {
-  "generated_from": "b8672f1 dirty; static map refreshed 2026-10-04",
+  "generated_from": "f0fedc5 isolated maintenance worktree; factual static map refreshed 2026-11-12; no semantic indexing",
   "files": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1167,6 +1167,363 @@
       "purpose": "Desktop-scoped bootstrap findings and partial dossier coverage.",
       "read_when": "Working on this component or its documented contract.",
       "entry_symbols": []
+    },
+    {
+      "path": "netdnsmonitor/fleet_client.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The reporting side of fleet monitoring: send this machine's events to the central server and keep trying until it acknowledges them.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "default_transport",
+        "FleetReporter"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/fleet_keys.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The server's list of enrolled machines and the key each one signs with.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "EnrollmentError",
+        "KeyRegistry"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/fleet_protocol.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The wire format between a reporting machine and the central fleet server.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "clean",
+        "canonical",
+        "sign",
+        "build_message",
+        "parse_message",
+        "step_summaries"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/fleet_server.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The central server: listen for fleet reports on the local network, log them.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "FleetServer"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/fleet_store.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "What the central server remembers: an append-only event log and a per-machine state file, plus the text that answers \"which machines have problems, what are they, and what was done about them\".",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "FleetStore",
+        "read_state",
+        "read_events",
+        "machine_status",
+        "render_fleet",
+        "render_events"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/headless.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The monitor with no windows: detect, repair, report to the fleet server.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "HeadlessMonitor",
+        "default_credentials",
+        "store_key_from_environment",
+        "fleet_key",
+        "build_reporter",
+        "machine_identity",
+        "run_headless",
+        "start_server",
+        "agent_path",
+        "agent_plist",
+        "install_agent",
+        "uninstall_agent"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediation_editor.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "What the remediation-script editor does, apart from drawing it.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "ScriptRow",
+        "utf16_length",
+        "highlight_spans",
+        "format_run",
+        "EditorSession"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediation_scripts.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "Where remediation scripts live, how they are checked, and how one is run.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "builtin_steps",
+        "ScriptInfo",
+        "inspect_source",
+        "RunResult",
+        "execute",
+        "ScriptStore",
+        "new_script_template"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediation_window.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The remediation-script editor as a macOS window: a small Python IDE.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "RemediationWindowController"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/__init__.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The shipped remediation scripts, one Python file per troubleshooting-ladder step.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": []
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_configured_dns_servers.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "check_configured_dns_servers -- which resolvers is the system using?",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_default_route.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "check_default_route -- does the machine have a default route?",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_interface_state.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "check_interface_state -- is the link itself up?",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/check_resolver_overrides.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "check_resolver_overrides -- are there /etc/resolver files redirecting domains?",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/flush_dns_cache.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "flush_dns_cache -- clear the DNS cache, and signal mDNSResponder if permitted.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/renew_dhcp_lease.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "renew_dhcp_lease -- ask the DHCP server to renew the primary interface's lease.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/resolve_against_public_resolver.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "resolve_against_public_resolver -- does a public resolver answer for a known name?",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/switch_to_backup_network.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "switch_to_backup_network -- move the machine to the backup network.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/remediations/toggle_network_service.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "toggle_network_service -- never automated, and says so.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "run"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/ui_catalog.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "What the windows say about their own controls, apart from drawing them.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "group_actions",
+        "action_tip",
+        "app_options"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/ui_style.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "The look of every window: Liquid Glass where the system has it, and tooltips.",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "glass_available",
+        "tip",
+        "apply_window_glass",
+        "style_button",
+        "make_pulldown",
+        "style_pane",
+        "window_content",
+        "iter_views",
+        "controls_without_tip"
+      ]
+    },
+    {
+      "path": "netdnsmonitor/user_notify.py",
+      "role": "source",
+      "importance": "high",
+      "purpose": "Post a banner through UserNotifications (`UNUserNotificationCenter`).",
+      "read_when": "Changing this component or its documented callers; consult docs/COMPONENTS.md.",
+      "entry_symbols": [
+        "Backend",
+        "has_app_bundle",
+        "load_backend",
+        "last_outcome",
+        "post"
+      ]
+    },
+    {
+      "path": "tests/test_maintenance_app_regressions.py",
+      "role": "test",
+      "importance": "high",
+      "purpose": "Synthetic regressions for the corroborated app maintenance findings.",
+      "read_when": "Changing the behaviors covered by these synthetic maintenance regressions.",
+      "entry_symbols": [
+        "test_finite_samples_next_to_missing_measurements_are_drawn",
+        "test_axis_formatter_output_reaches_the_drawing_operation",
+        "test_styling_failure_restores_the_original_window_content",
+        "test_delayed_privilege_worker_keeps_the_injected_launch_providers"
+      ]
+    },
+    {
+      "path": "tests/test_maintenance_core_regressions.py",
+      "role": "test",
+      "importance": "high",
+      "purpose": "Synthetic counterexamples for the iteration-one core fixes.",
+      "read_when": "Changing the behaviors covered by these synthetic maintenance regressions.",
+      "entry_symbols": [
+        "test_headless_status_is_reflected_in_exit_code",
+        "test_huge_console_selection_is_unknown",
+        "test_dig_domain_cannot_be_control_syntax",
+        "test_integral_config_counts_are_usable_as_slice_limits",
+        "test_cd_preserves_quoted_and_escaped_literals",
+        "test_dns_error_rcode_is_unknown_and_uses_fallback",
+        "test_success_words_inside_failed_hostname_are_not_success_evidence",
+        "test_real_hostnames_can_start_with_a_tld_label",
+        "test_corrupt_cached_hostname_is_not_a_probe_target",
+        "test_forensic_journal_failure_with_broken_stderr_is_data",
+        "test_forensic_episode_failure_with_broken_trace_sink_is_data",
+        "test_huge_history_metric_becomes_unknown",
+        "test_mixed_history_timezones_have_unknown_span",
+        "test_zero_log_excerpt_limit_keeps_only_omission_evidence",
+        "test_nested_peer_packet_is_silently_rejected",
+        "test_peer_migration_obeys_destination_cap_and_preserves_unrelated_peer",
+        "test_model_analysis_cannot_close_report_fence",
+        "test_append_after_torn_resolution_record_preserves_new_evidence",
+        "test_resolution_compaction_handles_large_integer_duration",
+        "test_nested_resolution_record_keeps_other_stalled_evidence",
+        "test_one_argument_executor_runs_once_and_body_typeerror_is_not_retried",
+        "test_oversized_log_poll_does_not_reannounce_overlap",
+        "test_empty_body_with_large_headers_is_not_throughput",
+        "test_header_bytes_are_excluded_from_throughput_and_limit",
+        "test_send_uses_budget_remaining_after_tls_and_does_not_send_when_exhausted",
+        "test_peer_test_setup_cleans_both_instances_when_second_start_fails",
+        "test_peer_send_failure_continues_to_synthetic_loopback_delivery"
+      ]
+    },
+    {
+      "path": "tests/test_maintenance_tooling_regressions.py",
+      "role": "test",
+      "importance": "high",
+      "purpose": "Synthetic regressions for the parent-owned maintenance tooling iteration.",
+      "read_when": "Changing the behaviors covered by these synthetic maintenance regressions.",
+      "entry_symbols": [
+        "test_json_null_is_a_validation_error",
+        "test_dossier_preserves_literal_git_paths_and_tracked_deletions",
+        "test_probe_nonzero_ping_is_unknown",
+        "test_container_probe_preserves_existing_test_file",
+        "test_screenshot_isolation_refuses_symlinked_destinations",
+        "test_screenshot_heartbeat_timeout_never_opens_or_diagnoses",
+        "test_recorder_unconfirmed_shutdown_keeps_pid_and_never_transcodes",
+        "test_recorder_reserves_pid_before_spawning_and_rejects_overlap",
+        "test_linkage_rejects_missing_or_escaped_direct_dependencies",
+        "test_rpath_cannot_follow_a_symlink_outside_bundle",
+        "test_cancelled_debounce_callback_does_not_consume_replacement",
+        "test_unsupported_event_does_not_erase_pending_modification",
+        "test_bootstrap_propagates_creation_failure_without_success",
+        "test_dhcp_diagnostic_checks_active_range_fields",
+        "test_rotator_refuses_a_journal_changed_after_read",
+        "test_rotator_persists_archive_rename_before_journal_replace",
+        "test_index_writers_cannot_delete_newer_chunks",
+        "test_appstore_mode_lock_rejects_overlap_and_releases",
+        "test_install_config_heredoc_treats_paths_as_arguments",
+        "test_service_plist_roundtrips_special_paths",
+        "test_retired_installer_readiness_requires_lan_listener",
+        "test_indexer_plist_roundtrips_xml_metacharacters",
+        "test_indexer_installer_owns_unique_staging_inode",
+        "test_nat_rollback_restores_helper_and_preserves_failed_backup",
+        "test_start_fingerprint_detects_preserved_timestamps_and_deletions",
+        "test_service_lock_does_not_release_another_owners_reservation",
+        "test_startup_reservations_refuse_overlap_without_removing_other_owner",
+        "test_index_cleanup_constructs_the_current_id_set_once",
+        "test_atomic_journal_write_failure_preserves_old_output_and_existing_symlink",
+        "test_recorder_confirmed_shutdown_transcodes_once_after_pid_removal",
+        "test_recorder_failed_spawn_releases_only_its_own_reservation",
+        "test_linkage_accepts_existing_relative_and_internal_symlink_dependencies",
+        "test_service_install_prepares_log_parent_before_reload",
+        "test_nonindexable_source_is_skipped_without_creating_lock_state"
+      ]
     }
   ]
 }

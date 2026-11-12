@@ -5,6 +5,8 @@ probe is a lambda. What these cannot prove is that macOS draws a banner from the
 signed app -- that needs the GUI session and is the owner's manual check.
 """
 
+import threading
+
 import pytest
 
 from netdnsmonitor import user_notify
@@ -87,11 +89,96 @@ def test_denied_authorization_sends_nothing_and_later_posts_report_denied(capsys
     assert "denied" in capsys.readouterr().err
 
 
-def test_authorization_error_without_a_grant_counts_as_denied():
+def test_authorization_error_is_retryable_and_does_not_mean_user_denial(capsys):
     backend = FakeBackend()
     post(backend)
-    backend.auth_handler(False, "error")
-    assert post(backend) == user_notify.STATUS_DENIED
+    backend.auth_handler(False, "PRIVATE_MARKER")
+    assert "authorization failed" in user_notify.last_outcome()
+    assert post(backend, message="retry") == user_notify.STATUS_QUEUED
+    assert backend.auth_requests == 2
+    backend.auth_handler(True, None)
+    assert [d[2] for d in backend.delivered] == ["net down", "retry"]
+    assert "PRIVATE_MARKER" not in capsys.readouterr().err
+
+
+def test_one_held_delivery_exception_does_not_discard_other_banners(capsys):
+    class FirstFails(FakeBackend):
+        def deliver(self, *args):
+            if args[2] == "one":
+                raise ValueError("PRIVATE_MARKER")
+            super().deliver(*args)
+
+    backend = FirstFails()
+    post(backend, message="one")
+    post(backend, message="two")
+    backend.auth_handler(True, None)
+    assert [d[2] for d in backend.delivered] == ["two"]
+    assert user_notify.last_outcome() == "delivery failed (ValueError)"
+    assert "PRIVATE_MARKER" not in capsys.readouterr().err
+
+
+def test_concurrent_backend_factories_start_only_one_authorization_request():
+    entered = threading.Event()
+    release = threading.Event()
+    broken = FakeBackend(raise_on_authorize=RuntimeError("PRIVATE_MARKER"))
+    healthy = FakeBackend()
+    outcomes = []
+
+    def delayed_factory():
+        entered.set()
+        assert release.wait(5)
+        return broken
+
+    thread = threading.Thread(
+        target=lambda: outcomes.append(
+            user_notify.post(
+                "T", "S", "delayed", backend_fn=delayed_factory, bundle_fn=lambda: APP_BUNDLE
+            )
+        )
+    )
+    thread.start()
+    try:
+        assert entered.wait(5)
+        assert post(healthy, message="first") == user_notify.STATUS_QUEUED
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert outcomes == [user_notify.STATUS_QUEUED]
+    assert broken.auth_requests == 0
+    healthy.auth_handler(True, None)
+    assert [d[2] for d in healthy.delivered] == ["first", "delayed"]
+
+
+def test_failed_authorization_starter_preserves_other_queued_banners():
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingFailure(FakeBackend):
+        def request_authorization(self, handler):
+            self.auth_handler = handler
+            entered.set()
+            assert release.wait(5)
+            raise RuntimeError("PRIVATE_MARKER")
+
+    broken = BlockingFailure()
+    outcomes = []
+    thread = threading.Thread(target=lambda: outcomes.append(post(broken, message="failed")))
+    thread.start()
+    try:
+        assert entered.wait(5)
+        assert post(broken, message="held") == user_notify.STATUS_QUEUED
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert outcomes == ["failed:RuntimeError"]
+    healthy = FakeBackend()
+    assert post(healthy, message="retry") == user_notify.STATUS_QUEUED
+    # A callback from the failed request must not consume the new owner's queue.
+    broken.auth_handler(False, None)
+    healthy.auth_handler(True, None)
+    assert [d[2] for d in healthy.delivered] == ["held", "retry"]
 
 
 def test_unavailable_framework_is_a_status_not_an_exception():

@@ -26,6 +26,7 @@ import pwd
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -79,7 +80,9 @@ def run_command(argv):
         done = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=20)
         stderr = done.stderr.strip().splitlines()
         return {
-            "ok": done.returncode == 0,
+            # An exit status measures command success, not sandbox permission.
+            # Only an actual EPERM/EACCES exception proves a denial here.
+            "ok": True if done.returncode == 0 else None,
             "returncode": done.returncode,
             "stdout_lines": len(done.stdout.splitlines()),
             "stderr_first_line": stderr[0][:200] if stderr else "",
@@ -164,12 +167,14 @@ def udp_bind():
 def container_write():
     directory = os.path.expanduser("~/Library/Application Support/net-dns-monitor")
     os.makedirs(directory, exist_ok=True)
-    path = os.path.join(directory, "sandbox-probe-write-test.txt")
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write("ok")
-    with open(path, encoding="utf-8") as handle:
-        content = handle.read()
-    os.remove(path)
+    fd, path = tempfile.mkstemp(prefix="sandbox-probe-write-", suffix=".txt", dir=directory)
+    try:
+        with os.fdopen(fd, "w+", encoding="utf-8") as handle:
+            handle.write("ok")
+            handle.seek(0)
+            content = handle.read()
+    finally:
+        os.remove(path)
     return {"ok": content == "ok", "directory": directory}
 
 

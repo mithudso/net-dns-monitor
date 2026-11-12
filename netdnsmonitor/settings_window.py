@@ -31,6 +31,7 @@ otherwise someone changes a threshold, sees no difference, and reasonably
 concludes the setting does not work.
 """
 
+import json
 import os
 import shutil
 import time
@@ -366,7 +367,15 @@ def format_field(kind: str, value) -> str:
     if kind == "bool":
         return "yes" if value else "no"
     if kind == "list":
-        return ", ".join(str(v) for v in (value or []))
+        parts = [str(v) for v in (value or [])]
+        # Plain comma-separated input remains convenient for domains. A JSON
+        # list preserves literal commas, whitespace and empty suppression or
+        # redaction tokens when an unrelated setting is saved.
+        if any(
+            not part or part != part.strip() or any(c in part for c in ',"[]\r\n') for part in parts
+        ):
+            return json.dumps(parts, ensure_ascii=False)
+        return ", ".join(parts)
     if kind == "targets":
         # An entry that is not a pair is shown as written, not unpacked. An older
         # window saved ["192.168.68.1:53"] as plain strings, and unpacking one
@@ -400,6 +409,14 @@ def parse_field(kind: str, text: str, label: str = ""):
             return False
         raise ValueError(f"{name}: expected yes or no, got {text!r}")
     if kind == "list":
+        if text.startswith("["):
+            try:
+                values = json.loads(text)
+            except ValueError:
+                raise ValueError(f"{name}: expected a JSON list of strings") from None
+            if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+                raise ValueError(f"{name}: expected a JSON list of strings")
+            return values
         return [part.strip() for part in text.split(",") if part.strip()]
     if kind == "targets":
         # app.py does `tuple(t)` on each entry and the prober unpacks host, port,

@@ -8,11 +8,14 @@ and the newest --keep sections and appends the rest to
 """
 
 import argparse
+import fcntl
 import os
 import re
 import stat
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from itertools import pairwise
 from pathlib import Path
 
@@ -21,6 +24,41 @@ JOURNALS = ("memory.md", "prompts.md")
 MAX_BYTES = 200_000
 KEEP_SECTIONS = 5
 SECTION = re.compile(r"^## v\d+\b", re.MULTILINE)
+
+
+@contextmanager
+def journal_lock(path: Path) -> Iterator[None]:
+    """Journal writers must hold this same lock across their read/write cycle.
+
+    Keep the lock inode in place: unlinking it would let later writers lock a
+    different file while an earlier waiter still holds the original inode.
+    """
+    lock = path.with_name(f".{path.name}.rotate.lock")
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _fsync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _mkdir_durable(path: Path) -> None:
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        directory.mkdir(exist_ok=True)
+        _fsync_directory(directory.parent)
 
 
 def swap_files(path: Path) -> list[Path]:
@@ -62,6 +100,7 @@ def _write_atomic(path: Path, text: str, new_mode: int = 0o644) -> None:
             os.fchmod(handle.fileno(), mode)
             os.fsync(handle.fileno())
         os.replace(tmp, path)
+        _fsync_directory(path.parent)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -77,20 +116,26 @@ def rotate(
     """Return a one-line outcome. Never raises for a missing or locked journal."""
     if not path.exists():
         return f"{path.name}: missing, skipped"
+    with journal_lock(path):
+        return _rotate(path, archive_dir, max_bytes, keep, dry_run)
+
+
+def _rotate(path: Path, archive_dir: Path, max_bytes: int, keep: int, dry_run: bool) -> str:
     locks = swap_files(path)
     if locks:
         return f"{path.name}: refused, editor swap file present ({locks[0].name})"
     size = path.stat().st_size
     if size <= max_bytes:
         return f"{path.name}: {size} bytes, under {max_bytes}, unchanged"
-    header, sections = split_sections(path.read_text(encoding="utf-8"))
+    original = path.read_bytes()
+    header, sections = split_sections(original.decode("utf-8"))
     old, recent = sections[: max(len(sections) - keep, 0)], sections[-keep:]
     if not old:
         return f"{path.name}: {size} bytes but only {len(sections)} sections, unchanged"
     if dry_run:
         return f"{path.name}: would archive {len(old)} sections"
     archive = archive_dir / f"{path.stem}-archive.md"
-    archive_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir_durable(archive_dir)
     existing = (
         archive.read_text(encoding="utf-8")
         if archive.exists()
@@ -104,6 +149,10 @@ def rotate(
         existing.rstrip("\n") + "\n\n" + "".join(old).strip("\n") + "\n",
         new_mode=journal_mode,
     )
+    # Refuse a detected noncooperating writer. Full serialization requires
+    # every writer to use journal_lock; atomic rename alone cannot provide it.
+    if path.read_bytes() != original or swap_files(path):
+        return f"{path.name}: refused, journal changed during rotation; archive retained"
     _write_atomic(path, header + "".join(recent))
     return f"{path.name}: archived {len(old)} sections to {archive}"
 

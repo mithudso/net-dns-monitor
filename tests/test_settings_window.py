@@ -124,6 +124,29 @@ def test_lists_split_on_commas_and_drop_blanks():
     assert parse_field("list", " a.com , , b.com ") == ["a.com", "b.com"]
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["error, retry"],
+        ["USB, Ethernet", "Wi-Fi"],
+        ['a"b', "[literal]", " leading ", "", "line\nbreak", "back\\slash"],
+    ],
+)
+def test_list_fields_preserve_each_literal_value(values):
+    assert parse_field("list", format_field("list", values)) == values
+
+
+def test_an_unrelated_settings_save_preserves_comma_containing_suppression(tmp_path):
+    original = dict(DEFAULT_CONFIG, log_view_noise_patterns=["error, retry"])
+    fields = {key: format_field(kind, original[key]) for key, _label, kind in FIELDS}
+    fields["ping_interval_seconds"] = "7"
+    path = tmp_path / "config.yaml"
+    save_config(path, collect(fields))
+    loaded = load_config(path)
+    assert loaded["log_view_noise_patterns"] == ["error, retry"]
+    assert loaded["ping_interval_seconds"] == 7
+
+
 def test_an_empty_list_is_empty_not_a_list_containing_nothing():
     assert parse_field("list", "  ") == []
 

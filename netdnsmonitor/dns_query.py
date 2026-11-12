@@ -152,8 +152,11 @@ def _answer_result(response: bytes, packet: bytes) -> Optional[bool]:
             offset = end
         if offset != len(response):
             return None
-        if flags & 0x000F:
-            return False
+        rcode = flags & 0x000F
+        if rcode:
+            # NXDOMAIN is a negative answer. A failed or refused query says
+            # nothing about the name and must leave other resolvers a chance.
+            return False if rcode == 3 else None
         name = expected_name
         visited = set()
         # At most one traversal per answer record. CNAME loops or conflicting
@@ -177,10 +180,10 @@ def query_public_dns(
     timeout: float = 2.0,
     send_recv_fn: Optional[SendRecvFn] = None,
 ) -> Optional[bool]:
-    """True for a usable A answer, False for a valid reply without one.
+    """True for a usable A answer, False for a valid negative name answer.
 
-    None for transport failures and untrustworthy or truncated replies. An
-    unknown reply must not be presented as a tested, failed name.
+    None for transport failures, resolver errors and untrustworthy or truncated
+    replies. An unknown reply must not be presented as a tested, failed name.
     """
     send_recv_fn = send_recv_fn or _default_send_recv
     # The transaction id is the only thing standing between this check and a
@@ -212,8 +215,8 @@ def query_public_dns_any(
 ) -> Optional[bool]:
     """The first answer from `servers`, tried in order.
 
-    A server that does not reply (None) moves on to the next; an answer, True
-    or False, ends the search. None only if no server replied at all, so an
+    A server that cannot answer (None) moves on to the next; an answer, True
+    or False, ends the search. None if no server gave a usable answer, so an
     IPv4-only network still gets a real answer from the IPv4 resolver.
     """
     for server in servers:

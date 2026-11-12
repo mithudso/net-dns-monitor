@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TextIO
 
 REPO = Path(__file__).resolve().parents[2]
 DEMO_DIR = REPO / "build" / "appstore" / "demo"
@@ -44,11 +45,25 @@ def is_screencapture(pid: int, ps_fn=process_command) -> bool:
 
 def start() -> None:
     DEMO_DIR.mkdir(parents=True, exist_ok=True)
-    if PID_FILE.exists():
+    try:
+        reservation = PID_FILE.open("x", encoding="utf-8")
+    except FileExistsError:
         print(f"Recording already active (PID file exists: {PID_FILE})", file=sys.stderr)
         sys.exit(1)
 
-    if RAW_VIDEO.exists():
+    try:
+        with reservation:
+            _start_recording(reservation)
+    except BaseException:
+        # An empty reservation means capture never started. Once a PID was
+        # recorded, keep it until exit is confirmed so the operator can retry.
+        if PID_FILE.exists() and not PID_FILE.read_text().strip():
+            PID_FILE.unlink()
+        raise
+
+
+def _start_recording(reservation: TextIO) -> None:
+    if RAW_VIDEO.exists() or RAW_VIDEO.is_symlink():
         RAW_VIDEO.unlink()
 
     print("Starting screen capture with /usr/sbin/screencapture...")
@@ -67,7 +82,8 @@ def start() -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    PID_FILE.write_text(str(proc.pid))
+    reservation.write(str(proc.pid))
+    reservation.flush()
     # screencapture exits at once when Screen Recording permission is missing or
     # the path is unwritable; a PID file alone would claim a recording that
     # never started.
@@ -89,11 +105,10 @@ def stop() -> None:
         sys.exit(1)
 
     pid_str = PID_FILE.read_text().strip()
-    PID_FILE.unlink()
-
     try:
         pid = int(pid_str)
-        if not is_screencapture(pid):
+        if pid <= 0 or not is_screencapture(pid):
+            PID_FILE.unlink()
             print(
                 f"PID {pid} is not a screencapture process (stale PID file); "
                 "nothing was signalled and the PID file was removed.",
@@ -116,8 +131,12 @@ def stop() -> None:
                 f"Process {pid} still running after 60s; the .mov may be incomplete.",
                 file=sys.stderr,
             )
-    except (OSError, ValueError) as e:
-        print(f"Process {pid_str} termination note: {e}")
+            sys.exit(1)
+    except (OSError, ValueError) as exc:
+        print(f"Process {pid_str} shutdown unconfirmed ({type(exc).__name__})", file=sys.stderr)
+        sys.exit(1)
+
+    PID_FILE.unlink()
 
     if RAW_VIDEO.exists() and RAW_VIDEO.stat().st_size > 0:
         print(f"Raw recording saved: {RAW_VIDEO} ({RAW_VIDEO.stat().st_size // 1024} KB)")

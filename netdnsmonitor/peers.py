@@ -141,8 +141,9 @@ class PeerRegistry:
                 entry[field] = None if value is None else bool(value)
             entry["missed_healthchecks"] = 0
 
-            if is_new:
+            if is_new or entry["address"] != existing.get("address", ""):
                 self._evict_address_overflow(entry.get("address", ""))
+            if is_new:
                 self._evict_if_full()
             # Swapped in whole rather than updated in place, so no reader can copy
             # an entry that is only half written.

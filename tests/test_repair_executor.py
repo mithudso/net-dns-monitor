@@ -472,6 +472,37 @@ def test_check_resolver_overrides_lists_files_when_present():
     assert "corp.local" in outcome
 
 
+def test_resolver_overrides_does_not_confuse_an_inaccessible_directory_with_absence():
+    listed = []
+
+    def denied(path):
+        listed.append(path)
+        raise PermissionError("sensitive filesystem detail")
+
+    executor = make_repair_executor(
+        run_fn=fake_run_factory()[0],
+        resolver_dir_exists_fn=lambda path: False,
+        resolver_listdir_fn=denied,
+    )
+    outcome = executor(LadderStep("check_resolver_overrides", "check", False))
+    assert listed == ["/etc/resolver"]
+    assert outcome == "failed: could not read /etc/resolver (PermissionError)"
+
+
+def test_resolver_overrides_reports_absence_when_listing_finds_no_directory():
+    def missing(path):
+        raise FileNotFoundError(path)
+
+    executor = make_repair_executor(
+        run_fn=fake_run_factory()[0],
+        resolver_dir_exists_fn=lambda path: True,
+        resolver_listdir_fn=missing,
+    )
+    assert executor(LadderStep("check_resolver_overrides", "check", False)) == (
+        "no /etc/resolver overrides configured"
+    )
+
+
 def test_resolve_against_public_resolver_reflects_query_result():
     run_fn, _ = fake_run_factory()
     executor = make_repair_executor(run_fn=run_fn, query_fn=lambda domain: True)

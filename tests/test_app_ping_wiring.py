@@ -260,8 +260,12 @@ def test_a_raising_ping_job_does_not_kill_the_heartbeat(tmp_path):
     def boom():
         raise RuntimeError("netstat vanished")
 
+    previous_reading = dict(app.ping_stats)
     app.ping_job = boom
     run_heartbeat(app)
+    assert app.last_tick_error == "ping heartbeat failed: RuntimeError"
+    assert app._ping_results.empty()
+    assert app.ping_stats == previous_reading
 
     app.ping_job = lambda: (OK, (0, 0))
     run_heartbeat(app)

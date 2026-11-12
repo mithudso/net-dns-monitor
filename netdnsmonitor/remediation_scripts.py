@@ -123,7 +123,16 @@ def inspect_source(source: str, expected_name: Optional[str] = None) -> tuple[di
     has_run = False
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run":
-            has_run = isinstance(node, ast.FunctionDef) and bool(node.args.args or node.args.vararg)
+            args = node.args
+            positional = len(args.posonlyargs) + len(args.args)
+            # execute calls run(ctx), without keywords. Optional parameters and
+            # *args are compatible; a second required argument is not.
+            has_run = (
+                isinstance(node, ast.FunctionDef)
+                and positional - len(args.defaults) <= 1
+                and (positional >= 1 or args.vararg is not None)
+                and all(default is not None for default in args.kw_defaults)
+            )
             continue
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
@@ -361,8 +370,8 @@ class ScriptStore:
             return problems
         builtin = self.builtin_source(name)
         if builtin is not None and builtin == source:
-            self.remove(name)
-            return []
+            error = self._remove_override(name)
+            return [error] if error is not None else []
         try:
             self.user_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             fd, tmp = tempfile.mkstemp(dir=self.user_dir, prefix=f".{name}.", suffix=".tmp")
@@ -379,6 +388,17 @@ class ScriptStore:
             return [f"could not write the script ({type(exc).__name__})"]
         return []
 
+    def _remove_override(self, name: str) -> Optional[str]:
+        """Return a removal error, or None once no override remains."""
+        path = self._user_path(name)
+        if path is None:
+            return None
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            return f"could not remove {name} ({type(exc).__name__})"
+        return None
+
     def remove(self, name: str) -> str:
         """Reset a modified built-in, or delete a custom script. Returns what happened."""
         path = self._user_path(name)
@@ -389,10 +409,9 @@ class ScriptStore:
                 return f"{name} is a built-in with no changes; there is nothing to reset"
             return f"{name} does not exist"
         was_builtin = self.builtin_source(name) is not None
-        try:
-            path.unlink()
-        except OSError as exc:
-            return f"could not remove {name} ({type(exc).__name__})"
+        error = self._remove_override(name)
+        if error is not None:
+            return error
         return f"reset {name} to the built-in" if was_builtin else f"deleted {name}"
 
 

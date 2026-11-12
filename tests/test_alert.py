@@ -58,6 +58,35 @@ def test_recovery_cancels_the_outstanding_bounce():
     assert app.cancelled == [4242]
 
 
+def test_failed_cancellation_is_retained_for_the_next_recovery():
+    class RetryApp(FakeApp):
+        def cancelUserAttentionRequest_(self, request_id):
+            self.cancelled.append(request_id)
+            if len(self.cancelled) == 1:
+                raise RuntimeError("temporary platform failure")
+
+    app = RetryApp()
+    alert.bounce_dock(app_fn=lambda: app)
+    alert.stop_bouncing(app_fn=lambda: app)
+    assert app.cancelled == [4242]  # no immediate retry loop
+    alert.stop_bouncing(app_fn=lambda: app)
+    alert.stop_bouncing(app_fn=lambda: app)
+    assert app.cancelled == [4242, 4242]
+
+
+def test_notification_fallback_exception_logs_only_its_class(capsys):
+    def timeout(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    status = alert.notify(
+        "PRIVATE_MARKER", run_fn=timeout, env={}, post_fn=lambda *a: "unavailable"
+    )
+    err = capsys.readouterr().err
+    assert status == "unavailable"
+    assert "TimeoutExpired" in err
+    assert "PRIVATE_MARKER" not in err
+
+
 def test_recovery_with_no_outstanding_bounce_does_nothing():
     app = FakeApp()
     alert.stop_bouncing(app_fn=lambda: app)

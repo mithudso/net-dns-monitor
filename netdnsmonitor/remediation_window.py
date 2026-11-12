@@ -213,8 +213,24 @@ class RemediationWindowController:
         self._set_status("")
 
     def pick(self, index: int) -> None:
-        if 0 <= index < len(self._names):
-            self.open_script(self._names[index])
+        if not 0 <= index < len(self._names) or self._names[index] == self.current:
+            return
+        if not self._discard_changes():
+            selected = self._names.index(self.current) if self.current in self._names else -1
+            self.popup.selectItemAtIndex_(selected)
+            return
+        self.open_script(self._names[index])
+
+    def _discard_changes(self) -> bool:
+        if not self.session.has_unsaved_changes(
+            self.current, self._editor_text(), self._loaded_text
+        ):
+            return True
+        return self._confirm(
+            f"Discard unsaved changes to {self.current}?",
+            "These changes have not been saved. Discard them before opening another script.",
+            "Discard",
+        )
 
     def text_changed(self) -> None:
         self._recolour()
@@ -275,6 +291,8 @@ class RemediationWindowController:
         self._set_output(message)
 
     def new(self) -> None:
+        if not self._discard_changes():
+            return
         from AppKit import NSAlert, NSTextField
         from Foundation import NSMakeRect
 
@@ -310,7 +328,7 @@ class RemediationWindowController:
             self._set_status("a run is still going")
             return
         name, text = self.current, self._editor_text()
-        if self.session.needs_confirmation(name) and not self._confirm(
+        if self.session.needs_confirmation(name, text) and not self._confirm(
             f"Run {name} for real?",
             "This is a repair: it changes the machine exactly as it would during an incident.",
             "Run",

@@ -177,3 +177,17 @@ Prompt:
 
 > The console has black text on dark grey back ground which is hard to read. make it white text. Also in the repairs dropdown category, automatically include the repair scripts which are editable in the python editor.
 > If another monitor is discovered and it comes up on a different IP, and the old IP misses more than 5 hearbeat checks, clear it from the list.
+
+## v21 - 2026-11-12 - Full owned-repository maintenance
+
+Delta: 1
+
+Prompt:
+
+> For each of my repos here get them up to speed, run the repo-bootstrapper and the code deep optimizer on each one, and commit all changes. Don't operate on not my repos. If this has been done in the past day for some of them then skip them. Don't stop until all are complete.
+
+## v22 - 2026-11-12 - User pause checkpoint
+
+Delta: 1
+
+User override: “Stop after you finish this repo.” The release in progress selected by the coordinator is YouTube. Pause NetDNS at a recoverable draft checkpoint; do not finish or merge it.

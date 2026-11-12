@@ -452,17 +452,43 @@ def _runs_as_root(head: str) -> bool:
     return "root" in users or "ALL" in users
 
 
+def _specs_may_overlap(left: str, right: str) -> bool:
+    """Conservatively compare command specs when a later rule restricts a grant.
+
+    A positive-only result cannot express an exception to ALL or a bare
+    command. Drop the broader grant in that case. Unsupported patterns also
+    remove a possible grant rather than claiming a privilege they may exclude.
+    """
+    if "ALL" in (left, right):
+        return True
+    left_path, _, left_args = left.partition(" ")
+    right_path, _, right_args = right.partition(" ")
+    plain_path = r"/[a-zA-Z0-9_./-]+"
+    if not all(
+        re.fullmatch(plain_path, path) and not path.endswith("/")
+        for path in (left_path, right_path)
+    ):
+        return True
+    if left_path != right_path:
+        return False
+    if not left_args or not right_args:
+        return True
+    if any(char in left_args + right_args for char in "*?[]\\^$"):
+        return True
+    return left_args == right_args
+
+
 def parse_granted_commands(stdout: str) -> list[str]:
-    """The NOPASSWD command specs in `sudo -l` output, as whitespace-joined argv.
+    """Conservative effective NOPASSWD specs, as whitespace-joined argv.
 
     `sudo -l` lists entries like:
 
         (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder
         (ALL) ALL
 
-    Only NOPASSWD lines are of interest: a password-gated entry is exactly what
-    this module does not count as granted. Commas separate several specs on one
-    line, which is how sudo renders a rule listing more than one command.
+    Rules apply in listing order. A later password requirement or exclusion
+    removes overlapping grants. An entry without a password tag defaults to
+    PASSWD; tags then persist across comma-separated commands on that line.
 
     Only entries that run as root count. `(_postgres) NOPASSWD: ALL` is
     passwordless but permits nothing as root, and the repair's `sudo -n` runs as
@@ -471,17 +497,34 @@ def parse_granted_commands(stdout: str) -> list[str]:
     """
     specs: list[str] = []
     for line in (stdout or "").splitlines():
-        head, marker, rest = line.partition("NOPASSWD:")
-        if not marker or not _runs_as_root(head):
+        runas = _RUNAS_RE.match(line)
+        if runas is None or not _runs_as_root(runas.group(0)):
             continue
-        parts = [" ".join(spec.split()) for spec in rest.split(",")]
-        # A negated spec (`ALL, !/usr/bin/killall`) carves an exception out of the
-        # others, and what it excludes is not evaluated here. Skip the whole line:
-        # a missed grant costs a repair step, a phantom one is the failure this
-        # module exists to avoid.
-        if any(part.startswith("!") for part in parts):
+        rest = line[runas.end() :]
+        if "(" in rest:
+            # Mixed runas columns need a complete sudoers parser. Their
+            # restrictions may supersede earlier grants; do not retain them.
+            specs.clear()
             continue
-        specs.extend(part for part in parts if part)
+        passwordless = False
+        for part in rest.split(","):
+            part = part.strip()
+            while tag := re.match(r"^([A-Z_]+):\s*", part):
+                if tag.group(1) in {"PASSWD", "NOPASSWD"}:
+                    passwordless = tag.group(1) == "NOPASSWD"
+                part = part[tag.end() :]
+            negated = part.startswith("!")
+            spec = " ".join(part.lstrip("!").split())
+            if not spec:
+                continue
+            if negated or not passwordless:
+                specs = [old for old in specs if not _specs_may_overlap(old, spec)]
+            elif spec == "ALL" or spec.startswith("/"):
+                specs.append(spec)
+            else:
+                # An unrecognized alias or a split escaped comma can carry a
+                # restriction that this small parser cannot safely evaluate.
+                specs.clear()
     return specs
 
 

@@ -7,7 +7,9 @@ today. Every mitigation names the file and symbol that implements it.
 To report a vulnerability, follow [.github/SECURITY.md](../.github/SECURITY.md).
 Open defects and owner decisions are in [known-issues.md](known-issues.md).
 
-Reviewed on 2026-09-14 against branch `feat/appstore-prep`. A statement marked
+Historical review: 2026-09-14 against branch `feat/appstore-prep`. The supplement
+below records the 2026-11-12 source review; it does not establish live verification.
+A statement marked
 **UNVERIFIED** was not confirmed against the code or a live system.
 
 ## Assets
@@ -480,3 +482,30 @@ Mitigations in the code:
 - Slack and SMTP delivery.
 - The sandboxed GUI app. Only `sandbox_probe` has run sandboxed.
 - The rewritten `router.py` start and stop scripts against a real machine.
+
+## 2026-11-12 maintained-feature supplement
+
+- `FLEET_MACHINE_KEY` is a fourth environment/Keychain credential. The console
+  child environment removes all names in `credentials.NAMES`. Removing saved
+  credentials confirms all four names before deletion; environment values remain
+  independent. Fleet key registry writes use exclusive mode-0600 staging files,
+  and cache identity includes file metadata so revocation is not hidden behind
+  an unchanged timestamp alone (`fleet_keys.py`).
+- Fleet UDP is a separate administrator feature (`fleet_protocol.py`,
+  `fleet_server.py`, `fleet_client.py`). Signed messages validate signature shape
+  and finite timestamps before trusted actions. Unsigned mode remains an explicit
+  owner-selected trial policy; this maintenance does not introduce authentication
+  into the older LAN peer protocol. Bounded nested-packet recursion findings were
+  retracted after baseline corroboration; they are not security evidence.
+- `remediation_scripts.py` executes owner-editable Python with injected context.
+  This is trusted local code, not a Python sandbox. The confirmation shows the
+  exact captured source used for that execution. The store edition disables the
+  editor, while the shipped steps remain part of its existing capability policy.
+- Sudo status parsing honors later matching rules, password tags and exclusions
+  conservatively. Unrecognized policy is not proof of a usable grant. The router
+  stop path distinguishes failed read-back from verified absence. All privileged
+  behavior remains synthetically tested; no host grant/router operation was run.
+- Static retrieval respects ignored paths and refuses symlink traversal. Optional
+  Chroma/Ollama infrastructure remains separately authorized. See
+  [MCP.md](MCP.md) for the dated dependency advisory assessment and unresolved
+  optional-server exposure questions.

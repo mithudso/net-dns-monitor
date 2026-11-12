@@ -49,10 +49,10 @@ def test_run_command_timeout_and_missing_binary_are_not_probed(monkeypatch):
     assert sp.run_command(["x"])["ok"] is None
 
 
-def test_run_command_nonzero_exit_stays_false(monkeypatch):
+def test_run_command_nonzero_exit_is_unknown_without_denial_evidence(monkeypatch):
     done = subprocess.CompletedProcess(["x"], 2, "", "bad\n")
     monkeypatch.setattr(sp.subprocess, "run", lambda *a, **k: done)
-    assert sp.run_command(["x"])["ok"] is False
+    assert sp.run_command(["x"])["ok"] is None
 
 
 def test_udp_dns_follows_the_answer(monkeypatch):

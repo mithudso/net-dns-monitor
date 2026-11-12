@@ -5,6 +5,8 @@ guards against -- dropping a service name -- is invisible in a synthetic
 two-service fixture.
 """
 
+import pytest
+
 from netdnsmonitor.service_order import (
     NetworkService,
     find_service,
@@ -216,3 +218,26 @@ def test_crlf_listing_parses_without_a_trailing_carriage_return():
 def test_is_order_intact_rejects_a_same_length_substitution():
     services = parse_service_order("(1) A\n(2) B\n(*) C\n")
     assert is_order_intact(services, ["A", "B", "Ethernet"]) is False
+
+
+@pytest.mark.parametrize(
+    "unparsed",
+    ["(2)\tEthernet", "(2)Ethernet", "(2) ", "(*)\tEthernet", "unexpected output"],
+)
+def test_a_mixed_listing_cannot_authorize_an_incomplete_order(unparsed):
+    text = f"(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n{unparsed}\n"
+    services = parse_service_order(text)
+    assert services == []
+    assert order_argv(services, ["Wi-Fi"]) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "(Hardware Port: Ethernet, Device: en1)\n(1) Wi-Fi\n",
+        "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n(Hardware Port: Ethernet, Device: en1)\n",
+        "(1) Wi-Fi\n\n(Hardware Port: Ethernet, Device: en1)\n",
+    ],
+)
+def test_hardware_details_without_their_service_invalidate_the_listing(text):
+    assert parse_service_order(text) == []

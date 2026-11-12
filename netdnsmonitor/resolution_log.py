@@ -50,11 +50,18 @@ def append_resolution_findings(
     # Nothing non-ASCII reaches this writer today (json.dumps defaults to
     # ensure_ascii=True), so this is defence in depth against an IDN domain
     # rather than a live bug -- but it is the same defect class, one keyword.
-    with open(path, "a", encoding="utf-8") as f:
+    with open(path, "a+b") as f:
+        # A killed append may leave a partial final line. Isolate that record
+        # so the reader can still recover every new complete finding.
+        f.seek(0, os.SEEK_END)
+        if f.tell():
+            f.seek(-1, os.SEEK_END)
+            if f.read(1) != b"\n":
+                f.write(b"\n")
         for finding in findings:
             record = dict(finding)
             record["checked_at"] = checked_at.isoformat()
-            f.write(json.dumps(record) + "\n")
+            f.write((json.dumps(record) + "\n").encode("utf-8"))
 
     if _count_lines(path) > compact_at:
         _compact(path)
@@ -107,10 +114,9 @@ def _compact(path: str) -> None:
     _atomic_write(path, "".join(lines))
 
 
-def _elapsed(record: dict) -> float:
+def _elapsed(record: dict) -> int | float:
     value = record.get("elapsed_seconds")
     # bool is an int subclass; the reader refuses it, so it must not win here.
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        elapsed = float(value)
-        return -1.0 if math.isnan(elapsed) else elapsed
+        return -1.0 if isinstance(value, float) and math.isnan(value) else value
     return -1.0

@@ -35,3 +35,25 @@ complete a documentation or code review.
 `scripts/check_docs.py` verifies static retrieval paths without importing Chroma
 or contacting Ollama. `scripts/generate_static_dossier.py` regenerates the
 explicitly partial static dossier. These are safe alternatives for CI.
+
+## Dependency review — 2026-11-12
+
+`requirements-index.txt` now pins FastMCP 4.1.8. A disposable Python 3.13
+environment passed the registration-only self-test with exactly one tool and
+zero collection opens. The test did not query Chroma, contact Ollama, run a
+model, or change the existing developer environment.
+
+The earlier FastMCP 4.0.10 pin falls within upstream advisories for
+[authorization after transforms](https://github.com/PrefectHQ/fastmcp/security/advisories/GHSA-7xgj-8392-5q4r)
+and [OAuth issuer binding](https://github.com/PrefectHQ/fastmcp/security/advisories/GHSA-vqqp-x5qm-5qp4).
+This server uses neither mechanism; the version update removes the affected
+declared version without claiming that either exploit was demonstrated here.
+
+Chroma 1.5.9 remains the current declared version. Its PyPI advisory metadata
+still lists unresolved server, authorization and remote-model risks, including
+the [upstream remote-code report](https://github.com/chroma-core/chroma/issues/6717).
+This repository opens an embedded `PersistentClient` with an explicit Ollama
+embedding function; it does not expose a Chroma HTTP server. That describes the
+implemented boundary, not a certification that the dependency is safe. Recheck
+upstream advisories before deliberately enabling the optional tools. Keep
+existing indexes and paused services unchanged during static maintenance.

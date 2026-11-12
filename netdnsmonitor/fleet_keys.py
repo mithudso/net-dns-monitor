@@ -14,17 +14,21 @@ written mode 0600, never printed except once when a machine is enrolled, and
 never logged. A compromised server exposes the keys; a compromised machine
 exposes only its own.
 
-The file is re-read when it changes (checked at most once a second), so enrolling
+The file is re-read at most once a second, so enrolling
 or revoking a machine takes effect without restarting the server.
 
 No sockets here.
 """
 
+import contextlib
+import fcntl
 import json
 import os
 import secrets
+import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from typing import Optional
 
 from netdnsmonitor import fleet_protocol as proto
@@ -43,7 +47,6 @@ class KeyRegistry:
         self.now_fn = now_fn
         self._lock = threading.Lock()
         self._keys: dict[str, str] = {}
-        self._mtime: Optional[float] = None
         self._checked_at = float("-inf")
 
     # --- reading -----------------------------------------------------------
@@ -54,15 +57,11 @@ class KeyRegistry:
             return
         self._checked_at = now
         try:
-            mtime = os.stat(self.path).st_mtime
-        except OSError:
-            self._keys, self._mtime = {}, None
-            return
-        if mtime == self._mtime:
-            return
-        try:
             with open(self.path, encoding="utf-8") as handle:
                 raw = json.load(handle)
+        except FileNotFoundError:
+            self._keys = {}
+            return
         except (OSError, ValueError):
             # A half-written or damaged file must not log every machine out:
             # keep what was loaded last time and look again next check.
@@ -77,7 +76,6 @@ class KeyRegistry:
             if isinstance(machines, dict)
             else {}
         )
-        self._mtime = mtime
 
     def key_for(self, machine_id: str) -> Optional[str]:
         with self._lock:
@@ -96,7 +94,7 @@ class KeyRegistry:
         """Create a key for `name` and return it. This is the only time it is shown."""
         if not name or proto.clean(name, 64) != name or not name.strip():
             raise EnrollmentError("a machine name must be 1 to 64 printable characters")
-        with self._lock:
+        with self._lock, self._writer_lock():
             self._checked_at = float("-inf")
             self._refresh()
             if name in self._keys:
@@ -109,7 +107,7 @@ class KeyRegistry:
 
     def revoke(self, name: str) -> bool:
         """Remove `name`. False if it was not enrolled."""
-        with self._lock:
+        with self._lock, self._writer_lock():
             self._checked_at = float("-inf")
             self._refresh()
             if name not in self._keys:
@@ -120,12 +118,28 @@ class KeyRegistry:
     def _write(self, keys: dict[str, str]) -> None:
         directory = os.path.dirname(self.path) or "."
         os.makedirs(directory, exist_ok=True)
-        temporary = f"{self.path}.tmp"
         # Created 0600 from the start: writing then chmod-ing leaves a window in
         # which the keys are readable by other accounts.
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"machines": keys}, handle, indent=2, sort_keys=True)
-        os.replace(temporary, self.path)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{os.path.basename(self.path)}.", dir=directory
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({"machines": keys}, handle, indent=2, sort_keys=True)
+            os.replace(temporary, self.path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary)
         self._keys = dict(keys)
-        self._mtime = os.stat(self.path).st_mtime
+
+    @contextlib.contextmanager
+    def _writer_lock(self) -> Iterator[None]:
+        # Lock a stable inode: locking the registry itself would stop protecting
+        # it as soon as an atomic replacement published a different inode.
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        descriptor = os.open(f"{self.path}.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(descriptor)

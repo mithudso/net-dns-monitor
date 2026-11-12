@@ -24,8 +24,9 @@ of the `STATUS_*` codes or `failed:<ExceptionClassName>`:
 **Authorisation is asynchronous.** `requestAuthorizationWithOptions:` answers on
 a background queue, and `post` runs on the main run loop inside a tick, so it
 cannot wait. The first call starts the request and holds its notification; the
-completion handler sends it on a grant and records `denied` otherwise. Later
-calls read the recorded answer.
+completion handler sends it on a grant and records `denied` on user refusal.
+An authorization error keeps held notifications for a later retry. Later calls
+read the recorded answer.
 
 Every side effect enters as a parameter with a real default (`backend_fn`,
 `bundle_fn`), so each path is testable offline. Nothing here raises, and no
@@ -73,6 +74,7 @@ BundleFn = Callable[[], tuple[Optional[str], Optional[str]]]
 
 _lock = threading.Lock()
 _auth_state = _AUTH_UNKNOWN
+_auth_request: Optional[object] = None
 _held: list[tuple[str, str, str]] = []
 _last_outcome = ""
 
@@ -214,7 +216,7 @@ def post(
     bundle_fn: BundleFn = _main_bundle,
 ) -> str:
     """Hand a banner to UserNotifications and return a status code. Never raises."""
-    global _auth_state
+    global _auth_state, _auth_request
     try:
         if not has_app_bundle(bundle_fn):
             return STATUS_NO_BUNDLE
@@ -224,42 +226,66 @@ def post(
             if _auth_state == _AUTH_PENDING:
                 _held.append((title, subtitle, message))
                 return STATUS_QUEUED
-            state = _auth_state
 
         backend = backend_fn()
         if backend is None:
             return STATUS_UNAVAILABLE
 
-        if state == _AUTH_GRANTED:
+        notification = (title, subtitle, message)
+        with _lock:
+            # Backend construction may yield to another poster. Only one caller
+            # may own the pending request, including its failure cleanup.
+            if _auth_state == _AUTH_DENIED:
+                return STATUS_DENIED
+            if _auth_state == _AUTH_PENDING:
+                _held.append(notification)
+                return STATUS_QUEUED
+            granted_already = _auth_state == _AUTH_GRANTED
+            if not granted_already:
+                request = object()
+                _auth_request = request
+                _auth_state = _AUTH_PENDING
+                _held.append(notification)
+
+        if granted_already:
             _send(backend, title, subtitle, message)
             return STATUS_QUEUED
 
-        with _lock:
-            _auth_state = _AUTH_PENDING
-            _held.append((title, subtitle, message))
-
         def answered(granted: bool, error: Optional[str]) -> None:
-            global _auth_state
+            global _auth_state, _auth_request
             with _lock:
+                if _auth_request is not request:
+                    return
+                _auth_request = None
+                if error is not None:
+                    # An API failure is not user refusal. Retain queued banners
+                    # for the next authorization attempt, with no error text.
+                    _auth_state = _AUTH_UNKNOWN
+                    _record("notification authorization failed")
+                    return
                 _auth_state = _AUTH_GRANTED if granted else _AUTH_DENIED
                 held = list(_held)
                 _held.clear()
             if not granted:
-                _record("notification authorization denied" + (" (error)" if error else ""))
+                _record("notification authorization denied")
                 return
-            try:
-                for held_title, held_subtitle, held_message in held:
+            for held_title, held_subtitle, held_message in held:
+                try:
                     _send(backend, held_title, held_subtitle, held_message)
-            except Exception as exc:  # noqa: BLE001 - runs on a framework thread
-                _record(f"delivery failed ({type(exc).__name__})")
+                except Exception as exc:  # noqa: BLE001 - runs on a framework thread
+                    _record(f"delivery failed ({type(exc).__name__})")
 
         try:
             backend.request_authorization(answered)
         except Exception:
             # Left pending forever would swallow every later alert silently.
             with _lock:
-                _auth_state = _AUTH_UNKNOWN
-                _held.clear()
+                if _auth_request is request:
+                    _auth_request = None
+                    _auth_state = _AUTH_UNKNOWN
+                    # This post returns failure. Other posts already returned
+                    # queued and must survive until a later request can retry.
+                    _held[:] = [item for item in _held if item is not notification]
             raise
         return STATUS_QUEUED
     except Exception as exc:  # noqa: BLE001 - nothing may raise out of a tick
@@ -267,8 +293,9 @@ def post(
 
 
 def _reset_for_tests() -> None:
-    global _auth_state, _last_outcome
+    global _auth_state, _auth_request, _last_outcome
     with _lock:
         _auth_state = _AUTH_UNKNOWN
+        _auth_request = None
         _held.clear()
     _last_outcome = ""

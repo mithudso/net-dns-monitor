@@ -7,6 +7,7 @@ audit and must not be mistaken for a deep-card or executable-inventory claim.
 """
 
 import json
+import os
 import subprocess
 from collections import Counter
 from datetime import date
@@ -62,6 +63,56 @@ def git(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
 
 
+def tracked_paths(root: Path | None = None) -> list[str]:
+    """Return repository sources, including untracked but nonignored additions.
+
+    A tracked file can later match .gitignore. Respect that privacy boundary too,
+    and never follow a symlink into a profile or directory outside the checkout.
+    """
+    root = ROOT if root is None else root
+
+    # Git's display quoting is not a filename encoding. NUL is the only safe
+    # delimiter: a tracked filename can contain tabs, newlines and whitespace.
+    # Decode after reading bytes: universal-newline mode rewrites carriage
+    # returns that are literal characters in a filename.
+    def paths(*arguments: str) -> set[str]:
+        output = os.fsdecode(
+            subprocess.check_output(
+                ["git", "ls-files", "-z", *arguments], cwd=root, stderr=subprocess.DEVNULL
+            )
+        )
+        return {path for path in output.split("\0") if path}
+
+    candidates = paths("--cached", "--others", "--exclude-standard")
+    ignored = paths("--cached", "--ignored", "--exclude-standard")
+
+    def local_path(path: str) -> bool:
+        relative = Path(path)
+        if relative.is_absolute() or ".." in relative.parts:
+            return False
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                return False
+        return True
+
+    return sorted(path for path in candidates - ignored if local_path(path))
+
+
+def census_paths(root: Path | None = None) -> list[str]:
+    """The exact input namespace shared by generation and the drift guard."""
+    return [path for path in tracked_paths(root) if not path.startswith("docs/llms/")]
+
+
+def provenance(path: str) -> str:
+    try:
+        size = (ROOT / path).stat().st_size
+    except FileNotFoundError:
+        return "[src: git]"
+    return f"[src: {path}#L1]" if size else "[src: git]"
+
+
 def role(path: str) -> str:
     if path.startswith("tests/"):
         return "test"
@@ -83,9 +134,7 @@ def main() -> None:
             raise SystemExit("Refusing to overwrite a dossier from another generator")
     elif OUT.exists():
         raise SystemExit("Refusing to overwrite an existing directory without a manifest")
-    paths = set(git("ls-files").splitlines())
-    paths.update(path for path in ADDITIONS if (ROOT / path).is_file())
-    paths = sorted(path for path in paths if not path.startswith("docs/llms/"))
+    paths = census_paths()
     index = json.loads((ROOT / "docs/high_signal_file_index.json").read_text())
     importance = {entry["path"]: entry["importance"] for entry in index["files"]}
     cards = [
@@ -95,7 +144,7 @@ def main() -> None:
             "importance": importance.get(path, "ordinary"),
             "read_depth": "shallow",
             "purpose": f"Filename-based {role(path)} retrieval entry. [asserted]",
-            "provenance": (f"[src: {path}#L1]" if (ROOT / path).stat().st_size else "[src: git]"),
+            "provenance": provenance(path),
         }
         for path in paths
     ]
@@ -108,7 +157,7 @@ def main() -> None:
     def header(purpose: str) -> str:
         return (
             f"# net-dns-monitor — {purpose}\n"
-            f"> Source: {ROOT} · {remote} @ {commit}{dirty}\n"
+            f"> Source: repository worktree · {remote} @ {commit}{dirty}\n"
             f"> Generated: {generated} by crawl-repo-to-llms v1.2.0 (partial static adapter)\n"
             f"> Census: {len(paths)} enumerated / 0 deep-read / {len(paths)} shallow"
             " · partial: census only; no deep cards or executable inventory\n\n"
@@ -177,7 +226,7 @@ def main() -> None:
         "generator": "scripts/generate_static_dossier.py",
         "skill": "crawl-repo-to-llms",
         "skill_version": "1.2.0",
-        "source": str(ROOT),
+        "source": "repository worktree",
         "remote": remote,
         "commit": commit,
         "dirty": bool(dirty),
@@ -194,7 +243,7 @@ def main() -> None:
         "deep_reviewed_paths": [f"netdnsmonitor/{name}.py" for name in REVIEWED],
         "deep_review_scope": "Group 4 maintainability audit; separate from dossier card depth.",
         "deferred_paths": paths,
-        "redactions": [],
+        "redactions": ["absolute checkout path omitted; ignored paths and symlinks excluded"],
         "budget_used": "Static local census; no semantic service or source execution.",
     }
     OUT.mkdir(parents=True, exist_ok=True)

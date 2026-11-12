@@ -185,17 +185,15 @@ def no_real_system_probes(request, monkeypatch):
     fixture the suite ran each privilege probe 37 times across six test modules,
     and the answers depended on whichever machine ran the suite.
 
-    The privilege functions and `make_log_reader` are patched on their own modules
-    because the app looks them up through those modules at call time; there is no
-    narrower seam. `make_log_watcher` is patched where `netdnsmonitor.app` bound it,
+    The privilege functions and `make_log_reader` are patched on their own modules.
+    The app captures the privilege providers before scheduling the worker and the
+    log reader at construction, so delayed workers retain the fakes after fixture
+    teardown. `make_log_watcher` is patched where `netdnsmonitor.app` bound it,
     which touches nothing else. The privilege defaults describe an ungranted
     machine whose interfaces were not read -- the same machine
     `make_repair_executor` assumes when given no probes. A test that needs other
     answers patches over these, as test_app_privilege_wiring.py does.
 
-    The probe and the log read run on daemon threads, so a thread that is slow to
-    start can outlive its test's patch and reach the real function. The stubs
-    return at once, which keeps that window small; it is not closed.
     """
     module = request.path.stem
     if module not in _REAL_PRIVILEGE_PROBES:

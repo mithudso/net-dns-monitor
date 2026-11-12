@@ -9,9 +9,13 @@ helpers (`chunk_text`, `should_index`, the path rules) import without chromadb
 installed -- which is what lets the offline test suite cover them.
 """
 
+import fcntl
+import hashlib
 import os
 import re
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 # Anchored to this file, not the cwd: the watcher is started by launchd with
 # whatever cwd it has, and a cwd-relative path there produced a second, empty
@@ -30,6 +34,7 @@ EXCLUDED = {
     ".venv",
     ".claude",
     ".chroma_db",
+    ".semantic-index-locks",
     ".pytest_cache",
     ".ruff_cache",
     "__pycache__",
@@ -105,7 +110,26 @@ def open_collection():
     return client.get_or_create_collection(name=COLLECTION, embedding_function=ollama_ef)
 
 
+@contextmanager
+def source_lock(filepath: str, root: str = None) -> Iterator[None]:
+    """Serialize reading and replacing one source's chunks across processes."""
+    directory = os.path.join(root or REPO_ROOT, ".semantic-index-locks")
+    os.makedirs(directory, exist_ok=True)
+    key = hashlib.sha256(source_key(filepath, root).encode("utf-8")).hexdigest()
+    fd = os.open(os.path.join(directory, key), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def remove_file(filepath: str, collection=None, root: str = None) -> None:
+    with source_lock(filepath, root):
+        _remove_file(filepath, collection, root)
+
+
+def _remove_file(filepath: str, collection=None, root: str = None) -> None:
     src = source_key(filepath, root)
     collection = collection if collection is not None else open_collection()
     collection.delete(where={"source": src})
@@ -113,6 +137,16 @@ def remove_file(filepath: str, collection=None, root: str = None) -> None:
 
 
 def index_file(filepath: str, collection=None, root: str = None) -> None:
+    # Preserve the no-write skip path. Recheck after taking the lock because
+    # the source can disappear while another writer finishes.
+    if not os.path.isfile(filepath) or not should_index(filepath, root):
+        print(f"Skipping non-indexable file: {filepath}")
+        return
+    with source_lock(filepath, root):
+        _index_file(filepath, collection, root)
+
+
+def _index_file(filepath: str, collection=None, root: str = None) -> None:
     if not os.path.isfile(filepath) or not should_index(filepath, root):
         print(f"Skipping non-indexable file: {filepath}")
         return
@@ -135,7 +169,8 @@ def index_file(filepath: str, collection=None, root: str = None) -> None:
             ids=ids,
         )
     existing = collection.get(where={"source": src}).get("ids") or []
-    stale = [i for i in existing if i not in set(ids)]
+    current_ids = set(ids)
+    stale = [i for i in existing if i not in current_ids]
     if stale:
         collection.delete(ids=stale)
     if not chunks:

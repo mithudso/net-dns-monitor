@@ -202,7 +202,14 @@ def test_a_gap_is_drawn_as_a_gap_not_interpolated_across():
 def test_the_throughput_formatter_is_used_for_the_axis():
     """A throughput axis labelled in raw bits per second would read 1200000."""
     assert format_bits(1_200_000) == "1.2M"
-    render_series_graph([1.2e6] * 20, kind="download", format_value=format_bits)
+    calls = []
+
+    def formatter(value):
+        calls.append(value)
+        return format_bits(value)
+
+    render_series_graph([1.2e6] * 20, kind="download", format_value=formatter)
+    assert calls[:4] == pytest.approx([0, 440_000, 880_000, 1_320_000])
 
 
 def test_sub_kilobit_throughput_is_labelled_in_bits_not_zero():

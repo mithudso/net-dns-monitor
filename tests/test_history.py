@@ -1,10 +1,11 @@
 """The rolling sample history behind the graphs.
 
 Clock injected, so ordering and spans are exact. The file is real, because
-append-then-compact is the whole point of the persistence design and asserting
-against line counts on disk is the only way to pin it.
+append-then-compact is the whole point of the persistence design. Operation
+spies distinguish steady-state appends from rewrites; byte checks pin content.
 """
 
+import builtins
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -95,16 +96,29 @@ def test_latest_is_none_when_empty():
 # --- persistence -----------------------------------------------------------
 
 
-def test_each_sample_costs_one_appended_line(tmp_path):
+def test_each_sample_costs_one_appended_line(tmp_path, monkeypatch):
     """The steady-state cost. A full rewrite per sample would be ~17,000
     rewrites of the whole file per day at a 5s cadence.
     """
     history = make(tmp_path, max_samples=100)
+    modes = []
+    writes = []
+    original_open = builtins.open
+
+    def recording_open(path, mode="r", *args, **kwargs):
+        if Path(path) == tmp_path / "history.jsonl":
+            modes.append(mode)
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", recording_open)
+    history._write = lambda *args: writes.append(args)
     for _ in range(5):
         history.record(rtt_ms=1.0)
     lines = (tmp_path / "history.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 5
     assert json.loads(lines[0])["rtt_ms"] == 1.0
+    assert modes == ["a"] * 5
+    assert writes == []
 
 
 def test_the_file_is_compacted_once_it_outgrows_the_window(tmp_path):

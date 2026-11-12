@@ -663,6 +663,9 @@ def validate_config(config: dict) -> None:
                 key,
                 f"config key '{key}' must be a whole number of at least {minimum}, got {value!r}",
             )
+        # YAML integral floats are accepted, but slice limits and deque sizes
+        # require an actual integer at their consumers.
+        config[key] = int(value)
 
     # `failover_enabled: "false"` is a non-empty string and so truthy: it arms
     # automatic failover. None is not False either, so a null is refused too.

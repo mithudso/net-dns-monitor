@@ -410,15 +410,17 @@ class NetworkFailover:
             return []
         return parse_service_order(getattr(result, "stdout", "") or "")
 
+    def _active_service(self, services):
+        return next((service for service in services if service.enabled), None)
+
     def _active_side(self, services) -> str:
-        """Any configured backup sitting first counts as "on the backup" -- not
-        just the one most recently chosen. Otherwise a restart, or a switch to a
-        different candidate, would read as being on the preferred link and
-        invite a second switch on top of the first.
+        """Any configured backup that leads the enabled services counts as
+        "on the backup", not just the most recently chosen one. macOS skips
+        disabled services, so their position cannot establish an active backup
+        or bypass the enable-and-verify path.
         """
-        if not services:
-            return PREFERRED
-        return BACKUP if services[0].name in self.backup_services else PREFERRED
+        active = self._active_service(services)
+        return BACKUP if active is not None and active.name in self.backup_services else PREFERRED
 
     def _probe_all(self, devices: list) -> dict:
         """Probe several interfaces against ONE deadline, keyed by device.
@@ -605,7 +607,7 @@ class NetworkFailover:
         # backup" is only a no-op when no particular one was named.
         if target == BACKUP and active_side == BACKUP and not service:
             return "no switch: already on the backup network"
-        if target == BACKUP and service and services[0].name == service:
+        if target == BACKUP and service and services[0].name == service and services[0].enabled:
             return f"no switch: already on '{service}'"
         if target == PREFERRED and active_side == PREFERRED:
             if services[0].name != self.preferred_service:
@@ -667,10 +669,11 @@ class NetworkFailover:
 
         backups = [describe(name) for name in self.backup_services]
         active_side = self._active_side(services)
+        active_service = self._active_service(services)
         return {
             "error": None,
             "active_side": active_side,
-            "active_service": services[0].name,
+            "active_service": active_service.name if active_service is not None else None,
             "preferred": describe(self.preferred_service),
             # The single `backup` key stays for callers that only show one; the
             # list is what the console and the ranking actually use.

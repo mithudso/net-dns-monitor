@@ -123,7 +123,7 @@ def test_all_targets_share_one_deadline():
     assert all(b <= 0.1 for b in budgets)
 
 
-def test_ipv6_targets_select_the_ipv6_bind_option():
+def test_ipv6_targets_select_the_ipv6_bind_option(monkeypatch):
     """The ordinary prober accepts an IPv6 external target, so this one must
     too -- forcing every probe through AF_INET would report a link that had
     recovered over IPv6 as unreachable, and it would never be failed back to.
@@ -156,15 +156,24 @@ def test_ipv6_targets_select_the_ipv6_bind_option():
 
     from netdnsmonitor import interface_probe
 
-    real_socket = socket.socket
-    socket.socket = lambda fam, typ: FakeSocket(fam, typ)
-    try:
+    def resolve(host, port, family, kind):
+        assert family == socket.AF_UNSPEC and kind == socket.SOCK_STREAM
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        address = (host, port, 0, 0) if family == socket.AF_INET6 else (host, port)
+        return [(family, kind, 6, "", address)]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(socket, "socket", FakeSocket)
+    assert (
         interface_probe.default_bound_connect(
             "en0", "2606:4700:4700::1111", 443, 1.0, index_fn=lambda d: 15
         )
+        is True
+    )
+    assert (
         interface_probe.default_bound_connect("en0", "1.1.1.1", 443, 1.0, index_fn=lambda d: 15)
-    finally:
-        socket.socket = real_socket
+        is True
+    )
 
     assert seen[0] == socket.AF_INET6
     assert seen[1] == (socket.IPPROTO_IPV6, 125)
@@ -393,7 +402,12 @@ def test_bound_probes_refuse_hostname_lookup_before_resolving(monkeypatch):
     assert default_bound_connect("en0", "example.com", 443, 1, index_fn=lambda d: 1) is False
 
 
-def test_default_device_index_of_an_absent_interface_is_none():
+def test_default_device_index_of_an_absent_interface_is_none(monkeypatch):
+    def absent(device):
+        assert device == "nonexist0"
+        raise OSError(errno.ENXIO, "synthetic absent interface")
+
+    monkeypatch.setattr(socket, "if_nametoindex", absent)
     assert default_device_index("nonexist0") is None
 
 

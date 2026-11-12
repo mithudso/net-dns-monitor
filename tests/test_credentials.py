@@ -49,6 +49,15 @@ def store(env=None, keychain=None):
     return CredentialStore(env=env or {}, backend_factory=lambda: keychain), keychain
 
 
+def test_unencodable_credential_is_failure_data_without_a_write():
+    creds, keychain = store()
+    outcome = creds.set("SMTP_PASSWORD", "PRIVATE_MARKER\ud800")
+    assert outcome.startswith("failed:")
+    assert "UnicodeEncodeError" in outcome
+    assert "PRIVATE_MARKER" not in outcome
+    assert keychain.calls == []
+
+
 def test_the_environment_wins_so_the_direct_build_behaves_as_before():
     creds, keychain = store(
         env={"ANTHROPIC_API_KEY": "from-env"},

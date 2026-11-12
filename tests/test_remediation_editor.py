@@ -1,5 +1,7 @@
 """The editor's logic (everything but the AppKit window) and its wiring into the app."""
 
+from types import SimpleNamespace
+
 import pytest
 import rumps
 
@@ -15,6 +17,7 @@ from netdnsmonitor.remediation_editor import (
     utf16_length,
 )
 from netdnsmonitor.remediation_scripts import RunResult, ScriptStore
+from netdnsmonitor.remediation_window import RemediationWindowController
 from tests.test_app_appstore_wiring import DIRECT, STORE, build_app
 from tests.test_remediation_scripts import CUSTOM
 
@@ -178,6 +181,137 @@ def test_the_description_reads_like_documentation(tmp_path):
     session, _ = make_session(tmp_path)
     text = session.description("renew_dhcp_lease")
     assert "repair" in text and "needs the sudoers grant" in text and "lease_time" in text
+
+
+def make_fake_editor(tmp_path, monkeypatch):
+    from netdnsmonitor import remediation_window
+
+    executed, confirmations = [], []
+    session = EditorSession(
+        ScriptStore(user_dir=tmp_path / "u"),
+        run_source=lambda *args: executed.append(args) or RunResult("ok: synthetic"),
+        clock=lambda: 0.0,
+    )
+    controller = RemediationWindowController(session, on_main=lambda fn: fn())
+    buffer = [""]
+    controller.editor = SimpleNamespace(
+        string=lambda: buffer[0], setString_=lambda text: buffer.__setitem__(0, text)
+    )
+    controller.remove_button = SimpleNamespace(setTitle_=lambda t: None, setEnabled_=lambda b: None)
+    selected = []
+    controller.popup = SimpleNamespace(selectItemAtIndex_=selected.append)
+    controller._recolour = lambda: None
+    controller._confirm = lambda *args: confirmations.append(args) or False
+
+    class InlineThread:
+        def __init__(self, target, args, daemon):
+            self.target, self.args = target, args
+
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(remediation_window.threading, "Thread", InlineThread)
+    return controller, buffer, executed, confirmations, selected
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_editor_confirms_the_captured_unsaved_repair_source(tmp_path, monkeypatch, saved):
+    controller, buffer, executed, confirmations, _ = make_fake_editor(tmp_path, monkeypatch)
+    if saved:
+        assert controller.session.store.save("my_check", CUSTOM) == []
+    controller.current = "my_check"
+    buffer[0] = CUSTOM.replace('KIND = "check"', 'KIND = "repair"')
+    controller.run()
+    assert len(confirmations) == 1
+    assert confirmations[0][0] == "Run my_check for real?"
+    assert executed == []
+    assert not controller._busy
+
+
+def test_editor_runs_exactly_the_source_that_was_confirmed(tmp_path, monkeypatch):
+    controller, buffer, executed, _, _ = make_fake_editor(tmp_path, monkeypatch)
+    assert controller.session.store.save("my_check", CUSTOM) == []
+    controller.current = "my_check"
+    repair = CUSTOM.replace('KIND = "check"', 'KIND = "repair"')
+    buffer[0] = repair
+    confirmed = []
+
+    def confirm(*args):
+        confirmed.append(args)
+        buffer[0] = "changed during confirmation"
+        return True
+
+    controller._confirm = confirm
+    controller.run()
+    assert len(confirmed) == 1
+    assert executed == [("my_check", repair, "dns")]
+    assert not controller._busy
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_picker_cancel_keeps_the_current_draft(tmp_path, monkeypatch, saved):
+    controller, buffer, _, confirmations, selected = make_fake_editor(tmp_path, monkeypatch)
+    if saved:
+        assert controller.session.store.save("my_check", CUSTOM) == []
+    controller.current = "my_check"
+    controller._names = (
+        ["check_interface_state", "my_check"] if saved else ["check_interface_state"]
+    )
+    controller._loaded_text = CUSTOM
+    draft = CUSTOM + "# unsaved edit\n" if saved else CUSTOM
+    buffer[0] = draft
+    controller.pick(0)
+    assert len(confirmations) == 1
+    assert buffer[0] == draft
+    assert controller.current == "my_check"
+    assert selected == ([1] if saved else [-1])
+
+
+def test_picker_allows_explicit_discard_and_clean_navigation(tmp_path, monkeypatch):
+    controller, buffer, _, confirmations, _ = make_fake_editor(tmp_path, monkeypatch)
+    assert controller.session.store.save("my_check", CUSTOM) == []
+    controller.current = "my_check"
+    controller._loaded_text = CUSTOM
+    controller._names = ["check_interface_state", "my_check"]
+    buffer[0] = CUSTOM + "# edit\n"
+    controller._confirm = lambda *args: confirmations.append(args) or True
+    controller.pick(0)
+    assert len(confirmations) == 1
+    assert controller.current == "check_interface_state"
+    assert buffer[0] == controller.session.load("check_interface_state")
+    controller.pick(1)
+    assert len(confirmations) == 1
+    assert controller.current == "my_check" and buffer[0] == CUSTOM
+
+
+def test_reselecting_the_current_script_keeps_its_draft(tmp_path, monkeypatch):
+    controller, buffer, _, confirmations, _ = make_fake_editor(tmp_path, monkeypatch)
+    controller.current = "my_check"
+    controller._names = ["my_check"]
+    draft = CUSTOM + "# draft\n"
+    buffer[0] = draft
+    controller.pick(0)
+    assert buffer[0] == draft and confirmations == []
+
+
+def test_new_cancel_keeps_an_unsaved_script_without_opening_a_dialog(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(
+        sys.modules,
+        "AppKit",
+        SimpleNamespace(
+            NSAlert=SimpleNamespace(alloc=lambda: pytest.fail("unexpected GUI dialog")),
+            NSTextField=object,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "Foundation", SimpleNamespace(NSMakeRect=lambda *args: args))
+    controller, buffer, _, confirmations, _ = make_fake_editor(tmp_path, monkeypatch)
+    controller.current = "my_check"
+    controller._loaded_text = buffer[0] = CUSTOM
+    controller.new()
+    assert len(confirmations) == 1
+    assert buffer[0] == CUSTOM and controller.current == "my_check"
 
 
 # --- the app -----------------------------------------------------------------

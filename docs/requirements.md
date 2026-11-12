@@ -14,6 +14,14 @@
 6. **Escalate** to Claude when the ladder cannot resolve an incident. This needs the user's API key, plus explicit in-app permission in the App Store build.
 7. **Report.** Write an IT-ready report and forensic episode on disk. Optionally alert Slack or email with redacted text.
 8. **Localize** the fault (this machine, local network, DNS, upstream) using peers on the same subnet.
+9. **Report a fleet** through the optional headless role and separate signed-UDP
+   receiver. Preserve per-machine enrollment, bounded retries, authenticated
+   acknowledgements and explicit inferred recovery. See [Fleet](FLEET.md).
+10. **Edit remediation** in the direct build through injected-context scripts.
+    Confirm repairs against the actual editor source and preserve unsaved
+    drafts unless the user explicitly discards them. The App Store capability
+    profile excludes the editor and user overrides. See
+    [Remediation scripts](REMEDIATION_SCRIPTS.md).
 
 ## Non-functional
 
@@ -38,3 +46,18 @@
 | `anthropic` | Claude escalation |
 
 Development only (`requirements-dev.txt`): `pytest`, `ruff`. The store build also needs `py2app` and Xcode.
+
+## Dependency review — 2026-11-12
+
+The four runtime package pins remain unchanged. The constraint set updates
+`certifi` to 2026.10.23 and build tooling `setuptools` to 84.1.0 after their
+[certificate-bundle](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2)
+and [legacy Windows installation](https://github.com/pypa/setuptools/security/advisories/GHSA-xmj3-9gf7-h52w)
+advisories. Both are absent from the tested runtime/development profile alone;
+these are latent/build constraint repairs, not evidence of an exploited runtime
+path. The constrained development/build dependency resolution passed without
+building, signing or installing the application.
+
+Optional index tooling has its own requirements profile and dated dependency
+limits in [MCP](MCP.md). Changing a requirements file does not upgrade a live
+environment or authorize an index, model, watcher or service activation.

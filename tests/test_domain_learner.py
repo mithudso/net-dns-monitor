@@ -241,9 +241,11 @@ def test_extract_ignores_the_redaction_placeholder():
     assert extract_failed_domains(["query for <private> timed out"]) == []
 
 
-def test_is_probeable_domain_rejects_reverse_dns_bundle_identifiers():
-    assert is_probeable_domain("com.apple.mdns") is False
-    assert is_probeable_domain("org.mozilla.firefox") is False
+def test_domain_syntax_alone_cannot_identify_reverse_dns_bundle_identifiers():
+    # These are also valid DNS names. Bracketed subsystem context, tested above,
+    # is what distinguishes log scaffolding from a queried hostname.
+    assert is_probeable_domain("com.apple.mdns") is True
+    assert is_probeable_domain("org.mozilla.firefox") is True
     assert is_probeable_domain("apple.com") is True
 
 
@@ -526,28 +528,35 @@ def test_the_store_stays_consistent_under_concurrent_add_and_remove(tmp_path):
     store = InMemoryStore(str(tmp_path / "learned.json"), max_domains=5)
     names = [f"host{i}.example.com" for i in range(8)]
     violations = []
+    errors = []
     previous = sys.getswitchinterval()
     sys.setswitchinterval(1e-6)
 
     def churn(offset):
-        for i in range(2000):
-            store.add([names[(i + offset) % len(names)]])
-            if i % 3 == 0:
-                store.remove([names[(i + offset + 1) % len(names)]])
-            current = store.domains
-            if len(current) != len(set(current)) or len(current) > 5:
-                violations.append(current)
+        try:
+            for i in range(2000):
+                store.add([names[(i + offset) % len(names)]])
+                if i % 3 == 0:
+                    store.remove([names[(i + offset + 1) % len(names)]])
+                current = store.domains
+                if len(current) != len(set(current)) or len(current) > 5:
+                    violations.append(current)
+        except Exception as exc:  # noqa: BLE001 - worker failures must fail the test
+            errors.append(exc)
 
     try:
-        workers = [threading.Thread(target=churn, args=(n,)) for n in (0, 0, 3, 5)]
+        workers = [threading.Thread(target=churn, args=(n,), daemon=True) for n in (0, 0, 3, 5)]
         for worker in workers:
             worker.start()
+        deadline = time.monotonic() + 5
         for worker in workers:
-            worker.join(timeout=60)
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+        assert all(not worker.is_alive() for worker in workers), "store workers did not finish"
     finally:
         sys.setswitchinterval(previous)
 
     assert violations == []
+    assert errors == []
 
 
 def test_a_second_caller_waits_for_the_first_so_only_one_scan_starts(tmp_path):

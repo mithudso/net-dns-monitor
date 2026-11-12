@@ -18,33 +18,36 @@ LOG_DIR="$HOME/Library/Logs"
 
 mkdir -p "$LOG_DIR" "$(dirname "$PLIST_PATH")"
 
-# Written beside the target and linted before the move so a bad file never
-# replaces the working one.
-STAGED_PLIST="$PLIST_PATH.new"
-cat <<EOF > "$STAGED_PLIST"
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${LABEL}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${REPO_ROOT}/.venv/bin/python3</string>
-        <string>${SCRIPT_DIR}/watch_and_index.py</string>
-        <string>${REPO_ROOT}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>${LOG_DIR}/semantic_indexer.log</string>
-    <key>StandardErrorPath</key>
-    <string>${LOG_DIR}/semantic_indexer.err</string>
-</dict>
-</plist>
-EOF
+# Reject overlapping installs rather than interleaving bootout/bootstrap.
+INSTALL_LOCK="$PLIST_PATH.install.lock"
+mkdir "$INSTALL_LOCK" 2>/dev/null \
+    || { echo "error: another indexer install owns $INSTALL_LOCK" >&2; exit 1; }
+STAGED_PLIST=""
+cleanup() {
+    [[ -z "$STAGED_PLIST" ]] || rm -f "$STAGED_PLIST"
+    rmdir "$INSTALL_LOCK"
+}
+trap cleanup EXIT
+
+# Every invocation owns its staging inode. Serialize values as data so valid
+# filesystem names containing XML metacharacters survive unchanged.
+STAGED_PLIST="$(mktemp "$PLIST_PATH.XXXXXX")"
+"$REPO_ROOT/.venv/bin/python3" - "$STAGED_PLIST" "$LABEL" "$REPO_ROOT" "$SCRIPT_DIR" "$LOG_DIR" <<'PYEOF'
+import plistlib
+import sys
+from pathlib import Path
+
+path, label, root, scripts, logs = sys.argv[1:]
+Path(path).write_bytes(plistlib.dumps({
+    "Label": label,
+    "ProgramArguments": [str(Path(root) / ".venv/bin/python3"),
+                         str(Path(scripts) / "watch_and_index.py"), root],
+    "RunAtLoad": True,
+    "KeepAlive": True,
+    "StandardOutPath": str(Path(logs) / "semantic_indexer.log"),
+    "StandardErrorPath": str(Path(logs) / "semantic_indexer.err"),
+}))
+PYEOF
 plutil -lint "$STAGED_PLIST" >/dev/null \
     || { rm -f "$STAGED_PLIST"; echo "error: generated plist is malformed; $PLIST_PATH was not changed" >&2; exit 1; }
 mv -f "$STAGED_PLIST" "$PLIST_PATH"

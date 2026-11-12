@@ -24,6 +24,22 @@ ok()   { echo "OK   $1"; }
 info() { echo "..   $1"; }
 fail() { echo "FAIL $1" >&2; exit 1; }
 
+# Hold both reservations until startup is observable. Only remove locks this
+# invocation created; a stale lock is an explicit operator recovery decision.
+BUILD_LOCK=""
+START_LOCK=""
+release_startup_locks() {
+    [[ -z "$START_LOCK" ]] || rmdir "$START_LOCK"
+    [[ -z "$BUILD_LOCK" ]] || rmdir "$BUILD_LOCK"
+}
+trap release_startup_locks EXIT
+mkdir "$REPO_DIR/.netdns-build.lock" 2>/dev/null || fail "another build owns $REPO_DIR/.netdns-build.lock"
+BUILD_LOCK="$REPO_DIR/.netdns-build.lock"
+START_LOCK_CANDIDATE="$HOME/Library/Application Support/net-dns-monitor/startup.lock"
+mkdir -p "$(dirname "$START_LOCK_CANDIDATE")"
+mkdir "$START_LOCK_CANDIDATE" 2>/dev/null || fail "another startup owns $START_LOCK_CANDIDATE"
+START_LOCK="$START_LOCK_CANDIDATE"
+
 echo "== net-dns-monitor: checking install =="
 
 [[ "$(uname)" == "Darwin" ]] || fail "macOS required (the app shells out to log/scutil/dscacheutil)"
@@ -168,14 +184,35 @@ APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/Net-DNS-Monitor"
 # embedded interpreter's own NSBundle.mainBundle() resolves to this
 # project's bundle path and CFBundleName, not Python.framework's.
 #
-# Rebuilt only when missing or stale (py2app freezes the whole interpreter
-# + dependencies, so it's much slower than a plain launch) -- stale means
-# any tracked source file changed since the last build.
+# Content identity catches timestamp-preserving restores and source deletions.
+# The saved fingerprint is published only after a successful, stable build.
+build_fingerprint() {
+    python - "$REPO_DIR" <<'PYEOF'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+inputs = [root / name for name in ("setup.py", "requirements.txt", "constraints.txt")]
+inputs += [path for path in (root / "netdnsmonitor").rglob("*")
+           if path.is_file() and "__pycache__" not in path.parts]
+digest = hashlib.sha256()
+for path in sorted(inputs):
+    name = path.relative_to(root).as_posix().encode("utf-8")
+    data = path.read_bytes()
+    digest.update(len(name).to_bytes(8, "big"))
+    digest.update(name)
+    digest.update(len(data).to_bytes(8, "big"))
+    digest.update(data)
+print(digest.hexdigest())
+PYEOF
+}
+FINGERPRINT_FILE="$REPO_DIR/dist/.netdns-source.sha256"
+SOURCE_FINGERPRINT="$(build_fingerprint)"
 NEEDS_BUILD=0
-if [[ ! -x "$APP_EXECUTABLE" ]]; then
+if [[ ! -x "$APP_EXECUTABLE" || ! -f "$FINGERPRINT_FILE" ]]; then
     NEEDS_BUILD=1
-elif [[ -n "$(find "$REPO_DIR/netdnsmonitor" "$REPO_DIR/setup.py" "$REPO_DIR/requirements.txt" \
-        "$CONSTRAINTS" -name '__pycache__' -prune -o -newer "$APP_EXECUTABLE" -print 2>/dev/null)" ]]; then
+elif [[ "$(cat "$FINGERPRINT_FILE")" != "$SOURCE_FINGERPRINT" ]]; then
     NEEDS_BUILD=1
 fi
 
@@ -189,9 +226,13 @@ if [[ "$NEEDS_BUILD" == "1" ]]; then
     # runs (confirmed empirically: a second py2app invocation failed with
     # "[Errno 66] Directory not empty" against a stale one) -- clear it,
     # not dist/, so a failed rebuild doesn't destroy the last-known-good app.
-    rm -rf "$REPO_DIR/build"
-    (cd "$REPO_DIR" && python setup.py py2app >/dev/null)
+    rm -rf "$REPO_DIR/build/direct-py2app"
+    (cd "$REPO_DIR" && python setup.py py2app --bdist-base "$REPO_DIR/build/direct-py2app" >/dev/null)
     [[ -x "$APP_EXECUTABLE" ]] || fail "py2app build did not produce $APP_EXECUTABLE"
+    [[ "$(build_fingerprint)" == "$SOURCE_FINGERPRINT" ]] || fail "source changed during build; re-run before launching"
+    FINGERPRINT_TMP="$(mktemp "$FINGERPRINT_FILE.XXXXXX")"
+    printf '%s\n' "$SOURCE_FINGERPRINT" > "$FINGERPRINT_TMP"
+    mv -f "$FINGERPRINT_TMP" "$FINGERPRINT_FILE"
     ok "built $APP_BUNDLE"
 else
     ok "$APP_BUNDLE is up to date, skipping rebuild"
@@ -220,3 +261,14 @@ info "'Net-DNS-Monitor' instead of 'Python' -- this terminal is no longer"
 info "attached to the app once launched. Output goes to: $LOG_FILE"
 info "Quit it from the menu bar's Quit item (or: pkill -f Net-DNS-Monitor)"
 open -n "$APP_BUNDLE" --stdout "$LOG_FILE" --stderr "$LOG_FILE"
+
+# LaunchServices accepts a request before the process exists. Keep the startup
+# reservation until an exact-name PID is visible so a second run cannot race it.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if pgrep -x Net-DNS-Monitor >/dev/null 2>&1; then
+        ok "app process is running"
+        exit 0
+    fi
+    sleep 1
+done
+fail "launch requested but no Net-DNS-Monitor process appeared; check $LOG_FILE"

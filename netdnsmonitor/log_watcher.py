@@ -38,6 +38,7 @@ def make_log_watcher(
     timeout: float = TIMEOUT_SECONDS,
     max_lines: int = MAX_LINES,
 ):
+    max_lines = max(0, max_lines)
     predicate = (
         'process == "mDNSResponder" OR eventMessage CONTAINS "DNS" '
         'OR eventMessage CONTAINS "network"'
@@ -85,7 +86,7 @@ def make_log_watcher(
             return [
                 f"[net-dns-monitor] {len(lines) - max_lines} earlier error-like lines "
                 "omitted; narrow log_lookback for the full set"
-            ] + lines[-max_lines:]
+            ] + (lines[-max_lines:] if max_lines else [])
         return lines
 
     return watcher

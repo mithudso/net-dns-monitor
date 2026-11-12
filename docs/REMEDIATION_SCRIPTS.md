@@ -46,6 +46,10 @@ four.
 Edits take effect on the next incident. Nothing needs a restart: the folder is read each
 time a step runs.
 
+Saving source identical to the shipped script restores that script only if the
+override can actually be removed. A removal failure is reported and preserves
+the existing override; it never reports a successful reset.
+
 ## The editor
 
 Open it from the status-item menu (**Edit remediation scripts**), the dashboard's
@@ -63,6 +67,12 @@ Open it from the status-item menu (**Edit remediation scripts**), the dashboard'
 The lower pane shows the script's description (its docstring) until you run a test.
 Python syntax is coloured as you type. Smart quotes, smart dashes and autocorrect are off,
 because a curly quote is a syntax error that looks identical on screen.
+
+Repair confirmation uses the current captured editor text, including a new
+unsaved repair or a check edited into a repair. The same captured text executes
+after confirmation. Selecting another script or creating a new one asks before
+discarding an unsaved draft; cancelling preserves the draft and selection.
+Reselecting the current script does not reload and erase it.
 
 ## Anatomy of a script
 
@@ -89,6 +99,10 @@ def run(ctx):
 The constants must be **literals** (`ast.literal_eval`): the editor lists scripts by
 reading the syntax tree and never runs one to list it. `run(ctx)` must return a
 non-empty string.
+
+Validation accepts a synchronous function that can receive one positional
+context, including `run(ctx, /)` and optional extra parameters. It refuses a
+signature that requires another argument or a required keyword-only argument.
 
 For the **shipped** steps, the ladder order and the `KIND`, `NEEDS_PRIVILEGE` and `REASON`
 tags come from `netdnsmonitor/ladder.py`; changing those constants in an override of a

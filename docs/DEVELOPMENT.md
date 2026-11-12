@@ -57,6 +57,7 @@ Optional credentials, none of which belong in `config.yaml`:
 export ANTHROPIC_API_KEY=sk-ant-...   # enables LLM escalation
 export SLACK_WEBHOOK_URL=https://...  # enables the Slack channel
 export SMTP_PASSWORD=...              # if the mail relay authenticates
+export FLEET_MACHINE_KEY=...          # optional signed fleet reporting
 ```
 
 For a Slack incoming webhook the URL *is* the credential, which is why it lives
@@ -172,3 +173,24 @@ submitting that build.
   `docs/known-issues.md` → Confirmed limitations.
 - **Config edit did nothing.** Most keys are read once at startup;
   `net-dns-monitor-service restart`.
+
+## Maintenance boundaries
+
+The offline wiki starts at [wiki/index.md](wiki/index.md). The component map and
+retrieval census include the existing headless, fleet and remediation modules.
+`check_docs.py` compares the census with current nonignored Git paths, checks
+runtime component entries and enforces the Ruff hook/dev pin match. The static
+census excludes symlinks, including symlink ancestors, and tracked paths that
+now match ignore rules. Its shallow cards do not establish a deep semantic index.
+
+Hold `scripts.rotate_workflow_logs.journal_lock(path)` across each automated
+journal read/write cycle. Rotation and cooperating writers share that persistent
+lock inode; a noncooperating editor can still race a later replacement. Preserve
+editor swap-file refusals. See [INSTALLATION.md](INSTALLATION.md) for inspected
+manual recovery of directory reservations left by abrupt process termination.
+
+The optional semantic indexer serializes same-file changes with persistent
+advisory locks under `.semantic-index-locks/`. Its watcher coalesces pending
+changes and avoids overlapping callback runs. These are source-level guarantees,
+not evidence of a refreshed live index. Queries, model execution and index writes
+require separate authorization.

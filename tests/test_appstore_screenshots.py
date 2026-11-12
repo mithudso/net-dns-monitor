@@ -146,13 +146,15 @@ def test_the_isolated_config_moves_every_file_the_app_writes_under_out(tmp_path)
     config = yaml.safe_load(path.read_text())
     assert PATH_KEYS, "config.py names no path-valued key at all"
     for key in PATH_KEYS:
-        assert config[key].startswith(str(tmp_path / "app-data")), f"{key}: {config[key]}"
+        assert Path(config[key]).resolve().is_relative_to((tmp_path / "app-data").resolve()), (
+            f"{key}: {config[key]}"
+        )
     assert config["slack_enabled"] is False
     assert config["email_enabled"] is False
     assert config["peer_discovery_enabled"] is False
     # And the app can still load it: the rewrite must not break validation.
     loaded = load_config(str(path))
-    assert loaded["history_path"].startswith(str(tmp_path / "app-data"))
+    assert Path(loaded["history_path"]).resolve().is_relative_to((tmp_path / "app-data").resolve())
     # A URL path, not a file: it must come through as the app's default.
     assert loaded["failover_speedtest_path"] == DEFAULT_CONFIG["failover_speedtest_path"]
 
@@ -163,7 +165,18 @@ def test_the_isolated_config_covers_the_defaults_the_example_leaves_out(tmp_path
     redirected too, or a run appends to the owner's history.jsonl."""
     config = yaml.safe_load(shoot.write_isolated_config(tmp_path).read_text())
     for key in ("history_path", "forensic_log_path", "forensic_episodes_dir", "peer_record_path"):
-        assert config[key].startswith(str(tmp_path / "app-data")), key
+        assert Path(config[key]).resolve().is_relative_to((tmp_path / "app-data").resolve()), key
+
+
+@pytest.mark.parametrize("relative", ["app-data-escape/history.jsonl", "app-data/../history.jsonl"])
+def test_isolation_assertions_reject_sibling_and_parent_escapes(tmp_path, monkeypatch, relative):
+    path = shoot.write_isolated_config(tmp_path)
+    config = yaml.safe_load(path.read_text())
+    config["history_path"] = str(tmp_path / relative)
+    path.write_text(yaml.safe_dump(config))
+    monkeypatch.setattr(shoot, "write_isolated_config", lambda out: path)
+    with pytest.raises(AssertionError):
+        test_the_isolated_config_moves_every_file_the_app_writes_under_out(tmp_path)
 
 
 def test_a_run_refuses_the_apps_own_data_directories(tmp_path):
@@ -286,10 +299,12 @@ def test_the_driver_advances_on_the_apps_signals_not_on_a_count(tmp_path):
     assert [name for _, name in h.captured] == list(shoot.CAPTURES)
 
 
-def test_the_driver_opens_the_dashboard_anyway_once_the_warm_up_deadline_passes(tmp_path):
+def test_the_driver_fails_without_a_heartbeat_at_the_warm_up_deadline(tmp_path):
     h = Harness(tmp_path)
     h.tick(shoot.WARMUP_DEADLINE + 1)
-    assert h.app.calls == ["open_dashboard"]
+    assert h.app.calls == []
+    assert h.failures == ["phase 'warm-up' raised"]
+    assert h.driver.timer.stopped == 1
 
 
 def test_an_unhealthy_network_stops_the_run_before_the_diagnosis(tmp_path):

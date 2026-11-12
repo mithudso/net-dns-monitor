@@ -372,7 +372,7 @@ class LogBuffer:
     overlap, which cannot happen at the errors-only default (~60 entries/min against a 3,000
     cap) but is reachable the moment "All levels" is pressed: roughly 6,000 entries a minute
     against a 30-second overlap is the cap exactly, and log arrival is bursty. A bounded
-    ring of evicted keys closes it without depending on capacity -- and without depending
+    ring of evicted keys and the previous nonempty poll's identities cover overlap without depending
     on the clock, which a high-water mark on the local timestamp did: one NTP step or DST
     fall-back and every new entry for the next hour was "already seen".
     """
@@ -385,9 +385,13 @@ class LogBuffer:
         self.max_entries = max_entries
         self._entries: list[dict] = []
         self._seen: set[tuple] = set()
-        # The most recently evicted keys, at most one buffer's worth. That is the
-        # whole poll overlap this exists to cover: anything evicted longer ago
-        # than that cannot be re-fetched by a window shorter than the buffer.
+        # One poll can exceed the visible buffer and eviction ring together.
+        # Keep its identities until the next nonempty poll, including overlap
+        # copies. An empty result can mean a failed read, not an expired window.
+        # Memory is bounded by one input batch plus two visible buffers, rather
+        # than by cumulative uptime or an assumption about events per second.
+        self._previous_poll: set[tuple] = set()
+        # The ring also remembers small intervening batches and empty polls.
         self._evicted_order: deque = deque()
         self._evicted_lookup: set[tuple] = set()
 
@@ -402,15 +406,18 @@ class LogBuffer:
         announces new error lines without having to diff the buffer itself.
         """
         batch = list(entries)
+        poll_keys = {self._key(entry) for entry in batch}
         added = []
         for entry in batch:
             key = self._key(entry)
-            if key in self._seen or key in self._evicted_lookup:
+            if key in self._seen or key in self._evicted_lookup or key in self._previous_poll:
                 continue
             self._seen.add(key)
             self._entries.append(entry)
             added.append(entry)
         self._trim()
+        if poll_keys:
+            self._previous_poll = poll_keys
         return added
 
     def _trim(self):
@@ -437,6 +444,7 @@ class LogBuffer:
     def clear(self):
         self._entries.clear()
         self._seen.clear()
+        self._previous_poll.clear()
         # Emptying means "forget everything", including what was evicted -- otherwise
         # "Empty buffer" would silently refuse to re-accept the recent past.
         self._evicted_order.clear()

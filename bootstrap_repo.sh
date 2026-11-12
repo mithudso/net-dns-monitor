@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 mkdir -p .github/ISSUE_TEMPLATE docs/archive scripts
 touch .editorconfig .gitignore .gitattributes .env.example
 touch .github/copilot-instructions.md CLAUDE.md AGENTS.md GEMINI.md memory.md prompts.md

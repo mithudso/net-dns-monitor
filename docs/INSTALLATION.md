@@ -42,3 +42,25 @@ Uninstalling leaves `~/.config/net-dns-monitor/` and
 `~/Library/Application Support/net-dns-monitor/`, so reports and settings
 survive. Delete them by hand if you want a clean removal. The Mac App Store
 build keeps everything in `~/Library/Containers/<bundle id>/`.
+
+## Build and service reservations
+
+`start.sh` and `install.sh` reserve `.netdns-build.lock` in the checkout and
+`startup.lock` under the user's Application Support directory. The service
+wrapper reserves `service-install.lock`; the optional indexer installer reserves
+its plist's `.install.lock`. A concurrent owner causes a refusal. Normal exits
+remove only reservations created by that invocation. An abrupt `SIGKILL` can
+leave an empty directory reservation behind.
+
+Recovery is manual: identify the exact reported lock, inspect the owning build,
+installer or service command and wait for it to finish. Remove only that empty
+reservation with `rmdir` after confirming no owner remains. Do not use recursive
+removal or steal an active reservation. This is separate from the persistent
+advisory lock files used by journal rotation and semantic indexing; do not unlink
+those inodes.
+
+The source fingerprint `dist/.netdns-source.sha256` records the inputs to a
+successful direct build. It invalidates cached bundles when source changes.
+Maintenance source checks do not build, install, restart or activate the app.
+The headless and fleet commands are documented in [FLEET.md](FLEET.md); they do
+not replace the menubar install automatically.

@@ -512,8 +512,9 @@ def cmd_headless(args, config, out) -> int:
     from netdnsmonitor import headless
 
     if args.uninstall:
-        out(headless.uninstall_agent())
-        return 0
+        result = headless.uninstall_agent()
+        out(result)
+        return 0 if result.startswith(("removed:", "nothing to remove:")) else 1
     if args.install:
         source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         config_path = os.path.expanduser(args.config)
@@ -523,12 +524,18 @@ def cmd_headless(args, config, out) -> int:
         saved = headless.store_key_from_environment()
         if saved:
             out(saved)
-        out(
-            headless.install_agent(
-                config_path, sys.executable, source_root, start=not args.no_start
-            )
+        result = headless.install_agent(
+            config_path, sys.executable, source_root, start=not args.no_start
         )
-        return 0
+        out(result)
+        return (
+            0
+            if (
+                result.startswith("installed and running:")
+                or (args.no_start and result.startswith("written:"))
+            )
+            else 1
+        )
     return headless.run_headless(args.config)
 
 

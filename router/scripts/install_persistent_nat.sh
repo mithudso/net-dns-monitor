@@ -47,25 +47,46 @@ fi
 TMP_PLIST=""
 HELPER_TMP=""
 OLD_PLIST_BACKUP=""
+OLD_HELPER_BACKUP=""
 ROLLBACK_ARMED=0
+HELPER_CHANGED=0
+PLIST_CHANGED=0
 
-# Runs on every exit. After the old daemon was unloaded, a failure would leave
-# no NAT daemon at all (or a half-installed new one), so put the previous
-# plist back and load it again.
+# Recovery covers both installation artifacts. Retain a backup whose restore
+# fails so an I/O failure does not also destroy the operator's recovery copy.
 cleanup() {
-    local rc=$?
+    local rc=$? restore_failed=0
     /bin/rm -f "$TMP_PLIST" "$HELPER_TMP"
     if [[ $rc -ne 0 && $ROLLBACK_ARMED -eq 1 ]]; then
-        echo "ERROR: install failed after the old daemon was unloaded; rolling back" >&2
-        if [[ -n "$OLD_PLIST_BACKUP" && -f "$OLD_PLIST_BACKUP" ]]; then
-            /bin/mv -f "$OLD_PLIST_BACKUP" "$PLIST_PATH" \
-                && launchctl load -w "$PLIST_PATH" \
-                || echo "ERROR: rollback failed; restore $PLIST_PATH by hand" >&2
-        else
-            /bin/rm -f "$PLIST_PATH"
+        echo "ERROR: install failed; restoring the previous helper and daemon" >&2
+        if [[ $PLIST_CHANGED -eq 1 ]]; then
+            launchctl unload -w "$PLIST_PATH" 2>/dev/null || true
+        fi
+        if [[ $HELPER_CHANGED -eq 1 ]]; then
+            if [[ -n "$OLD_HELPER_BACKUP" ]]; then
+                /bin/mv -f "$OLD_HELPER_BACKUP" "$HELPER_PATH" || restore_failed=1
+            else
+                /bin/rm -f "$HELPER_PATH" || restore_failed=1
+            fi
+        fi
+        if [[ -n "$OLD_PLIST_BACKUP" ]]; then
+            if /bin/mv -f "$OLD_PLIST_BACKUP" "$PLIST_PATH"; then
+                if [[ $restore_failed -eq 0 ]]; then
+                    launchctl load -w "$PLIST_PATH" || restore_failed=1
+                fi
+            else
+                restore_failed=1
+            fi
+        elif [[ $PLIST_CHANGED -eq 1 ]]; then
+            /bin/rm -f "$PLIST_PATH" || restore_failed=1
         fi
     fi
-    [[ -n "$OLD_PLIST_BACKUP" ]] && /bin/rm -f "$OLD_PLIST_BACKUP"
+    if [[ $restore_failed -eq 1 ]]; then
+        echo "ERROR: rollback incomplete; inspect $PLIST_PATH and $HELPER_PATH. Recovery backups: $OLD_PLIST_BACKUP $OLD_HELPER_BACKUP" >&2
+    else
+        [[ -z "$OLD_PLIST_BACKUP" ]] || /bin/rm -f "$OLD_PLIST_BACKUP"
+        [[ -z "$OLD_HELPER_BACKUP" ]] || /bin/rm -f "$OLD_HELPER_BACKUP"
+    fi
     return $rc
 }
 trap cleanup EXIT
@@ -78,8 +99,6 @@ echo "=> Installing a root-owned copy of enable_nat.sh at $HELPER_PATH..."
 # every 60s, and an in-place install could be read half written.
 HELPER_TMP="$(/usr/bin/mktemp "$HELPER_DIR/.enable_nat.XXXXXX")"
 /usr/bin/install -o root -g wheel -m 755 "$SOURCE_PATH" "$HELPER_TMP"
-/bin/mv -f "$HELPER_TMP" "$HELPER_PATH"
-HELPER_TMP=""
 
 echo "=> Creating persistent NAT LaunchDaemon..."
 # Staged inside /Library/LaunchDaemons (root-only), not /tmp: a predictable
@@ -128,9 +147,19 @@ if [[ -f "$PLIST_PATH" ]]; then
     echo "=> Existing LaunchDaemon found, unloading before replace..."
     OLD_PLIST_BACKUP="$(/usr/bin/mktemp /Library/LaunchDaemons/.com.custom.router.nat.old.XXXXXX)"
     /bin/cp -p "$PLIST_PATH" "$OLD_PLIST_BACKUP"
-    launchctl unload -w "$PLIST_PATH" 2>/dev/null || true
+fi
+if [[ -f "$HELPER_PATH" ]]; then
+    OLD_HELPER_BACKUP="$(/usr/bin/mktemp "$HELPER_DIR/.enable_nat.old.XXXXXX")"
+    /bin/cp -p "$HELPER_PATH" "$OLD_HELPER_BACKUP"
 fi
 ROLLBACK_ARMED=1
+if [[ -f "$PLIST_PATH" ]]; then
+    launchctl unload -w "$PLIST_PATH" 2>/dev/null || true
+fi
+HELPER_CHANGED=1
+/bin/mv -f "$HELPER_TMP" "$HELPER_PATH"
+HELPER_TMP=""
+PLIST_CHANGED=1
 
 /bin/mv -f "$TMP_PLIST" "$PLIST_PATH"
 TMP_PLIST=""

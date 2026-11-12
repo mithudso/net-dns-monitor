@@ -850,4 +850,5 @@ def test_min_learn_interval_is_twice_the_poll_and_load_config_uses_it(tmp_path):
 
 def test_the_shipped_example_config_loads():
     example = pathlib.Path(__file__).resolve().parents[1] / "config.example.yaml"
+    assert example.is_file()
     assert load_config(str(example))["failover_enabled"] is False

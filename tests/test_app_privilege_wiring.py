@@ -120,14 +120,21 @@ def test_the_prompt_does_not_run_on_the_run_loop(tmp_path, monkeypatch):
     """The authentication dialog waits for a human. On the run loop that would
     freeze the window and all six timers until someone typed a password.
     """
-    monkeypatch.setattr(
-        privileges, "grant", lambda *a, **k: {"ok": True, "cancelled": False, "message": "Granted."}
-    )
+    caller = threading.current_thread()
+    threads = []
+
+    def grant(*args, **kwargs):
+        threads.append(threading.current_thread())
+        return {"ok": True, "cancelled": False, "message": "Granted."}
+
+    monkeypatch.setattr(privileges, "grant", grant)
     app = build_app(tmp_path)
     app.handle_dashboard_action("grant_privileges")
     assert app._privilege_thread is not None
     assert app._privilege_thread.daemon is True
     finish(app)
+    assert threads == [app._privilege_thread]
+    assert threads[0] is not caller
 
 
 def test_clicking_grant_before_the_launch_probe_lands_is_refused_not_approximated(
@@ -333,10 +340,23 @@ def test_revoking_does_not_print_the_grant_explanation(tmp_path, monkeypatch):
 # --- status in the window ---------------------------------------------------
 
 
-def test_the_launch_probe_runs_off_the_run_loop_and_says_nothing(tmp_path):
+def test_the_launch_probe_runs_off_the_run_loop_and_says_nothing(tmp_path, monkeypatch):
     """Two subprocesses, so not inline -- and no announcement, because telling
     someone at every login that they have not granted a permission is nagging.
     """
+    caller = threading.current_thread()
+    threads = []
+
+    def probe(value):
+        def run():
+            threads.append(threading.current_thread())
+            return value
+
+        return run
+
+    monkeypatch.setattr(privileges, "granted_commands_now", probe([]))
+    monkeypatch.setattr(privileges, "dhcp_interfaces", probe(["en0", "en9"]))
+    monkeypatch.setattr(privileges, "primary_interface", probe("en9"))
     app = build_app(tmp_path, probed=False)
     output = []
     app._append_output = output.append
@@ -348,6 +368,8 @@ def test_the_launch_probe_runs_off_the_run_loop_and_says_nothing(tmp_path):
     assert app.primary_dhcp_interface == "en9"
     assert app.privileges_probed is True
     assert output == []
+    assert threads == [app._privilege_status_thread] * 3
+    assert all(thread is not caller for thread in threads)
 
 
 def test_the_window_shows_a_permissions_section(tmp_path):

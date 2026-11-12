@@ -48,7 +48,17 @@ def parse_service_order(text: str) -> list[NetworkService]:
     for index, line in enumerate(lines):
         match = _ENTRY_RE.match(line)
         if not match:
-            continue
+            if (
+                not line.strip()
+                or line == "An asterisk (*) denotes that a network service is disabled."
+            ):
+                continue
+            if _PORT_RE.fullmatch(line.strip()) and index > 0 and _ENTRY_RE.match(lines[index - 1]):
+                continue
+            # A partial listing can pass every later permutation/read-back
+            # check while omitting a real service. Unknown output invalidates
+            # the whole listing, rather than authorizing that destructive write.
+            return []
         marker, name = match.groups()
         device = None
         if index + 1 < len(lines):

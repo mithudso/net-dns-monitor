@@ -88,6 +88,12 @@ def write_isolated_config(out: Path) -> Path:
 
     from netdnsmonitor.config import DEFAULT_CONFIG, PATH_KEYS
 
+    refuse_owner_dir(out.resolve())
+    # A reused output tree can contain links into the owner's data. Check the
+    # whole tree, including app-data descendants, before creating any artifact.
+    for child in out.rglob("*"):
+        if child.is_symlink():
+            raise ValueError(f"unsafe screenshot destination: symlink {child}")
     config = yaml.safe_load((REPO / "config.example.yaml").read_text()) or {}
     data_dir = out / "app-data"
     # PATH_KEYS, not every key ending in _path: failover_speedtest_path is a
@@ -245,10 +251,12 @@ class Driver:
         if self.phase == "warm-up":
             # The dashboard's NETWORK RIGHT NOW block is empty until the first
             # ping heartbeat has landed.
-            if app.ping_stats.get("rtt_ms") is not None or self.since_phase() > WARMUP_DEADLINE:
+            if app.ping_stats.get("rtt_ms") is not None:
                 app.open_dashboard()
                 self.place(app._dashboard.window)
                 self.enter("dashboard")
+            elif self.since_phase() > WARMUP_DEADLINE:
+                raise TimeoutError(f"no ping heartbeat within {WARMUP_DEADLINE} s")
         elif self.phase == "dashboard":
             if self.since_phase() >= SETTLE_SECONDS:
                 self.capture(app._dashboard.window, out / CAPTURES[0])
@@ -256,7 +264,11 @@ class Driver:
                 # the capture shows that. On an unhealthy one the ladder runs
                 # (its repairs answer "unavailable" in the store edition) and
                 # the capture shows an incident, which is not the screenshot.
-                if app.ping_stats.get("down") or app.state_machine.flap_gate.state == "incident":
+                if (
+                    app.ping_stats.get("rtt_ms") is None
+                    or app.ping_stats.get("down") is not False
+                    or app.state_machine.flap_gate.state != "healthy"
+                ):
                     raise RuntimeError(
                         "the network is not healthy, so the diagnosis capture would show "
                         "an incident; retry when the connection is up"

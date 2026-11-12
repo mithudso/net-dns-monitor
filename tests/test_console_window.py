@@ -134,7 +134,7 @@ def test_submit_ignores_a_blank_line(capsys):
     assert console._busy is False
 
 
-def test_the_line_is_echoed_before_the_work_starts(capsys):
+def test_the_line_is_echoed_before_the_work_starts(capsys, monkeypatch):
     """A command that takes the full timeout must not leave the window looking
     frozen for twenty seconds with nothing on screen.
     """
@@ -143,9 +143,28 @@ def test_the_line_is_echoed_before_the_work_starts(capsys):
     console.submit("dig example.com")
     assert "netdns> dig example.com" not in capsys.readouterr().out  # busy path
 
-    console = controller()
+    events = []
+
+    class ImmediateThread:
+        def __init__(self, target, args=(), **kwargs):
+            self.run = lambda: target(*args)
+
+        def start(self):
+            self.run()
+
+    monkeypatch.setattr("netdnsmonitor.console_window.threading.Thread", ImmediateThread)
+
+    def runner(command, cwd, timeout):
+        events.append("runner")
+        return CommandResult(stdout="finished")
+
+    console = controller(runner=runner)
+    console.append = events.append
     console.submit("dig example.com")
-    assert "netdns> dig example.com" in capsys.readouterr().out
+    assert "netdns> dig example.com" in events[0]
+    assert events[1] == "runner"
+    assert "finished" in events[2]
+    assert console._busy is False
 
 
 def test_clear_sentinel_is_routed_to_clear_not_printed(capsys):
@@ -236,6 +255,7 @@ def test_a_command_that_prints_the_sentinel_is_drawn_not_treated_as_clear(capsys
     console.run_line("curl http://host/x")
     assert cleared == []
     assert isinstance(CLEAR, ClearSignal)
+    assert "__CLEAR__" in capsys.readouterr().out
 
 
 def test_the_busy_message_does_not_promise_that_closing_ends_the_command():

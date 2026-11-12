@@ -74,6 +74,17 @@ echo "=> Starting Services..."
 sudo brew services restart unbound
 sudo brew services restart dnsmasq
 
+has_lan_udp_listener() {
+    # lsof also lists connected UDP clients. Match the process, IPv4 protocol
+    # and exact local endpoint; a loopback listener cannot serve this LAN.
+    local process="$1" port="$2"
+    awk -v process="$process" -v port="$port" '
+        $1 == process && $5 == "IPv4" && $(NF-1) == "UDP" &&
+        ($NF == "192.168.4.1:" port || $NF == "*:" port || $NF == "0.0.0.0:" port) { found=1 }
+        END { exit !found }
+    '
+}
+
 # `brew services restart` can report success before dnsmasq has bound its
 # socket, and does not notice if dnsmasq then exits -- for example because
 # bootpd's launchd job already holds UDP 67.
@@ -83,7 +94,7 @@ echo "=> Verifying dnsmasq holds DHCP (UDP 67)..."
 BOUND=""
 for _ in 1 2 3 4 5; do
     LSOF_OUT="$(sudo lsof -nP -iUDP:67 2>/dev/null || true)"
-    if grep -q dnsmasq <<<"$LSOF_OUT"; then
+    if has_lan_udp_listener dnsmasq 67 <<<"$LSOF_OUT"; then
         BOUND=1
         break
     fi
@@ -102,7 +113,7 @@ echo "=> Verifying unbound holds DNS (port 53)..."
 DNS_BOUND=""
 for _ in 1 2 3 4 5; do
     LSOF_DNS="$(sudo lsof -nP -iUDP:53 2>/dev/null || true)"
-    if grep -q unbound <<<"$LSOF_DNS"; then
+    if has_lan_udp_listener unbound 53 <<<"$LSOF_DNS"; then
         DNS_BOUND=1
         break
     fi

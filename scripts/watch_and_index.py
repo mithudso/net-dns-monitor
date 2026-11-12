@@ -103,21 +103,30 @@ class EventCoalescer:
         self._run_lock = threading.Lock()
         self._pending: dict[tuple, tuple] = {}
         self._timers: dict[tuple, object] = {}
+        self._tokens: dict[tuple, object] = {}
 
     def add(self, event_type: str, src_path: str, dest_path: str, is_directory: bool) -> None:
+        if is_directory or event_type not in {"created", "modified", "deleted", "moved"}:
+            return
         key = (event_type == "moved", src_path)
         with self._lock:
             old = self._timers.pop(key, None)
             if old is not None:
                 old.cancel()
             self._pending[key] = (event_type, src_path, dest_path, is_directory)
-            timer = self._timer_factory(self._delay, self._flush, args=(key,))
+            token = object()
+            self._tokens[key] = token
+            timer = self._timer_factory(self._delay, self._flush, args=(key, token))
             timer.daemon = True
             self._timers[key] = timer
             timer.start()
 
-    def _flush(self, key: tuple) -> None:
+    def _flush(self, key: tuple, token: object) -> None:
         with self._lock:
+            # cancel() cannot stop a callback already waiting for this lock.
+            if self._tokens.get(key) is not token:
+                return
+            self._tokens.pop(key, None)
             event = self._pending.pop(key, None)
             self._timers.pop(key, None)
         if event is None:

@@ -524,3 +524,173 @@ The `netdns console` REPL. `handle` is a pure function of line and state; `run_c
 - **Imports:** package: none.
 - **Side effects:** Pure data.
 - **Tests:** `tests/test_cli_console.py`.
+
+## Fleet, editable remediation and shared UI surfaces
+
+These modules are maintained parts of the current repository. The fleet server is a separate headless role; it is not started by importing the menu-bar app. The shipped remediation scripts use injected context operations; the editor runs a script only after its explicit Run action.
+
+### `netdnsmonitor/fleet_client.py`
+
+The reporting side of fleet monitoring: send this machine's events to the central server and keep trying until it acknowledges them.
+
+Public source symbols: `default_transport`, `FleetReporter`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/fleet_keys.py`
+
+The server's list of enrolled machines and the key each one signs with.
+
+Public source symbols: `EnrollmentError`, `KeyRegistry`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/fleet_protocol.py`
+
+The wire format between a reporting machine and the central fleet server.
+
+Public source symbols: `clean`, `canonical`, `sign`, `build_message`, `parse_message`, `step_summaries`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/fleet_server.py`
+
+The central server: listen for fleet reports on the local network, log them.
+
+Public source symbols: `FleetServer`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/fleet_store.py`
+
+What the central server remembers: an append-only event log and a per-machine state file, plus the text that answers "which machines have problems, what are they, and what was done about them".
+
+Public source symbols: `FleetStore`, `read_state`, `read_events`, `machine_status`, `render_fleet`, `render_events`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/headless.py`
+
+The monitor with no windows: detect, repair, report to the fleet server.
+
+Public source symbols: `HeadlessMonitor`, `default_credentials`, `store_key_from_environment`, `fleet_key`, `build_reporter`, `machine_identity`, `run_headless`, `start_server`, `agent_path`, `agent_plist`, `install_agent`, `uninstall_agent`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediation_editor.py`
+
+What the remediation-script editor does, apart from drawing it.
+
+Public source symbols: `ScriptRow`, `utf16_length`, `highlight_spans`, `format_run`, `EditorSession`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediation_scripts.py`
+
+Where remediation scripts live, how they are checked, and how one is run.
+
+Public source symbols: `builtin_steps`, `ScriptInfo`, `inspect_source`, `RunResult`, `execute`, `ScriptStore`, `new_script_template`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediation_window.py`
+
+The remediation-script editor as a macOS window: a small Python IDE.
+
+Public source symbols: `RemediationWindowController`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/__init__.py`
+
+The shipped remediation scripts, one Python file per troubleshooting-ladder step.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/check_configured_dns_servers.py`
+
+check_configured_dns_servers -- which resolvers is the system using?
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/check_default_route.py`
+
+check_default_route -- does the machine have a default route?
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/check_interface_state.py`
+
+check_interface_state -- is the link itself up?
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/check_resolver_overrides.py`
+
+check_resolver_overrides -- are there /etc/resolver files redirecting domains?
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/flush_dns_cache.py`
+
+flush_dns_cache -- clear the DNS cache, and signal mDNSResponder if permitted.
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/renew_dhcp_lease.py`
+
+renew_dhcp_lease -- ask the DHCP server to renew the primary interface's lease.
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/resolve_against_public_resolver.py`
+
+resolve_against_public_resolver -- does a public resolver answer for a known name?
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/switch_to_backup_network.py`
+
+switch_to_backup_network -- move the machine to the backup network.
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/remediations/toggle_network_service.py`
+
+toggle_network_service -- never automated, and says so.
+
+Public source symbols: `run`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/ui_catalog.py`
+
+What the windows say about their own controls, apart from drawing them.
+
+Public source symbols: `group_actions`, `action_tip`, `app_options`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.
+
+### `netdnsmonitor/ui_style.py`
+
+The look of every window: Liquid Glass where the system has it, and tooltips.
+
+Public source symbols: `glass_available`, `tip`, `apply_window_glass`, `style_button`, `make_pulldown`, `style_pane`, `window_content`, `iter_views`, `controls_without_tip`.
+
+See the source module and the dedicated [fleet](FLEET.md), [remediation](REMEDIATION_SCRIPTS.md), or [UI](USER_INTERFACE.md) contract as applicable.

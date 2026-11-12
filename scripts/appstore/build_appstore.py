@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fcntl
 import os
 import plistlib
 import py_compile
@@ -71,7 +72,8 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -193,11 +195,37 @@ def resolve_rpath_library(
             base = executable_dir / rpath[len("@executable_path/") :]
         else:
             continue
-        candidate = Path(os.path.normpath(base / tail))
-        inside = str(candidate).startswith(str(app) + os.sep)
-        if inside and exists(candidate):
+        candidate = (base / tail).resolve()
+        if candidate.is_relative_to(app.resolve()) and exists(candidate):
             return candidate
     return None
+
+
+def resolve_direct_library(binary: Path, name: str, app: Path) -> Path | None:
+    if name.startswith("@loader_path/"):
+        candidate = binary.parent / name[len("@loader_path/") :]
+    elif name.startswith("@executable_path/"):
+        candidate = app / "Contents" / "MacOS" / name[len("@executable_path/") :]
+    else:
+        return None
+    candidate = candidate.resolve()
+    return candidate if candidate.is_relative_to(app.resolve()) and candidate.is_file() else None
+
+
+@contextmanager
+def build_lock(mode: str) -> Iterator[None]:
+    """Keep a second invocation from deleting this mode's active output."""
+    BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    path = BUILD_ROOT / f".{mode}.lock"
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SystemExit(f"another {mode} build owns {path}") from exc
+        yield
+    finally:
+        os.close(fd)
 
 
 def disallowed_libraries(libraries: Iterable[str], own_install_name: str = "") -> list[str]:
@@ -841,6 +869,9 @@ def check_linkage(app: Path, binaries: Iterable[Path]) -> list[str]:
             if name.startswith("@rpath/"):
                 if resolve_rpath_library(binary, name, rpaths, app) is None:
                     problems.append(f"{where} links {name}, which no bundle rpath resolves")
+            elif name.startswith(BUNDLE_RELATIVE_RPATH_PREFIXES):
+                if resolve_direct_library(binary, name, app) is None:
+                    problems.append(f"{where} links {name}, which is missing or outside the bundle")
             elif name in disallowed_libraries([name]):
                 problems.append(f"{where} links {name}")
     return problems
@@ -987,6 +1018,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if problem:
             raise SystemExit(problem)
 
+    with build_lock(args.mode):
+        return build_output(args, team_id)
+
+
+def build_output(args: argparse.Namespace, team_id: str | None) -> int:
     out = BUILD_ROOT / args.mode
     if out.exists():
         shutil.rmtree(out)

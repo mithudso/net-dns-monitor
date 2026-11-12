@@ -4,6 +4,7 @@ having to re-run any diagnostics themselves.
 """
 
 import json
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -62,9 +63,11 @@ def build_report(
 
 
 def _fenced(text: str) -> list[str]:
-    # Four backticks, because the escalation analysis is model output and may
-    # itself contain a three-backtick fence.
-    return ["````", text, "````"]
+    # Model output may contain its own fences of any length. Keep every run
+    # shorter than this delimiter so the quoted analysis stays literal.
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(4, longest + 1)
+    return [fence, text, fence]
 
 
 def _pretty(value: object) -> str:

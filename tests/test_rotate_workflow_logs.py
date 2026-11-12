@@ -92,10 +92,17 @@ def test_rotation_preserves_journal_mode_and_fsyncs(tmp_path, monkeypatch):
     _journal(journal, 8)
     journal.chmod(0o640)
     synced = []
+    directory_syncs = []
     real = os.fsync
-    monkeypatch.setattr(rotator.os, "fsync", lambda fd: (synced.append(fd), real(fd))[1])
+
+    def sync(fd):
+        (directory_syncs if stat.S_ISDIR(os.fstat(fd).st_mode) else synced).append(fd)
+        real(fd)
+
+    monkeypatch.setattr(rotator.os, "fsync", sync)
     rotator.rotate(journal, tmp_path / "docs/archive", max_bytes=10, keep=3)
     assert stat.S_IMODE(journal.stat().st_mode) == 0o640
     archive = tmp_path / "docs/archive/memory-archive.md"
     assert stat.S_IMODE(archive.stat().st_mode) == 0o640
     assert len(synced) == 2
+    assert len(directory_syncs) == 4  # mkdir docs/archive parents, then both renames

@@ -2,19 +2,43 @@
 
 ## System context
 
-`net-dns-monitor` is a single-process macOS menu bar app. It has no server
-component and no database. Everything runs inside one `rumps` process on the
-user's machine, polling on timers. The process reaches outside the machine only
-in these ways:
+The desktop application is one macOS `rumps` process, polling on timers. The
+current repository also contains an optional headless monitor and a separate
+signed-UDP fleet report server. Those roles reuse the diagnostic modules; they
+are not an HTTP service embedded in the menu-bar app. Runtime state uses local
+files. The optional developer Chroma index is a separate tool profile.
+
+The desktop process reaches outside the machine in these ways:
 
 - It probes the configured targets and domains.
 - It exchanges UDP messages with other copies of itself on the LAN
   (`peer_net.py`).
 - If configured, it calls Anthropic, posts to Slack and sends email.
 
-Two entry points share the same modules. `python3 -m netdnsmonitor.app` is the
-menu bar app. `python3 -m netdnsmonitor.cli` is the `netdns` command line.
-`docs/SCRIPTS.md` documents both.
+`python3 -m netdnsmonitor.app` starts the menu-bar role.
+`python3 -m netdnsmonitor.cli` exposes command-line operations, including
+`headless`, `server`, and `fleet`. The [fleet guide](FLEET.md) documents their
+distinct processes, enrollment, signatures, acknowledgements, outbox and file
+stores. [Editable remediation](REMEDIATION_SCRIPTS.md) supplies the existing
+injected-context check/repair scripts and direct-build editor.
+`docs/SCRIPTS.md` inventories the commands.
+
+```mermaid
+flowchart LR
+    Menu[Menu bar process] --> Modules[Shared diagnostic modules]
+    CLI[Command-line entry] --> Modules
+    CLI --> Headless[Optional headless monitor]
+    Headless --> Modules
+    Headless --> Reporter[Signed event reporter]
+    Reporter -->|UDP events and acknowledgements| Server[Separate fleet server]
+    Server --> Files[Local event, state and key files]
+    CLI --> Files
+```
+
+The incident timer still runs the ladder and escalation synchronously. Its GUI
+stall is an existing owner-deferred ordering decision, documented in
+[known issues](known-issues.md). The worker queues below do not imply that this
+pipeline has moved off the UI thread.
 
 ## Module map — the incident core
 

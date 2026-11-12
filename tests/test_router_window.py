@@ -7,8 +7,10 @@ mode. Form values are passed straight to the handlers, which is the seam the
 ObjC target skips by calling them with no arguments.
 """
 
+import threading
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from netdnsmonitor import router_window
@@ -630,6 +632,55 @@ def test_accepted_start_applies_values_inside_the_worker(tmp_path):
     assert seen == [None]
     assert router.lan_ip == VALUES["lan_ip"]
     assert router.started == 1
+
+
+@pytest.mark.parametrize("shared_app_slot", [False, True])
+def test_save_cannot_replace_a_running_starts_captured_settings(tmp_path, shared_app_slot):
+    entered = threading.Event()
+    release = threading.Event()
+    started_with = []
+    workers = []
+
+    class PausedRouter(FakeRouter):
+        def start(self):
+            entered.set()
+            assert release.wait(5)
+            started_with.append((self.wan_if, self.lan_if, self.lan_ip))
+            return super().start()
+
+    def spawn(fn):
+        worker = threading.Thread(target=fn)
+        workers.append(worker)
+        worker.start()
+
+    router = PausedRouter()
+    ctrl, lines = controller(tmp_path, router=router, spawn=spawn)
+    if shared_app_slot:
+
+        def starter(slot, label, work):
+            spawn(work)
+            setattr(ctrl.app, slot, workers[-1])
+            return True
+
+        ctrl.app._start_router_worker = starter
+
+    ctrl.on_start(VALUES)
+    try:
+        assert entered.wait(5)
+        assert (
+            ctrl.on_save_config({**VALUES, "wan_interface": "en7", "lan_ip": "192.168.10.2"})
+            is False
+        )
+        assert yaml.safe_load((tmp_path / "config.yaml").read_text())["lan_ip"] == VALUES["lan_ip"]
+        assert router.lan_ip == VALUES["lan_ip"]
+        assert any("still running" in line for line in lines)
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(5)
+    assert started_with == [("en3", "en0", "192.168.10.1")]
+    assert ctrl.on_save_config({**VALUES, "lan_ip": "192.168.10.2"}) is True
+    assert router.lan_ip == "192.168.10.2"
 
 
 def test_select_interface_with_no_match_clears_the_selection():

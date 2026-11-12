@@ -57,6 +57,7 @@ def test_a_report_that_cannot_be_saved_still_notifies_and_records_the_error(tmp_
     sent = []
     app.notifier = lambda text: sent.append(text) or []
     app.state_machine = FakeStateMachine(REPORT)
+    app.last_report_path = str(tmp_path / "previous-report.md")
 
     tick_and_deliver(app)
 

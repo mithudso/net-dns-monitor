@@ -122,7 +122,19 @@ else
 fi
 
 # 6. DHCP Configuration Check
-if grep -q "dhcp-range=192.168.4.50" "$PREFIX/etc/dnsmasq.conf"; then
+if awk '
+    function trim(value) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); return value }
+    {
+        sub(/[[:space:]]*#.*/, "")
+        if (split($0, fields, /[=,]/) != 4 || trim(fields[1]) != "dhcp-range" ||
+            trim(fields[2]) != "192.168.4.50" || trim(fields[4]) == "") next
+        end = trim(fields[3])
+        if (end !~ /^192\.168\.4\.[0-9]+$/) next
+        split(end, octets, /\./)
+        if (octets[4] > 50 && octets[4] < 255) found=1
+    }
+    END { exit !found }
+' "$PREFIX/etc/dnsmasq.conf"; then
     pass "DHCP Range configured for 192.168.4.x subnet"
 else
     fail "DHCP Range missing or misconfigured in dnsmasq.conf"

@@ -32,10 +32,12 @@ class FakeStateMachine:
 
 @pytest.fixture(autouse=True)
 def _no_real_window(monkeypatch):
+    shown = []
     monkeypatch.setattr(
         "netdnsmonitor.console_window.ConsoleWindowController.show",
-        lambda self: None,
+        lambda self: shown.append(self),
     )
+    return shown
 
 
 def make_app(tmp_path, flap_state="healthy", consecutive_failures=0):
@@ -67,10 +69,11 @@ def test_the_dashboard_offers_the_console():
     assert "open_console" in {action_id for _, action_id, _ in ALL_ACTIONS}
 
 
-def test_opening_the_console_builds_it(tmp_path):
+def test_opening_the_console_builds_it(tmp_path, _no_real_window):
     app = make_app(tmp_path)
     app.open_console()
     assert app.console is not None
+    assert _no_real_window == [app.console]
 
 
 def test_quitting_the_app_kills_console_commands_still_running(tmp_path):
@@ -92,7 +95,7 @@ def test_quitting_the_app_kills_console_commands_still_running(tmp_path):
 # --- the invariant that makes it one console ---------------------------------
 
 
-def test_opening_twice_reuses_the_one_controller(tmp_path):
+def test_opening_twice_reuses_the_one_controller(tmp_path, _no_real_window):
     """A controller rebuilt per open would drop the window it owns, and would
     also reset the working directory and history the person was mid-way through.
     """
@@ -101,9 +104,10 @@ def test_opening_twice_reuses_the_one_controller(tmp_path):
     first = app.console
     app.open_console()
     assert app.console is first
+    assert _no_real_window == [first, first]
 
 
-def test_the_dashboard_button_and_the_menu_share_one_console(tmp_path):
+def test_the_dashboard_button_and_the_menu_share_one_console(tmp_path, _no_real_window):
     """The failure this pins is silent: two controllers both work, and the cwd
     and history you built up in one are simply invisible in the other.
     """
@@ -114,6 +118,7 @@ def test_the_dashboard_button_and_the_menu_share_one_console(tmp_path):
     app.handle_dashboard_action("open_console")
 
     assert app.console is from_menu
+    assert _no_real_window == [from_menu, from_menu]
 
 
 def test_console_state_survives_reaching_it_from_the_other_surface(tmp_path):

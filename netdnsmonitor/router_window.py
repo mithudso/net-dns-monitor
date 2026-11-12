@@ -619,6 +619,13 @@ class RouterWindowController:
             current.update(updates)
 
     def on_save_config(self, values: Optional[Mapping] = None) -> bool:
+        running = getattr(self.app, "_router_thread", None)
+        if self._busy or (running is not None and running.is_alive()):
+            # Start applies its captured form inside this same action slot.
+            # A Save between that update and Router.settings() would replace
+            # the interfaces the privileged start was meant to configure.
+            self.append_log("not saved: the previous router action is still running")
+            return False
         values = dict(values) if values is not None else self._form_values()
         ok, message = self._save(values)
         self.append_log(message)

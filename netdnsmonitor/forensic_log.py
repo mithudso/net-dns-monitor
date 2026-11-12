@@ -37,6 +37,7 @@ is a plain UTF-8 append: an append cannot truncate what is already there, and
 the worst a crash mid-write leaves is one torn last line.
 """
 
+import contextlib
 import json
 import os
 import sys
@@ -196,14 +197,17 @@ class ForensicRecorder:
             # row, so a single log read is a burst of calls, and a line per call
             # would bury the alert lines this shares stderr with.
             name = type(exc).__name__
-            if self.journal_error is None:
-                print(
-                    f"[forensic] cannot append to journal {path} ({name}); "
-                    "further failures are not printed until an append succeeds",
-                    file=sys.stderr,
-                    flush=True,
-                )
+            first_failure = self.journal_error is None
             self.journal_error = name
+            if first_failure:
+                # Diagnostic failures must not hide the journal failure state.
+                with contextlib.suppress(Exception):
+                    print(
+                        f"[forensic] cannot append to journal {path} ({name}); "
+                        "further failures are not printed until an append succeeds",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             return False
         self.journal_error = None
         return True
@@ -225,7 +229,8 @@ class ForensicRecorder:
             # cleared, so the next outage still records. The trace is printed
             # because the document is the deliverable: an episode that silently
             # never appeared is a hole nobody can explain later.
-            traceback.print_exc()
+            with contextlib.suppress(Exception):
+                traceback.print_exc()
             return None
 
 

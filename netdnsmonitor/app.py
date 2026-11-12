@@ -24,8 +24,9 @@ debounced because acting on it costs something -- flushed caches and API calls.
 The log poll is slow for the opposite reason to the heartbeat: nothing displayed
 depends on it, and `log show` measured 1.4s per read.
 
-Everything that shells out does so on a worker thread and returns through a
-queue, because the run loop this all hangs off is also what draws the window.
+Heartbeat, privilege and log workers return through queues that the UI timer
+drains. The incident tick still runs its ladder and escalation synchronously;
+that owner-deferred ordering limitation is recorded in docs/known-issues.md.
 """
 
 import os
@@ -1990,7 +1991,16 @@ class NetDnsMonitorApp(rumps.App):
             # above a Permissions section reading "not granted".
             return
         self._privilege_status_thread = threading.Thread(
-            target=self._run_privilege_status, name="privilege-status", daemon=True
+            target=self._run_privilege_status,
+            # Capture the injected providers before scheduling. A delayed worker
+            # must not switch to different providers after its caller returns.
+            args=(
+                privileges.granted_commands_now,
+                privileges.dhcp_interfaces,
+                privileges.primary_interface,
+            ),
+            name="privilege-status",
+            daemon=True,
         )
         self._privilege_status_thread.start()
 
@@ -2002,18 +2012,23 @@ class NetDnsMonitorApp(rumps.App):
             "message": f"{verb} raised; see the app log for the traceback.",
         }
 
-    def _run_privilege_status(self):
+    def _run_privilege_status(
+        self,
+        granted_commands_fn: Optional[Callable] = None,
+        interfaces_fn: Optional[Callable] = None,
+        primary_interface_fn: Optional[Callable] = None,
+    ):
         try:
-            granted_commands = privileges.granted_commands_now()
+            granted_commands = (granted_commands_fn or privileges.granted_commands_now)()
             self._privilege_results.put(
                 {
                     # covers, not exact-line membership: a blanket NOPASSWD: ALL
                     # permits the restart, and the window said "not granted".
                     "granted": privileges.covers(granted_commands, privileges.MDNS_HUP),
                     "file_rule_listed": privileges.own_rule_listed(granted_commands),
-                    "interfaces": privileges.dhcp_interfaces(),
+                    "interfaces": (interfaces_fn or privileges.dhcp_interfaces)(),
                     "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
-                    "primary": privileges.primary_interface(),
+                    "primary": (primary_interface_fn or privileges.primary_interface)(),
                     "probed": True,
                 }
             )
@@ -3036,13 +3051,13 @@ class NetDnsMonitorApp(rumps.App):
         return None
 
     def remove_credentials(self, _sender=None) -> str:
-        """Delete all three of this app's Keychain items, after asking."""
+        """Delete this app's saved Keychain credentials, after asking."""
         try:
             confirmed = self.choice_prompt(
                 "Remove saved credentials?",
-                "This deletes the Anthropic API key, Slack webhook URL and SMTP password that "
-                "this app saved in your Keychain. Values set as environment variables are "
-                "not affected.",
+                "This deletes the Anthropic API key, Slack webhook URL, SMTP password and "
+                "fleet machine key that this app saved in your Keychain. Values set as "
+                "environment variables are not affected.",
                 "Remove",
                 "Cancel",
             )

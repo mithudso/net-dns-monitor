@@ -198,6 +198,67 @@ def test_already_on_backup_costs_no_interface_probe(store):
     assert probes == []
 
 
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize("enable_works", [False, True])
+def test_a_disabled_backup_at_the_head_is_enabled_and_verified(store, manual, enable_works):
+    runner = FakeRunner(
+        order=["M3100"] + [name for name in ORDER if name != "M3100"],
+        obey_enable=enable_works,
+    )
+    failover = build(store, runner, backup_service="M3100", prober=lambda dev: dev == "en12")
+    outcome = (
+        failover.switch_now("backup", service="M3100")
+        if manual
+        else failover.attempt_failover("network")
+    )
+    assert ["networksetup", "-setnetworkserviceenabled", "M3100", "on"] in runner.calls
+    if enable_works:
+        assert outcome.startswith("ok:")
+        assert "also enabled" in outcome
+        assert "M3100" not in runner.disabled
+        assert runner.applied_orders == [runner.order]
+        assert sorted(runner.order) == sorted(ORDER)
+    else:
+        assert outcome.startswith("failed:")
+        assert "still disabled" in outcome
+        assert runner.applied_orders == []
+
+
+def test_an_enabled_backup_below_a_disabled_service_still_prevents_duplicate_failover(store):
+    runner = FakeRunner(
+        order=["M3100", "Wi-Fi"] + [n for n in ORDER if n not in {"M3100", "Wi-Fi"}]
+    )
+    probes = []
+    failover = build(store, runner, prober=lambda dev: probes.append(dev) or True)
+    assert failover.attempt_failover("network") == "no switch: already on the backup network"
+    assert probes == []
+    assert runner.applied_orders == []
+
+
+@pytest.mark.parametrize("all_disabled", [False, True])
+def test_snapshot_does_not_name_a_disabled_service_as_active(store, all_disabled):
+    runner = FakeRunner(order=["M3100"] + [n for n in ORDER if n != "M3100"])
+    if all_disabled:
+        runner.disabled = set(ORDER)
+    snapshot = build(store, runner, backup_service="M3100").snapshot()
+    assert snapshot["active_service"] == (None if all_disabled else "AX88179B")
+    assert snapshot["active_side"] == "preferred"
+
+
+def test_an_unparseable_service_entry_refuses_before_any_order_write():
+    calls = []
+    listing = "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n(2)\tEthernet\n"
+
+    def run(argv):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=listing, stderr="")
+
+    before = parse_service_order("(1) Wi-Fi\n")
+    outcome = apply_service_order(run, before, ["Wi-Fi"])
+    assert outcome.startswith("failed:")
+    assert calls == [["networksetup", "-listnetworkserviceorder"]]
+
+
 # --- honesty about what actually happened -----------------------------------
 
 

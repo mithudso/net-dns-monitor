@@ -36,8 +36,8 @@ import subprocess
 import sys
 import threading
 import time
-import traceback
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from netdnsmonitor import fleet_protocol as proto
@@ -63,6 +63,7 @@ class HeadlessMonitor:
         save_report_fn: Callable[[dict, str], dict] = save_report,
         now_fn: Callable[[], float] = time.monotonic,
         log: Callable[[str], None] = lambda text: print(text, file=sys.stderr, flush=True),
+        wall_now_fn: Callable[[], float] = time.time,
     ):
         self.config = config
         self.state_machine = state_machine
@@ -72,6 +73,7 @@ class HeadlessMonitor:
         self.failback_enabled = failback_enabled
         self.save_report_fn = save_report_fn
         self.now_fn = now_fn
+        self.wall_now_fn = wall_now_fn
         self.log = log
         self.last_error: Optional[str] = None
         self.polls = 0
@@ -93,13 +95,16 @@ class HeadlessMonitor:
         try:
             self._poll()
         except Exception as exc:  # noqa: BLE001 - the loop must outlive any one poll
-            self.last_error = type(exc).__name__
-            traceback.print_exc()
+            self._note_error("poll", exc)
         try:
             self._note_recovery()
         except Exception as exc:  # noqa: BLE001
-            self.last_error = type(exc).__name__
-            traceback.print_exc()
+            self._note_error("recovery", exc)
+
+    def _note_error(self, phase: str, exc: Exception) -> None:
+        self.last_error = type(exc).__name__
+        with contextlib.suppress(Exception):
+            self.log(f"[{phase}] failed: {self.last_error}")
 
     def _poll(self) -> None:
         report = self.state_machine.tick()
@@ -148,7 +153,9 @@ class HeadlessMonitor:
                     opened["classification"],
                     self.now_fn() - opened["since"],
                     opened["steps"],
-                    occurred_at=opened["started_at"],
+                    occurred_at=datetime.fromtimestamp(
+                        self.wall_now_fn(), timezone.utc
+                    ).isoformat(),
                 )
 
     def run(self, stop: threading.Event) -> None:

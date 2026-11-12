@@ -99,7 +99,10 @@ def _lookup(token: str):
         return BY_KEY[token]
     # `'²'.isdigit()` is True and `int('²')` raises, out of the REPL loop.
     if token.isascii() and token.isdigit():
-        index = int(token) - 1
+        try:
+            index = int(token) - 1
+        except ValueError:
+            return None
         if 0 <= index < len(CATALOG):
             return CATALOG[index]
     return None

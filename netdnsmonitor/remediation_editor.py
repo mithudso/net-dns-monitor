@@ -239,8 +239,15 @@ class EditorSession:
             new_script_template(name, classification),
         )
 
-    def needs_confirmation(self, name: str) -> bool:
-        """A repair changes the machine, so its test run asks first."""
+    def has_unsaved_changes(self, name: Optional[str], text: str, loaded_text: str) -> bool:
+        """A new script is unsaved even before its template has been edited."""
+        return name is not None and (text != loaded_text or self.store.info(name) is None)
+
+    def needs_confirmation(self, name: str, text: Optional[str] = None) -> bool:
+        """Confirm repairs using the same source the test run will execute."""
+        if text is not None:
+            meta, problems = inspect_source(text, expected_name=name)
+            return not problems and meta["KIND"] == "repair"
         info = self.store.info(name)
         return info is not None and info.kind == "repair"
 

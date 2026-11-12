@@ -13,6 +13,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+try:
+    from scripts.generate_static_dossier import census_paths
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    # Direct `python scripts/check_docs.py` uses scripts/ as its import root.
+    from generate_static_dossier import census_paths
+
 ROOT = Path(__file__).resolve().parent.parent
 COUNT_DOCS = (
     "CLAUDE.md",
@@ -20,6 +28,7 @@ COUNT_DOCS = (
     "docs/SCRIPTS.md",
     "docs/codebase-overview.md",
 )
+_JSON_READ_FAILED = object()
 
 
 def _read_json(path: Path, errors: list[str]):
@@ -27,7 +36,7 @@ def _read_json(path: Path, errors: list[str]):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         errors.append(f"{path.name}: could not read JSON ({type(exc).__name__})")
-        return None
+        return _JSON_READ_FAILED
 
 
 def _paths(entries, name: str, errors: list[str]) -> list[str]:
@@ -51,7 +60,7 @@ def check_paths(root: Path) -> list[str]:
     index_name = "docs/high_signal_file_index.json"
     index = _read_json(root / index_name, errors)
     if not isinstance(index, dict):
-        if index is not None:
+        if index is not _JSON_READ_FAILED:
             errors.append(f"{index_name}: expected an object")
         return errors
     paths = _paths(index.get("files"), index_name, errors)
@@ -61,6 +70,16 @@ def check_paths(root: Path) -> list[str]:
         manifest = _read_json(dossier / "manifest.json", errors)
         card_paths = _paths(cards, "docs/llms/filemap.json", errors)
         paths.extend(card_paths)
+        if (root / ".git").exists():
+            try:
+                expected = set(census_paths(root))
+            except (OSError, subprocess.CalledProcessError) as exc:
+                errors.append(f"could not enumerate source census ({type(exc).__name__})")
+            else:
+                for missing in sorted(expected - set(card_paths)):
+                    errors.append(f"census missing current source: {missing}")
+                for extra in sorted(set(card_paths) - expected):
+                    errors.append(f"census includes excluded or obsolete source: {extra}")
         if isinstance(manifest, dict):
             if manifest.get("enumerated") != len(card_paths):
                 errors.append("docs/llms/manifest.json: census differs from filemap count")
@@ -80,7 +99,7 @@ def check_paths(root: Path) -> list[str]:
                 actual = {path.name for path in dossier.iterdir() if path.is_file()}
                 if set(emitted) != actual or len(emitted) != len(set(emitted)):
                     errors.append("docs/llms/manifest.json: emitted_files differ from directory")
-        elif manifest is not None:
+        elif manifest is not _JSON_READ_FAILED:
             errors.append("docs/llms/manifest.json: expected an object")
     base = root.resolve()
     for relative in sorted(set(paths)):
@@ -89,7 +108,64 @@ def check_paths(root: Path) -> list[str]:
             errors.append(f"index path escapes repository: {relative}")
         elif not candidate.is_file():
             errors.append(f"index path does not exist: {relative}")
+    if (root / ".git").exists():
+        errors.extend(check_component_map(root))
+    errors.extend(check_tool_pins(root))
     return errors
+
+
+def check_component_map(root: Path) -> list[str]:
+    """Every current runtime module must have a factual component entry."""
+    document = root / "docs/COMPONENTS.md"
+    if not document.is_file():
+        return ["docs/COMPONENTS.md: missing component map"]
+    try:
+        paths = census_paths(root)
+        text = document.read_text(encoding="utf-8")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return [f"could not check component map ({type(exc).__name__})"]
+    documented = {
+        match[1]
+        for line in text.splitlines()
+        if (match := re.fullmatch(r"### `([^`]+\.py)`", line.strip()))
+    }
+    return [
+        f"component map missing current module: {path}"
+        for path in paths
+        if path.startswith("netdnsmonitor/") and path.endswith(".py") and path not in documented
+    ]
+
+
+def check_tool_pins(root: Path) -> list[str]:
+    requirements, config = root / "requirements-dev.txt", root / ".pre-commit-config.yaml"
+    if not requirements.exists() or not config.exists():
+        return []
+    try:
+        required = next(
+            (
+                line.strip()[6:]
+                for line in requirements.read_text().splitlines()
+                if line.strip().startswith("ruff==")
+            ),
+            None,
+        )
+        hook = None
+        ruff_repository = False
+        for line in config.read_text().splitlines():
+            item = line.strip().split("#", 1)[0].strip()
+            if item.startswith("- repo:"):
+                repository = item.partition(":")[2].strip().strip("\"'")
+                ruff_repository = repository == "https://github.com/astral-sh/ruff-pre-commit"
+            elif ruff_repository and item.startswith("rev:"):
+                hook = item.partition(":")[2].strip().strip("\"'").removeprefix("v")
+                break
+    except OSError as exc:
+        return [f"could not read tool pins ({type(exc).__name__})"]
+    if required is None or hook is None:
+        return ["could not verify Ruff hook version against requirements-dev.txt"]
+    if required != hook:
+        return [f"Ruff hook version {hook} differs from requirements-dev.txt {required}"]
+    return []
 
 
 def collected_counts(output: str) -> Counter:

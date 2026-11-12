@@ -38,8 +38,11 @@ Beyond that the server refuses and counts it, so unsigned trial mode, or a
 buggy client, cannot fill the disk.
 """
 
+import contextlib
+import copy
 import json
 import os
+import tempfile
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -109,20 +112,27 @@ class FleetStore:
                 }
 
     def save(self) -> None:
-        os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
-        temporary = f"{self.state_path}.tmp"
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(
-                {
-                    "machines": self.machines,
-                    "refused": self.refused,
-                    "saved_at": _iso(self.now_fn()),
-                },
-                handle,
-                indent=2,
-                sort_keys=True,
-            )
-        os.replace(temporary, self.state_path)
+        directory = os.path.dirname(self.state_path) or "."
+        os.makedirs(directory, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{os.path.basename(self.state_path)}.", dir=directory
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "machines": self.machines,
+                        "refused": self.refused,
+                        "saved_at": _iso(self.now_fn()),
+                    },
+                    handle,
+                    indent=2,
+                    sort_keys=True,
+                )
+            os.replace(temporary, self.state_path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary)
 
     def _append(self, event: dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(self.log_path) or ".", exist_ok=True)
@@ -169,6 +179,7 @@ class FleetStore:
             return REFUSED_RATE
 
         is_new = machine is None
+        previous = machine
         if machine is None:
             machine = {
                 "id": machine_id,
@@ -178,7 +189,10 @@ class FleetStore:
                 "last_incident": None,
                 "recent_event_ids": [],
             }
-            self.machines[machine_id] = machine
+        else:
+            # Fold into a candidate. A failed log append must not turn the
+            # sender's retry into an acknowledged, never-logged duplicate.
+            machine = copy.deepcopy(machine)
 
         duplicate = message["eid"] in machine["recent_event_ids"]
         was_silent = bool(machine.get("silent"))
@@ -195,12 +209,13 @@ class FleetStore:
         version = message["data"].get("version")
         if version:
             machine["version"] = version
-        if message["eid"]:
+        if message["eid"] and not duplicate:
             machine["recent_event_ids"] = (machine["recent_event_ids"] + [message["eid"]])[
                 -RECENT_EVENT_IDS:
             ]
 
         if duplicate:
+            previous.update(machine)
             self.save()
             return "duplicate"
 
@@ -211,6 +226,12 @@ class FleetStore:
             self._on_incident(machine, message, now)
         elif kind == proto.RESOLVED:
             self._on_resolved(machine, message, now)
+        if previous is None:
+            self.machines[machine_id] = machine
+        else:
+            previous.update(machine)
+        # Once the log append succeeded, retain the ID even if this save fails.
+        # A retry then retries only the state save, without duplicating the log.
         self.save()
         return "logged"
 
