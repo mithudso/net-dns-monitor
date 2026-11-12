@@ -1,6 +1,6 @@
 # Known issues
 
-Seven lists, then the repo dossier's findings. "By design" is behaviour that looks
+The sections distinguish current limits from resolved findings. "By design" is behaviour that looks
 like a bug and is not: changing it would make the app claim more than it knows.
 "Unproven" is code that has never been observed working against the real system.
 "Confirmed limitations" are measured and currently unfixed. "Blocked on an owner
@@ -9,8 +9,9 @@ for the owner. "Decided" records owner decisions that are now implemented. "Gaps
 is what is missing. "No longer issues" records entries that earlier revisions
 listed.
 
-Last reviewed 2026-09-17, after the `master` merge (`a78fa0f`) in the App Store
-readiness pass.
+The original App Store readiness review was 2026-09-17 (`a78fa0f`). The source
+maintenance review on 2026-11-12 preserves the historical measurements and live
+verification gaps below; it does not re-measure them or activate the app.
 
 Measurements below are dated where they were taken. The masked-log counts, the
 `log_watcher` timing, the `IP_BOUND_IF` tunnel finding and the `scselect`

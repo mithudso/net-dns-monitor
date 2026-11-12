@@ -12,13 +12,14 @@ source of truth.
 
 ## Semantic index
 
-Before exploring large files by hand, query the local semantic index. The
+Semantic queries, indexing and model execution require separate authorization.
+Use source files and the static retrieval maps when that authorization is absent.
+The
 `scripts/semantic_indexer.py` / `scripts/watch_and_index.py` pair builds and
 refreshes a Chroma index of the repository, `scripts/mcp_server.py` serves it
 as the `search_codebase` MCP tool, and `scripts/query_index.py` queries it from
-a shell. If the index does not exist, build it with `scripts/semantic_indexer.py`;
-fall back to reading files only when the index cannot be reached. `docs/MCP.md`
-is the placeholder for the server's own documentation.
+a shell. Do not build or refresh a missing index as a side effect of maintenance.
+[docs/MCP.md](docs/MCP.md) documents the optional service and its boundaries.
 
 ## Repo-local agents
 

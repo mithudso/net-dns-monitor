@@ -6,7 +6,8 @@
 #
 #   pip install -r requirements-index.txt
 #
-# Pinned exactly to the versions the LaunchAgent on the dev machine runs with.
+# Tested developer-tool pins. Changing this file does not upgrade an existing
+# LaunchAgent environment, open an index, or authorize an embedding run.
 chromadb==1.5.9
-fastmcp==4.0.10
+fastmcp==4.1.8
 watchdog==6.0.0

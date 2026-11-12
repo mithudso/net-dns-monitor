@@ -20,6 +20,7 @@ something, no stdin so nothing can hang on a prompt, and an output cap.
 import codecs
 import contextlib
 import os
+import re
 import select
 import shlex
 import signal
@@ -529,6 +530,69 @@ def _dropped(result, name: str) -> int:
 SHELL_METACHARACTERS = (";", "&", "|", ">", "<", "`", "$(", "\n")
 
 
+def _directory_argument(argument: str) -> str:
+    """Expand a single path without losing the quotes that protect literals."""
+    if not argument:
+        return os.path.expanduser("~")
+    try:
+        tokens = shlex.split(argument)
+    except ValueError:
+        return argument
+    if len(tokens) != 1:
+        return argument
+
+    expanded = []
+    index = 0
+    # Tilde expansion applies only to an unquoted leading prefix. Insert the
+    # home path literally, so quotes or dollar signs in it are not re-parsed.
+    tilde = re.match(r"~[a-zA-Z0-9_.-]*(?=/|$)", argument)
+    if tilde:
+        expanded.append(os.path.expanduser(tilde.group()))
+        index = tilde.end()
+    quote = None
+    while index < len(argument):
+        char = argument[index]
+        if char in ("'", '"') and (quote is None or quote == char):
+            quote = None if quote == char else char
+            index += 1
+            continue
+        if char == "\\" and quote != "'" and index + 1 < len(argument):
+            following = argument[index + 1]
+            if quote is None or following in ("$", "`", '"', "\\", "\n"):
+                expanded.append(following)
+                index += 2
+                continue
+        if char == "$" and quote != "'":
+            variable = re.match(r"\$(?:[a-zA-Z_][a-zA-Z0-9_]*|\{[^}]+\})", argument[index:])
+            if variable:
+                expanded.append(os.path.expandvars(variable.group()))
+                index += variable.end()
+                continue
+        expanded.append(char)
+        index += 1
+    return "".join(expanded)
+
+
+def _has_shell_operator(argument: str) -> bool:
+    quote = None
+    index = 0
+    while index < len(argument):
+        char = argument[index]
+        if char == "\\" and quote != "'" and index + 1 < len(argument):
+            following = argument[index + 1]
+            if quote is None or following in ("$", "`", '"', "\\", "\n"):
+                index += 2
+                continue
+        if char in ("'", '"') and (quote is None or quote == char):
+            quote = None if quote == char else char
+        elif (quote != "'" and (char == "`" or argument.startswith("$(", index))) or (
+            quote is None and char in ";&|><\n"
+        ):
+            return True
+        index += 1
+    return False
+
+
 def _change_directory(argument: str, state: ConsoleState) -> str:
     """`cd` cannot be a subprocess: the child's directory dies with the child.
 
@@ -541,21 +605,13 @@ def _change_directory(argument: str, state: ConsoleState) -> str:
     # it: handing the whole tail to the directory check reports `no such
     # directory: /tmp && ls`, which reads as "that directory is missing" rather
     # than "this console did not run your second command". Say which it is.
-    if any(token in argument for token in SHELL_METACHARACTERS):
+    if _has_shell_operator(argument):
         return (
             "cd: this is a built-in and cannot chain -- run the `cd` on its own "
             "line, then the rest."
         )
 
-    # Unquoted the way the shell would, since HELP promises quoting works:
-    # `cd "My Folder"` used to look for a directory with quotes in its name.
-    # An unbalanced quote, or several words, falls back to the raw text.
-    try:
-        tokens = shlex.split(argument)
-    except ValueError:
-        tokens = [argument]
-    path = tokens[0] if len(tokens) == 1 else argument
-    target = os.path.expanduser(os.path.expandvars(path or "~"))
+    target = _directory_argument(argument)
     if not os.path.isabs(target):
         target = os.path.join(state.cwd, target)
     target = os.path.normpath(target)

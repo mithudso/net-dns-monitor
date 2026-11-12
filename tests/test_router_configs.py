@@ -9,6 +9,8 @@ import ipaddress
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 DNSMASQ = ROOT / "dnsmasq" / "dnsmasq.conf"
 UNBOUND = ROOT / "unbound" / "unbound.conf"
@@ -78,8 +80,44 @@ def test_unbound_does_not_run_as_root():
     assert username.strip('"') not in ("", "root")
 
 
+def unbound_sections(path):
+    sections = []
+    for line in _lines(path):
+        key, _, value = line.partition(":")
+        if not value.strip():
+            sections.append((key.strip(), {}))
+        else:
+            assert sections, "setting outside a section"
+            sections[-1][1].setdefault(key.strip(), []).append(value.strip())
+    return sections
+
+
+def assert_forward_tls(path):
+    sections = unbound_sections(path)
+    servers = [values for name, values in sections if name == "server"]
+    assert servers and all(s.get("tls-cert-bundle", [""])[0].strip('"') for s in servers)
+    zones = [values for name, values in sections if name == "forward-zone"]
+    assert zones, "no forwarding zones"
+    for zone in zones:
+        assert zone.get("forward-tls-upstream") == ["yes"], zone
+        assert zone.get("forward-addr") and all("@853#" in addr for addr in zone["forward-addr"]), (
+            zone
+        )
+
+
 def test_unbound_forwards_over_tls_with_a_cert_bundle():
-    s = unbound_settings()
-    assert s["forward-tls-upstream"] == ["yes"]
-    assert s["tls-cert-bundle"] and s["tls-cert-bundle"][0].strip('"')
-    assert all("@853#" in addr for addr in s["forward-addr"])
+    assert_forward_tls(UNBOUND)
+
+
+def test_each_forward_zone_must_enable_tls(tmp_path):
+    config = tmp_path / "unbound.conf"
+    prefix = (
+        'server:\n tls-cert-bundle: "cert.pem"\nforward-zone:\n name: "."\n'
+        " forward-tls-upstream: yes\n forward-addr: 1.1.1.1@853#cloudflare-dns.com\n"
+    )
+    second = 'forward-zone:\n name: "example.org"\n forward-addr: 1.1.1.1@853#cloudflare-dns.com\n'
+    config.write_text(prefix + second)
+    with pytest.raises(AssertionError):
+        assert_forward_tls(config)
+    config.write_text(prefix + second + " forward-tls-upstream: yes\n")
+    assert_forward_tls(config)

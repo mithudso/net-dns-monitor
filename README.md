@@ -818,3 +818,17 @@ Every module is in `netdnsmonitor/`. The list matches `ls netdnsmonitor/*.py`
 - `status.py` -- menu bar title/stats-segment logic + the console's `:status` text
 - `system_log.py` -- reads the unified log for the dashboard's system log pane
 - `throughput.py` -- bounded download forced out of one interface, to rank backups
+
+## Maintainer documentation
+
+The [documentation hub](docs/wiki/index.md) links architecture, testing, operations
+and security. [Fleet reporting](docs/FLEET.md) covers the separate signed-UDP
+receiver, headless monitor and acknowledgement/retry outbox.
+[Remediation scripts](docs/REMEDIATION_SCRIPTS.md) covers the existing editor and
+injected execution context. These direct-build features are omitted from the
+Mac App Store edition; the [capability contract](docs/integrations-and-assumptions.md)
+describes the boundaries. Maintenance checks do not install or start them.
+
+The dated [bootstrap audit](docs/repo-bootstrap-audit-2026-11-12.md) and
+[source optimization report](docs/code-deep-optimizer-2026-11-12.md) distinguish
+verified maintenance checks, shallow retrieval coverage and unresolved limits.

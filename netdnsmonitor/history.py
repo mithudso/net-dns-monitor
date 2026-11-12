@@ -95,9 +95,9 @@ class SampleHistory:
         try:
             first = datetime.fromisoformat(self.samples[0]["at"])
             last = datetime.fromisoformat(self.samples[-1]["at"])
+            return (last - first).total_seconds()
         except (KeyError, ValueError, TypeError):
             return None
-        return (last - first).total_seconds()
 
     # --- persistence -------------------------------------------------------
 
@@ -184,7 +184,7 @@ def _coerce(sample: dict) -> dict:
         value = sample.get(field)
         try:
             number = None if value is None else float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             number = None
         # json.loads accepts Infinity and NaN. One infinite point flattens every
         # other value in the graph to the baseline, so it is a gap, not a point.

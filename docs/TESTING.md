@@ -1,6 +1,6 @@
 # Testing
 
-2792 tests, offline, in tens of seconds. `pytest.ini` sets
+3193 tests, offline, in tens of seconds. `pytest.ini` sets
 `testpaths = tests`, so a bare `python3 -m pytest` from the repo root is the whole
 suite.
 
@@ -47,9 +47,10 @@ python scripts/check_docs.py --collect-tests
 side effect (probe, subprocess, LLM call, SMTP, webhook, clock, filesystem)
 enters as a parameter with a real default. That lets the whole decision surface
 run offline. The suite opens no connection off the machine, runs no
-`networksetup`, `sudo`, `osascript` or `log show`, and calls no API. Two files
+`networksetup`, `sudo`, `osascript` or `log show`, and calls no API. Several files
 start local work on purpose: `test_console.py` runs `/bin/sh` children to test
-timeouts and process-group kills, and `test_peer_net.py` sends UDP over loopback.
+timeouts and process-group kills, `test_peer_net.py`, `test_fleet.py` and `test_app_peer_wiring.py` exercise UDP
+over loopback. No test result establishes live subnet delivery.
 
 The pattern, from `make_repair_executor`:
 
@@ -63,7 +64,7 @@ inventing a new shape.
 
 ## `tests/conftest.py`
 
-Four autouse fixtures apply to every test. Each keeps the suite from reaching
+The autouse fixtures apply to every test. Each keeps the suite from reaching
 something real on the developer's machine.
 
 | Fixture | What it does | Why |
@@ -78,9 +79,11 @@ the log stubs in `test_system_log.py` and `test_log_watcher.py`. Those files tes
 the real functions with an injected `run_fn`. A test that needs other answers
 patches over the stubs, as `test_app_privilege_wiring.py` does.
 
-The probe and the log read run on daemon threads. A thread that starts late can
-outlive its test's patch and reach the real function. The stubs return at once,
-which keeps that window small; it is not closed.
+The app captures privilege providers before scheduling the worker and log
+readers at construction. Delayed workers therefore retain their injected fakes
+after fixture teardown. The maintenance launcher also replaces captured
+Keychain/notification defaults before collection and denies system commands,
+outbound network access and writes outside task-owned paths.
 
 ## What is tested, and where it lives
 
@@ -140,6 +143,18 @@ To regenerate the per-file distribution in `docs/SCRIPTS.md`:
 python3 -m pytest -q --collect-only | grep '::' | sed 's/::.*//' | sort | uniq -c | sort -rn
 ```
 
+## Guarded maintenance verification
+
+The 2026-11-12 local maintenance run uses scratch HOME/config/data paths and
+synthetic credential and notification factories before imports. Its process-tree
+sandbox denies outbound traffic, including loopback, and literal OS-management
+executables. It permits writes only in the isolated worktree and owned scratch
+directory. Eighteen UDP integration nodes and four Foundation PNG atomic-write
+nodes are held locally. Foundation uses shared OS temporary storage even when
+TMPDIR is redirected; the guard remains strict. The full suite on a fresh macOS
+CI runner exercises or explicitly accounts for those nodes. A local held node
+is never counted as passing.
+
 ## What the suite cannot cover
 
 Green tests are not evidence for any of this. Each needs the one-shot
@@ -186,3 +201,10 @@ Two properties are worth testing explicitly because they fail silently:
   nothing, a notification that never sent, an unreadable log that reads as "no
   errors". These need an assertion on the reported outcome, not on the absence of
   an exception.
+
+Before collection, shared setup also redirects HOME/cache/data roots, removes
+all names in credentials.NAMES and replaces captured credential/notification
+default callables. Autouse fixtures alone run too late for imported default
+arguments and can end before a delayed worker. The fresh-process sentinel
+regression loads shared setup with synthetic inherited credentials and denies
+native credential/notification bundle access; no real item or banner is used.

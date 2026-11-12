@@ -106,6 +106,19 @@ say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Mutating commands share one reservation through rollback and launchd reload.
+# A stale reservation fails closed; an operator can inspect it before removal.
+acquire_service_lock() {
+    mkdir -p "$SUPPORT_DIR"
+    SERVICE_LOCK="$SUPPORT_DIR/service-install.lock"
+    mkdir "$SERVICE_LOCK" 2>/dev/null || die "another service command owns $SERVICE_LOCK"
+    trap 'rmdir "$SERVICE_LOCK"' EXIT
+}
+
+xml_escape() {
+    printf '%s' "$1" | sed -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
+}
+
 # Append to the keepalive log. `check` runs unattended from a timer, so its
 # decisions have to leave a trace somewhere durable.
 audit() {
@@ -174,7 +187,11 @@ write_plist() {
     mkdir -p "$(dirname "$PLIST")"
     # Written beside the target and linted before the move, so a failed lint
     # leaves the working plist alone instead of replacing it with a broken one.
-    local staged="$PLIST.new"
+    local staged exec_xml flag_xml log_xml
+    staged="$(mktemp "$PLIST.XXXXXX")"
+    exec_xml="$(xml_escape "$EXEC")"
+    flag_xml="$(xml_escape "$FLAG")"
+    log_xml="$(xml_escape "$APP_LOG")"
     cat >"$staged" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -202,7 +219,7 @@ write_plist() {
 	     be removed at any time, and when it is, login startup breaks silently. -->
 	<key>ProgramArguments</key>
 	<array>
-		<string>$EXEC</string>
+		<string>$exec_xml</string>
 	</array>
 
 	<!-- Deliberately NO RunAtLoad. It would start the app whenever this agent
@@ -222,7 +239,7 @@ write_plist() {
 	<dict>
 		<key>PathState</key>
 		<dict>
-			<key>$FLAG</key>
+			<key>$flag_xml</key>
 			<true/>
 		</dict>
 	</dict>
@@ -251,9 +268,9 @@ write_plist() {
 	<string>Interactive</string>
 
 	<key>StandardOutPath</key>
-	<string>$APP_LOG</string>
+	<string>$log_xml</string>
 	<key>StandardErrorPath</key>
-	<string>$APP_LOG</string>
+	<string>$log_xml</string>
 </dict>
 </plist>
 PLIST_EOF
@@ -264,11 +281,11 @@ PLIST_EOF
     mv -f "$staged" "$PLIST"
 }
 
-# bootout fails when the job isn't loaded and bootstrap fails when it already
-# is, so both are tolerated. Re-bootstrapping is how a rewritten plist takes
-# effect -- launchd caches the old one otherwise.
+# A successful bootstrap is required to apply the rewritten plist.
 reload_agent() {
-    launchctl bootout "$SERVICE" 2>/dev/null || true
+    if ! launchctl bootout "$SERVICE" 2>/dev/null; then
+        is_loaded && die "could not remove the loaded $LABEL; replacement was not loaded"
+    fi
     local attempt
     for attempt in 1 2 3; do
         if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
@@ -276,8 +293,7 @@ reload_agent() {
         fi
         sleep 1
     done
-    # Already loaded is a success for our purposes; anything else is not.
-    is_loaded || die "could not bootstrap $LABEL (try: launchctl bootstrap gui/$(id -u) '$PLIST')"
+    die "could not bootstrap $LABEL (try: launchctl bootstrap gui/$(id -u) '$PLIST')"
 }
 
 # Replace the installed bundle with $SOURCE_BUNDLE as a whole-bundle swap.
@@ -295,6 +311,23 @@ reload_agent() {
 # resource forks, symlinks and ad-hoc code signature, which cp -R can invalidate.
 replace_installed_bundle() {
     local staged="$INSTALLED_APP.new" previous="$INSTALLED_APP.old"
+    local source_real staged_real previous_real installed_real
+    source_real="$(cd "$SOURCE_BUNDLE" && pwd -P)" || die "cannot resolve source bundle"
+    staged_real="$(cd "$(dirname "$staged")" && pwd -P)/$(basename "$staged")"
+    previous_real="$(cd "$(dirname "$previous")" && pwd -P)/$(basename "$previous")"
+    # Resolve existing swap directories too, including symlink aliases.
+    if [ -d "$staged" ]; then staged_real="$(cd "$staged" && pwd -P)"; fi
+    if [ -d "$previous" ]; then previous_real="$(cd "$previous" && pwd -P)"; fi
+    case "$source_real/" in
+        "$staged_real/"*|"$previous_real/"*) die "source bundle overlaps a reserved swap directory" ;;
+    esac
+    installed_real="$(cd "$(dirname "$INSTALLED_APP")" && pwd -P)/$(basename "$INSTALLED_APP")"
+    if [ -d "$INSTALLED_APP" ]; then installed_real="$(cd "$INSTALLED_APP" && pwd -P)"; fi
+    case "$staged_real/" in "$source_real/"*) die "source bundle contains a reserved swap directory" ;; esac
+    case "$previous_real/" in "$source_real/"*) die "source bundle contains a reserved swap directory" ;; esac
+    if [ "$source_real" != "$installed_real" ]; then
+        case "$source_real/" in "$installed_real/"*) die "source bundle is inside the installed bundle" ;; esac
+    fi
     rm -rf "$staged" "$previous"
     if ! ditto "$SOURCE_BUNDLE" "$staged"; then
         rm -rf "$staged"
@@ -328,7 +361,7 @@ record_source_bundle() {
 # --- commands --------------------------------------------------------------
 
 cmd_install() {
-    mkdir -p "$SUPPORT_DIR" "$HOME/Applications"
+    mkdir -p "$SUPPORT_DIR" "$HOME/Applications" "$(dirname "$APP_LOG")"
 
     if [ -d "$SOURCE_BUNDLE" ]; then
         say "Installing bundle from build output ($SOURCE_BUNDLE_ORIGIN):"
@@ -638,6 +671,10 @@ usage() {
     sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
+
+case "${1:-status}" in
+    install|update|start|stop|restart|check|uninstall) acquire_service_lock ;;
+esac
 
 case "${1:-status}" in
     install)   cmd_install ;;

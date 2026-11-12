@@ -15,6 +15,7 @@ injected callables, so this orchestration logic is testable without any real
 network, subprocess, or API calls.
 """
 
+import inspect
 import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -68,6 +69,23 @@ class StateMachine:
     ):
         self.prober = prober
         self.repair_executor = repair_executor
+        # Decide before executing: a TypeError from inside a repair must never
+        # cause the same side effect to run a second time with different args.
+        self._executor_takes_classification = True
+        try:
+            signature = inspect.signature(repair_executor)
+        except (TypeError, ValueError):
+            pass  # Opaque callables retain the two-argument runtime contract.
+        else:
+            try:
+                signature.bind(None, None)
+            except TypeError:
+                try:
+                    signature.bind(None)
+                except TypeError:
+                    pass  # The normal fail-as-data path reports an invalid callable.
+                else:
+                    self._executor_takes_classification = False
         self.escalator = escalator
         self.log_watcher = log_watcher or (lambda: [])
         self.flap_gate = FlapGate(failure_threshold, success_threshold)
@@ -144,6 +162,8 @@ class StateMachine:
 
     def _run_step(self, step: LadderStep, classification: Classification) -> str:
         try:
+            if not self._executor_takes_classification:
+                return self.repair_executor(step)
             return self.repair_executor(step, classification.value)
         except Exception as exc:  # noqa: BLE001 - a raising step must not cost the report
             return f"failed: step raised {type(exc).__name__}"

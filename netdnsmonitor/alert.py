@@ -85,11 +85,15 @@ def stop_bouncing(app_fn: AppFn = _shared_application) -> None:
     """Cancel every outstanding bounce, so a transient blip doesn't leave the
     Dock bouncing indefinitely after the network comes back.
     """
-    while _attention_requests:
-        request_id = _attention_requests.pop()
+    pending = list(_attention_requests)
+    _attention_requests.clear()
+    for request_id in reversed(pending):
         try:
             app_fn().cancelUserAttentionRequest_(request_id)
         except Exception:  # noqa: BLE001 - must not kill the rumps timer
+            # Keep the ID for a later recovery, without retrying indefinitely
+            # inside this run-loop callback when AppKit remains unavailable.
+            _attention_requests.append(request_id)
             traceback.print_exc()
 
 
@@ -143,8 +147,9 @@ def notify(
         returncode = getattr(result, "returncode", 0)
         if returncode:
             print(f"osascript fallback exited {returncode}", file=sys.stderr)
-    except (subprocess.SubprocessError, OSError, UnicodeError):
-        traceback.print_exc()
+    except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
+        # TimeoutExpired includes argv, which contains the notification text.
+        _log(f"osascript fallback failed ({type(exc).__name__})")
     return status
 
 

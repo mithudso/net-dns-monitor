@@ -31,8 +31,9 @@ Two roles, one codebase:
 The server writes two files (paths are `fleet_server_log_path` and
 `fleet_server_state_path`):
 
-- `fleet/events.jsonl` — every accepted event, one JSON object per line, append-only.
-  Rotated to `events.jsonl.1` at 10 MB.
+- `fleet/events.jsonl` — accepted events append as one JSON object per line.
+  The active file rotates to `events.jsonl.1` above 10 MiB; a later rotation
+  replaces the previous `.1` file. This is bounded local retention.
 - `fleet/state.json` — the current picture, one entry per machine.
 - `fleet/keys.json` — the enrolled machines and their keys (`fleet_keys_path`), mode 0600.
 
@@ -102,6 +103,14 @@ The server adds `online` (first heard, or heard again after silence), `silent`
 and is re-sent, oldest first, until the server acknowledges it, so an incident
 declared while the network is down is delivered when it returns. The outbox is
 lost if the process restarts before then. Heartbeats are not queued.
+
+An unrelated or invalid datagram does not consume the acknowledgement wait:
+the client continues within one shared exchange deadline until it receives an
+authenticated acknowledgement for that event. Failure remains in `last_error`
+and the queued event retries later. Server event-log failure does not turn an
+unrecorded event into an acknowledged duplicate on retry. The event log and
+state snapshot are separate files; these checks do not establish crash-atomic
+exactly-once delivery across all process or filesystem failures.
 
 ## Reading the log
 
@@ -199,3 +208,16 @@ from the Credentials menu or by `headless --install`. It is never in the config 
 | `netdnsmonitor/fleet_server.py` | UDP listener |
 | `netdnsmonitor/headless.py` | windowless monitor loop, LaunchAgent install |
 | `tests/test_fleet.py` | the suite for all of the above |
+
+## Persistence under failure
+
+Refusal counters stay accurate in memory while full state-save attempts are
+bounded. The receiver flushes state when its reader exits. Abrupt termination
+can lose pending refusal counts; this is not a durable message queue. A silence
+event must append before the machine becomes silent, and a failed state save is
+retried on a later sweep without appending the same silence event again.
+
+For embedding tests, run_headless accepts build_app_parts(config, capabilities).
+The factory supplies credential_store, state_machine, notifier and optionally
+failover. A stopped synthetic monitor and fake server/reporter isolate startup.
+The normal CLI continues using the existing default builders.

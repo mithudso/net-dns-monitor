@@ -178,11 +178,11 @@ def render_series_graph(
         # rendered exactly like a total outage. Those points get a dot instead.
         color.setFill()
         for index, value in enumerate(values):
-            if value is None:
+            if not _measured(value):
                 continue
             before = values[index - 1] if index > 0 else None
             after = values[index + 1] if index + 1 < len(values) else None
-            if before is None and after is None:
+            if not _measured(before) and not _measured(after):
                 x, y = origin_x + index * step, origin_y + project(value)
                 AppKit.NSBezierPath.bezierPathWithOvalInRect_(
                     NSMakeRect(x - DOT_RADIUS, y - DOT_RADIUS, 2 * DOT_RADIUS, 2 * DOT_RADIUS)

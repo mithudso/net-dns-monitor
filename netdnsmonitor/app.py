@@ -24,8 +24,9 @@ debounced because acting on it costs something -- flushed caches and API calls.
 The log poll is slow for the opposite reason to the heartbeat: nothing displayed
 depends on it, and `log show` measured 1.4s per read.
 
-Everything that shells out does so on a worker thread and returns through a
-queue, because the run loop this all hangs off is also what draws the window.
+Heartbeat, privilege and log workers return through queues that the UI timer
+drains. The incident tick still runs its ladder and escalation synchronously;
+that owner-deferred ordering limitation is recorded in docs/known-issues.md.
 """
 
 import os
@@ -732,7 +733,6 @@ def ping_heartbeat(
     # IPv6 (NAT64-synthesized) path, and is worth only what the addresses leave.
     # Slicing across it too would shrink every address's share on a healthy
     # dual-stack network, where it is never reached.
-    addresses = [host for host in hosts if host != name]
     failures = []
     measured = False
     fn = ping_once if ping_fn is None else ping_fn
@@ -748,7 +748,8 @@ def ping_heartbeat(
             if host == name:
                 result = fn(host, timeout_seconds=remaining, prefer_ipv6=True)
             else:
-                result = fn(host, timeout_seconds=remaining / (len(addresses) - i))
+                address_count = sum(candidate != name for candidate in hosts[i:])
+                result = fn(host, timeout_seconds=remaining / address_count)
         except ValueError as exc:
             # ping_once refuses a host that could be read as a ping option.
             # load_config refuses the same hosts, but a caller can pass a config
@@ -1291,7 +1292,10 @@ class NetDnsMonitorApp(rumps.App):
         # alert, which the gate never offers again. So every tick is guarded.
         try:
             self._tick()
+            had_failures = self._tick_failures > 0
             self._tick_failures = 0
+            if had_failures:
+                self._refresh_title()
         except Exception as exc:  # noqa: BLE001 - the rest of the tick must still run
             # Class name only: CLAUDE.md #4. The traceback still goes to stderr.
             self.last_tick_error = type(exc).__name__
@@ -1522,9 +1526,9 @@ class NetDnsMonitorApp(rumps.App):
                 "down_bps": down_bps,
                 "up_bps": up_bps,
                 "down": snapshot["down"],
-                # Wall clock, so the dashboard can say a reading has gone stale
-                # when the ping worker stops producing them.
-                "at": time.time(),
+                # Convert completion time, not queue drain time, to wall time
+                # so delayed GUI consumption does not hide a stale reading.
+                "at": time.time() - max(0.0, time.monotonic() - at),
             }
             host = heartbeat_label(self.config)
             if snapshot["down"]:
@@ -1631,6 +1635,9 @@ class NetDnsMonitorApp(rumps.App):
         )
 
     def _refresh_title(self):
+        if getattr(self, "_tick_failures", 0) >= self.config["failure_threshold"]:
+            self.title = "⚪ Net/DNS: check failing"
+            return
         resolution_failed, resolution_total, ping, ping_down, stats, flap_gate = (
             self._display_snapshot()
         )
@@ -1990,7 +1997,17 @@ class NetDnsMonitorApp(rumps.App):
             # above a Permissions section reading "not granted".
             return
         self._privilege_status_thread = threading.Thread(
-            target=self._run_privilege_status, name="privilege-status", daemon=True
+            target=self._run_privilege_status,
+            # Capture the injected providers before scheduling. A delayed worker
+            # must not switch to different providers after its caller returns.
+            args=(
+                privileges.granted_commands_now,
+                privileges.dhcp_interfaces,
+                privileges.primary_interface,
+                getattr(self, "_privilege_generation", 0),
+            ),
+            name="privilege-status",
+            daemon=True,
         )
         self._privilege_status_thread.start()
 
@@ -2002,19 +2019,28 @@ class NetDnsMonitorApp(rumps.App):
             "message": f"{verb} raised; see the app log for the traceback.",
         }
 
-    def _run_privilege_status(self):
+    def _run_privilege_status(
+        self,
+        granted_commands_fn: Optional[Callable] = None,
+        interfaces_fn: Optional[Callable] = None,
+        primary_interface_fn: Optional[Callable] = None,
+        generation: Optional[int] = None,
+    ):
+        if generation is None:
+            generation = getattr(self, "_privilege_generation", 0)
         try:
-            granted_commands = privileges.granted_commands_now()
+            granted_commands = (granted_commands_fn or privileges.granted_commands_now)()
             self._privilege_results.put(
                 {
                     # covers, not exact-line membership: a blanket NOPASSWD: ALL
                     # permits the restart, and the window said "not granted".
                     "granted": privileges.covers(granted_commands, privileges.MDNS_HUP),
                     "file_rule_listed": privileges.own_rule_listed(granted_commands),
-                    "interfaces": privileges.dhcp_interfaces(),
+                    "interfaces": (interfaces_fn or privileges.dhcp_interfaces)(),
                     "granted_interfaces": privileges.granted_interfaces_from(granted_commands),
-                    "primary": privileges.primary_interface(),
+                    "primary": (primary_interface_fn or privileges.primary_interface)(),
                     "probed": True,
+                    "generation": generation,
                 }
             )
         except Exception:  # noqa: BLE001 - a status probe must not kill anything
@@ -2032,6 +2058,10 @@ class NetDnsMonitorApp(rumps.App):
                 result = self._privilege_results.get_nowait()
             except queue.Empty:
                 return
+            if result.get("generation", getattr(self, "_privilege_generation", 0)) != getattr(
+                self, "_privilege_generation", 0
+            ):
+                continue
             self.privileges_granted = result["granted"]
             self.dhcp_interfaces = result["interfaces"]
             # Absent from a grant/revoke result, which has no reason to re-probe the
@@ -2089,6 +2119,7 @@ class NetDnsMonitorApp(rumps.App):
             return
         interfaces = list(self.dhcp_interfaces)
         self._append_output("\n" + privileges.explanation(interfaces) + "\n")
+        self._privilege_generation = getattr(self, "_privilege_generation", 0) + 1
         self._privilege_thread = threading.Thread(
             target=self._run_grant,
             args=(interfaces,),
@@ -2136,6 +2167,7 @@ class NetDnsMonitorApp(rumps.App):
         if self._privilege_thread is not None and self._privilege_thread.is_alive():
             self._append_output("Still working on the previous permission change.\n")
             return
+        self._privilege_generation = getattr(self, "_privilege_generation", 0) + 1
         self._privilege_thread = threading.Thread(
             target=self._run_revoke, name="privilege-revoke", daemon=True
         )
@@ -3036,13 +3068,13 @@ class NetDnsMonitorApp(rumps.App):
         return None
 
     def remove_credentials(self, _sender=None) -> str:
-        """Delete all three of this app's Keychain items, after asking."""
+        """Delete this app's saved Keychain credentials, after asking."""
         try:
             confirmed = self.choice_prompt(
                 "Remove saved credentials?",
-                "This deletes the Anthropic API key, Slack webhook URL and SMTP password that "
-                "this app saved in your Keychain. Values set as environment variables are "
-                "not affected.",
+                "This deletes the Anthropic API key, Slack webhook URL, SMTP password and "
+                "fleet machine key that this app saved in your Keychain. Values set as "
+                "environment variables are not affected.",
                 "Remove",
                 "Cancel",
             )

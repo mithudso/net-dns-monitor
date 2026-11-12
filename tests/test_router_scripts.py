@@ -1,12 +1,16 @@
-"""String and plist checks on the router/ shell scripts.
+"""Source, plist and isolated DNS-branch checks on the router shell scripts.
 
-None of these scripts is executed: they reconfigure pf, launchd and the network
-as root. The LaunchDaemon plist is lifted out of its heredoc and parsed.
+No complete script runs: they reconfigure pf, launchd and the network as root.
+The LaunchDaemon plist is lifted out of its heredoc. The read-only DNS branch
+runs with synthetic dig and logging functions, so it never sends a query.
 """
 
 import plistlib
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "router" / "scripts"
@@ -65,11 +69,46 @@ def test_the_daemon_reruns_every_minute_and_logs():
     assert plist["StandardErrorPath"] == "/var/log/com.custom.router.nat.err.log"
 
 
-def test_the_dns_check_does_not_pass_on_a_dig_timeout():
+@pytest.mark.parametrize(
+    "output,status,expected",
+    [
+        (";; connection timed out; no servers could be reached", 9, "FAIL"),
+        (";; connection timed out; no servers could be reached", 0, "FAIL"),
+        ("", 0, "FAIL"),
+        ("1.2.3.4", 0, "PASS"),
+    ],
+)
+def test_the_dns_check_does_not_pass_on_a_dig_timeout(tmp_path, output, status, expected):
+    import shlex
+
     code = _code_lines(TEST_ROUTER)
-    assert "+tries=1" in code
-    assert "grep -q '^;'" in code
-    assert "over DoT" not in code
+    branch = code[code.index("if ! command -v dig") :]
+    branch = re.split(r"^fi$", branch, maxsplit=1, flags=re.M)[0] + "\nfi\n"
+    # The extracted branch only calls dig, grep and the logging functions.
+    # dig is a shell function, so no query or other OS-facing command runs.
+    fixture = (
+        f"DNS_OUTPUT={shlex.quote(output)}\nDNS_EXIT={status}\n"
+        'dig() { printf "%s\\n" "$*" > "$PWD/dig-args"; printf "%s" "$DNS_OUTPUT"; return "$DNS_EXIT"; }\n'
+        'pass() { printf "PASS:%s\\n" "$*"; }\n'
+        'fail() { printf "FAIL:%s\\n" "$*"; }\n'
+        'warn() { printf "WARN:%s\\n" "$*"; }\n'
+    )
+    result = subprocess.run(
+        ["/bin/bash", "-c", fixture + branch],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.partition(":")[0] == expected
+    assert "+time=2" in (tmp_path / "dig-args").read_text()
+    assert "+tries=1" in (tmp_path / "dig-args").read_text()
+    if expected == "PASS":
+        assert "answered a query" in result.stdout and "over DoT" not in result.stdout
+    else:
+        assert "FAILED to resolve query" in result.stdout
 
 
 def test_a_failed_sudo_is_not_reported_as_pf_disabled():
@@ -101,7 +140,7 @@ def test_the_bootpd_check_reads_the_launchd_job_not_the_process_list():
     block = re.split(r"\bfi\b", block, maxsplit=1)[0]
     loaded, _, not_loaded = block.partition("else")
     assert "fail " in loaded and "UDP 67" in loaded
-    assert "pass " in not_loaded
+    assert "warn " in not_loaded and "unknown" in not_loaded
 
 
 def _check_block(code, tool):
@@ -147,13 +186,16 @@ def test_unbound_install_validates_sources_before_deploying_and_backs_up():
     assert "set -euo pipefail" in code
     check = code.index('unbound-checkconf "$UNBOUND_SRC"')
     test = code.index('dnsmasq --test -C "$DNSMASQ_SRC"')
-    first_deploy = code.index('deploy "$UNBOUND_SRC" "$UNBOUND_CONF_DIR/unbound.conf"')
+    first_deploy = code.index("\ndeploy_pair\n")
     assert check < first_deploy and test < first_deploy
-    assert code.index('deploy "$DNSMASQ_SRC" "$DNSMASQ_CONF_DIR/dnsmasq.conf"') > first_deploy
+    pair = _function(code, "deploy_pair")
+    assert pair.index('deploy "$UNBOUND_SRC" "$first"') < pair.index(
+        'if ! deploy "$DNSMASQ_SRC" "$second"'
+    )
     deploy = _function(code, "deploy")
-    assert deploy.index('backup "$dst"') < deploy.index('cp "$src" "$dst"')
+    assert deploy.index('backup "$dst"') < deploy.index('cp -p "$src" "$staged"')
     # The only config copy is the guarded one inside deploy().
-    assert re.findall(r'\bcp "', code) == ['cp "']
+    assert re.findall(r'\bcp -p "\$src"', code) == ['cp -p "$src"']
 
 
 def test_unbound_install_never_copies_through_a_symlink():
@@ -163,7 +205,7 @@ def test_unbound_install_never_copies_through_a_symlink():
     """
     code = _code_lines(UNBOUND_INSTALL)
     deploy = _function(code, "deploy")
-    copy = deploy.index('cp "$src" "$dst"')
+    copy = deploy.index('cp -p "$src" "$staged"')
     assert deploy.index('"$src" -ef "$dst"') < copy
     refuse = _function(code, "refuse_foreign_link")
     assert '-L "$dst"' in refuse and 'readlink "$dst"' in refuse and "exit 1" in refuse

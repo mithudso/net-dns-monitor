@@ -206,6 +206,10 @@ def resolve(key: str, **values) -> Optional[list[str]]:
             value = str(values[name])
             if value.startswith("-"):
                 return None
+            # dig reads these prefixes as options and server selection, even
+            # when the value occupies its domain placeholder.
+            if name == "domain" and value.startswith(("+", "@")):
+                return None
             argv.append(value)
         else:
             argv.append(token)

@@ -37,10 +37,12 @@ is a plain UTF-8 append: an append cannot truncate what is already there, and
 the worst a crash mid-write leaves is one torn last line.
 """
 
+import contextlib
 import json
 import os
 import sys
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -92,8 +94,8 @@ class ForensicRecorder:
         self.max_journal_bytes = int(max_journal_bytes)
         self._episode: Optional[dict] = None
         self._observations_kept = 0
-        # Exception class name of the latest failed journal append, or None once
-        # an append succeeds. Never the message.
+        # Exception class name of the latest failed timestamp or journal append,
+        # or None once an append succeeds. Never the message.
         self.journal_error: Optional[str] = None
 
     @property
@@ -121,8 +123,13 @@ class ForensicRecorder:
         incident pipeline, and losing the network is not a reason to also lose
         the monitor.
         """
+        try:
+            at = self.clock().isoformat()
+        except Exception as exc:  # noqa: BLE001 - injected clock is a recording dependency
+            self.journal_error = type(exc).__name__
+            return None
         event = {
-            "at": self.clock().isoformat(),
+            "at": at,
             "kind": kind,
             "detector": detector,
             "reason": reason,
@@ -196,14 +203,17 @@ class ForensicRecorder:
             # row, so a single log read is a burst of calls, and a line per call
             # would bury the alert lines this shares stderr with.
             name = type(exc).__name__
-            if self.journal_error is None:
-                print(
-                    f"[forensic] cannot append to journal {path} ({name}); "
-                    "further failures are not printed until an append succeeds",
-                    file=sys.stderr,
-                    flush=True,
-                )
+            first_failure = self.journal_error is None
             self.journal_error = name
+            if first_failure:
+                # Diagnostic failures must not hide the journal failure state.
+                with contextlib.suppress(Exception):
+                    print(
+                        f"[forensic] cannot append to journal {path} ({name}); "
+                        "further failures are not printed until an append succeeds",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             return False
         self.journal_error = None
         return True
@@ -211,7 +221,7 @@ class ForensicRecorder:
     def _write_episode(self, episode: dict) -> Optional[dict]:
         try:
             os.makedirs(self.episodes_dir, exist_ok=True)
-            stamp = episode["started_at"].replace(":", "-")
+            stamp = episode["started_at"].replace(":", "-") + "-" + uuid.uuid4().hex
             json_path = os.path.join(self.episodes_dir, f"{stamp}-episode.json")
             markdown_path = os.path.join(self.episodes_dir, f"{stamp}-episode.md")
             self.writer(json_path, json.dumps(episode, indent=2, default=str))
@@ -225,7 +235,8 @@ class ForensicRecorder:
             # cleared, so the next outage still records. The trace is printed
             # because the document is the deliverable: an episode that silently
             # never appeared is a hole nobody can explain later.
-            traceback.print_exc()
+            with contextlib.suppress(Exception):
+                traceback.print_exc()
             return None
 
 

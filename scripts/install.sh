@@ -58,6 +58,22 @@ ok()    { printf '    ok: %s\n' "$*"; }
 warn()  { printf '    warning: %s\n' "$*" >&2; }
 die()   { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 
+# Hold both reservations until startup is observable. Only remove locks this
+# invocation created; a stale lock is an explicit operator recovery decision.
+BUILD_LOCK=""
+START_LOCK=""
+release_startup_locks() {
+    [[ -z "$START_LOCK" ]] || rmdir "$START_LOCK"
+    [[ -z "$BUILD_LOCK" ]] || rmdir "$BUILD_LOCK"
+}
+trap release_startup_locks EXIT
+mkdir "$REPO_DIR/.netdns-build.lock" 2>/dev/null || die "another build owns $REPO_DIR/.netdns-build.lock"
+BUILD_LOCK="$REPO_DIR/.netdns-build.lock"
+START_LOCK_CANDIDATE="$HOME/Library/Application Support/net-dns-monitor/startup.lock"
+mkdir -p "$(dirname "$START_LOCK_CANDIDATE")"
+mkdir "$START_LOCK_CANDIDATE" 2>/dev/null || die "another startup owns $START_LOCK_CANDIDATE"
+START_LOCK="$START_LOCK_CANDIDATE"
+
 # --- 1. preflight ----------------------------------------------------------
 
 step "Checking this machine"
@@ -125,11 +141,11 @@ else
 fi
 
 # Fail loudly here rather than after installing a LaunchAgent that cannot start.
-"$PY" - <<PYEOF || die "the config at $CONFIG_FILE could not be loaded -- fix it and re-run"
+"$PY" - "$REPO_DIR" "$CONFIG_FILE" <<'PYEOF' || die "the config at $CONFIG_FILE could not be loaded -- fix it and re-run"
 import sys
-sys.path.insert(0, "$REPO_DIR")
+sys.path.insert(0, sys.argv[1])
 from netdnsmonitor.config import load_config
-load_config("$CONFIG_FILE")
+load_config(sys.argv[2])
 PYEOF
 ok "config loads"
 
@@ -139,8 +155,8 @@ step "Building the app bundle (this is the slow part)"
 
 # py2app's build/ staging directory is not safe to reuse across runs -- a second
 # invocation against a stale one fails with "[Errno 66] Directory not empty".
-rm -rf "$REPO_DIR/build"
-( cd "$REPO_DIR" && "$PY" setup.py py2app >/dev/null 2>&1 ) \
+rm -rf "$REPO_DIR/build/direct-py2app"
+( cd "$REPO_DIR" && "$PY" setup.py py2app --bdist-base "$REPO_DIR/build/direct-py2app" >/dev/null 2>&1 ) \
     || die "py2app build failed. Re-run it directly to see why:
     cd $REPO_DIR && $PY setup.py py2app"
 [ -x "$BUNDLE/Contents/MacOS/Net-DNS-Monitor" ] || die "build produced no executable at $BUNDLE"
@@ -150,7 +166,7 @@ ok "built $BUNDLE"
 # analysis is static, so a module reached only dynamically can silently vanish.
 for module in app dashboard forensic_log peers peer_net ping net_stats history graphs settings_window mini_window; do
     [ -f "$BUNDLE/Contents/Resources/lib/python3."*"/netdnsmonitor/$module.py" ] \
-        || warn "netdnsmonitor/$module.py is not in the bundle"
+        || die "required netdnsmonitor/$module.py is not in the bundle"
 done
 ok "bundle contents verified"
 

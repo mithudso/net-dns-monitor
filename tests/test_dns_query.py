@@ -314,11 +314,11 @@ def test_any_is_none_only_when_no_resolver_replied():
 
 
 @pytest.mark.parametrize("rcode", [2, 5])  # SERVFAIL, REFUSED
-def test_other_nonzero_rcodes_are_a_valid_negative_answer(rcode):
-    # A resolver that answered SERVFAIL or REFUSED did reply; the name did not
-    # resolve through it. That is False, not None.
+def test_resolver_failure_or_refusal_is_not_a_negative_name_answer(rcode):
+    # The resolver replied, but could not answer the question. This does not
+    # establish a negative name result and must not suppress resolver fallback.
     reply = lambda packet, *a: _response(packet, rcode)
-    assert query_public_dns("example.com", send_recv_fn=reply) is False
+    assert query_public_dns("example.com", send_recv_fn=reply) is None
 
 
 def test_a_truncated_reply_is_unknown():

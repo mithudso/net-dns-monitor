@@ -646,6 +646,8 @@ def test_reader_start_failure_does_not_leak_the_child(tmp_path, monkeypatch):
     monkeypatch.setattr(console.subprocess, "Popen", recording_popen)
     try:
         result = run_command("sleep 25", str(tmp_path), 1.0)
+        # Observe production cleanup before the emergency cleanup can hide a leak.
+        assert group_is_gone(groups[0])
     finally:
         monkeypatch.setattr(console.threading, "Thread", real)
         for pgid in groups:
@@ -654,7 +656,6 @@ def test_reader_start_failure_does_not_leak_the_child(tmp_path, monkeypatch):
                     os.killpg(pgid, signal.SIGKILL)
     assert result.returncode == 127
     assert "RuntimeError" in result.stderr and "thread" not in result.stderr
-    assert group_is_gone(groups[0])
     with console._LIVE_LOCK:
         assert groups[0] not in console._LIVE
 

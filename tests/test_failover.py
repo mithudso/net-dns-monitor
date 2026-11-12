@@ -82,6 +82,7 @@ class FakeRunner:
         if args[:2] == ["networksetup", "-listnetworkserviceorder"]:
             if self._fail_next_list:
                 self._fail_next_list = False
+                self.enable_pending_readback = False
                 return SimpleNamespace(returncode=1, stdout="", stderr="boom")
             if self.list_fails or (self.list_fails_after_apply and self.applied):
                 return SimpleNamespace(returncode=1, stdout="", stderr="boom")
@@ -150,11 +151,11 @@ def build(store, runner, prober=None, **kwargs):
 # --- failover ---------------------------------------------------------------
 
 
-def test_failover_promotes_the_backup_and_keeps_every_service():
+def test_failover_promotes_the_backup_and_keeps_every_service(tmp_path):
     runner = FakeRunner()
-    outcome = build(store=FailoverStore("/dev/null/nope"), runner=runner).attempt_failover(
-        "network"
-    )
+    outcome = build(
+        store=FailoverStore(str(tmp_path / "failover.json")), runner=runner
+    ).attempt_failover("network")
     assert outcome.startswith("ok:")
     applied = runner.applied_orders[0]
     assert applied[0] == "Wi-Fi"
@@ -196,6 +197,67 @@ def test_already_on_backup_costs_no_interface_probe(store):
     runner = FakeRunner(order=["Wi-Fi"] + [n for n in ORDER if n != "Wi-Fi"])
     build(store, runner, prober=lambda dev: probes.append(dev) or True).attempt_failover("network")
     assert probes == []
+
+
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize("enable_works", [False, True])
+def test_a_disabled_backup_at_the_head_is_enabled_and_verified(store, manual, enable_works):
+    runner = FakeRunner(
+        order=["M3100"] + [name for name in ORDER if name != "M3100"],
+        obey_enable=enable_works,
+    )
+    failover = build(store, runner, backup_service="M3100", prober=lambda dev: dev == "en12")
+    outcome = (
+        failover.switch_now("backup", service="M3100")
+        if manual
+        else failover.attempt_failover("network")
+    )
+    assert ["networksetup", "-setnetworkserviceenabled", "M3100", "on"] in runner.calls
+    if enable_works:
+        assert outcome.startswith("ok:")
+        assert "also enabled" in outcome
+        assert "M3100" not in runner.disabled
+        assert runner.applied_orders == [runner.order]
+        assert sorted(runner.order) == sorted(ORDER)
+    else:
+        assert outcome.startswith("failed:")
+        assert "still disabled" in outcome
+        assert runner.applied_orders == []
+
+
+def test_an_enabled_backup_below_a_disabled_service_still_prevents_duplicate_failover(store):
+    runner = FakeRunner(
+        order=["M3100", "Wi-Fi"] + [n for n in ORDER if n not in {"M3100", "Wi-Fi"}]
+    )
+    probes = []
+    failover = build(store, runner, prober=lambda dev: probes.append(dev) or True)
+    assert failover.attempt_failover("network") == "no switch: already on the backup network"
+    assert probes == []
+    assert runner.applied_orders == []
+
+
+@pytest.mark.parametrize("all_disabled", [False, True])
+def test_snapshot_does_not_name_a_disabled_service_as_active(store, all_disabled):
+    runner = FakeRunner(order=["M3100"] + [n for n in ORDER if n != "M3100"])
+    if all_disabled:
+        runner.disabled = set(ORDER)
+    snapshot = build(store, runner, backup_service="M3100").snapshot()
+    assert snapshot["active_service"] == (None if all_disabled else "AX88179B")
+    assert snapshot["active_side"] == "preferred"
+
+
+def test_an_unparseable_service_entry_refuses_before_any_order_write():
+    calls = []
+    listing = "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n(2)\tEthernet\n"
+
+    def run(argv):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=listing, stderr="")
+
+    before = parse_service_order("(1) Wi-Fi\n")
+    outcome = apply_service_order(run, before, ["Wi-Fi"])
+    assert outcome.startswith("failed:")
+    assert calls == [["networksetup", "-listnetworkserviceorder"]]
 
 
 # --- honesty about what actually happened -----------------------------------
@@ -602,10 +664,10 @@ def multi(store, runner, speeds=None, reach=None, **kwargs):
     )
 
 
-def test_the_fastest_reachable_backup_is_chosen():
+def test_the_fastest_reachable_backup_is_chosen(tmp_path):
     runner = FakeRunner()
     failover = multi(
-        FailoverStore("/dev/null/nope"),
+        FailoverStore(str(tmp_path / "failover.json")),
         runner,
         speeds={"en12": 12.0, "en11": 48.5, "en0": 3.8},
     )
@@ -956,7 +1018,8 @@ def test_unwritable_state_path_does_not_raise():
     store.original_order = ORDER
     store.save()  # must not raise
     runner = FakeRunner()
-    assert build(store, runner).attempt_failover("network").startswith("ok:")
+    assert build(store, runner).attempt_failover("network").startswith("failed: could not acquire")
+    assert runner.calls == []
 
 
 # --- the enable is undone, and a third service is not clobbered -------------
@@ -1684,11 +1747,13 @@ def test_a_pre_policy_failure_arms_the_cooldown(store):
     assert store.switch_times == []
 
 
-def test_failover_refuses_to_be_built_without_a_store_or_a_prober():
+def test_failover_refuses_to_be_built_without_a_store_or_a_prober(tmp_path):
     with pytest.raises(ValueError):
         NetworkFailover(preferred_service="AX88179B", interface_prober=lambda dev: True)
     with pytest.raises(ValueError):
-        NetworkFailover(preferred_service="AX88179B", store=FailoverStore("/dev/null/nope"))
+        NetworkFailover(
+            preferred_service="AX88179B", store=FailoverStore(str(tmp_path / "failover.json"))
+        )
 
 
 def test_failed_persistence_is_logged_without_error_contents(tmp_path, monkeypatch, caplog):
@@ -1782,7 +1847,7 @@ def test_default_run_failure_carries_the_class_name_only(monkeypatch):
     assert result.stderr == "OSError"
 
 
-def test_a_cli_switch_made_mid_attempt_keeps_its_pause(tmp_path):
+def test_a_cli_switch_made_mid_attempt_is_refused_without_mutation(tmp_path):
     path = str(tmp_path / "failover.json")
     runner = FakeRunner()
     cli = build(FailoverStore(path), runner, prober=lambda d: True)
@@ -1792,13 +1857,13 @@ def test_a_cli_switch_made_mid_attempt_keeps_its_pause(tmp_path):
         # The app's ladder is mid-probe when `netdns failover backup` runs.
         if not fired:
             fired.append(1)
-            assert cli.switch_now("backup").startswith("ok:")
+            assert cli.switch_now("backup") == "no switch: another switch attempt is in progress"
         return {"en6": False, "en0": True}.get(dev)
 
     app = build(FailoverStore(path), runner, prober=prober)
     app.attempt_failover("network")
     with open(path) as f:
-        assert json.load(f)["failback_paused"] is True
+        assert json.load(f)["failback_paused"] is False
 
 
 def test_manual_switch_prefers_an_unprobed_backup_over_one_whose_probe_failed(store):
@@ -1836,3 +1901,32 @@ def test_apply_service_order_sends_the_argv_that_order_argv_built(monkeypatch):
 def test_snapshot_records_when_it_was_taken(store):
     failover = build(store, FakeRunner(), time_fn=lambda: 1_234_567.0)
     assert failover.snapshot()["taken_at"] == 1_234_567.0
+
+
+def test_fake_enable_readback_failure_is_once():
+    runner = FakeRunner(list_fails_after_enable=True)
+    runner(["networksetup", "-setnetworkserviceenabled", "M3100", "on"])
+    assert [runner(["networksetup", "-listnetworkserviceorder"]).returncode for _ in range(3)] == [
+        1,
+        0,
+        0,
+    ]
+
+
+def test_separate_failover_instances_serialize_state_transaction(tmp_path):
+    path = str(tmp_path / "transaction.json")
+    runner = FakeRunner()
+    other = build(FailoverStore(path), runner, prober=lambda d: True)
+    results = []
+
+    def probe(dev):
+        if not results:
+            results.append(other.switch_now("backup"))
+        return {"en6": False, "en0": True}.get(dev)
+
+    first = build(FailoverStore(path), runner, prober=probe)
+    first.attempt_failover("network")
+    assert results == ["no switch: another switch attempt is in progress"]
+    assert other.switch_now("preferred").startswith("ok:")
+    assert other.switch_now("backup").startswith("ok:")
+    assert FailoverStore(path).failback_paused is True

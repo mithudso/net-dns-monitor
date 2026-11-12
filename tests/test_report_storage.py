@@ -1,4 +1,3 @@
-import contextlib
 import json
 import os
 from datetime import datetime, timezone
@@ -6,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from netdnsmonitor import report_storage
 from netdnsmonitor.classifier import Classification
 from netdnsmonitor.report import build_report, render_markdown
 from netdnsmonitor.report_storage import _atomic_write, save_report
@@ -44,7 +44,7 @@ def test_creates_directory_if_missing(tmp_path):
     assert (target / paths["json_path"].split("/")[-1]).exists()
 
 
-def test_markdown_is_written_utf8_even_though_json_would_survive_ascii(tmp_path):
+def test_markdown_is_written_utf8_even_though_json_would_survive_ascii(tmp_path, monkeypatch):
     """The regression test for the 0-byte reports. Three `.md` files on this
     machine were 0 bytes beside complete `.json` siblings; the real launchd
     traceback was `UnicodeEncodeError: 'ascii' codec` at the `.md` write.
@@ -54,19 +54,27 @@ def test_markdown_is_written_utf8_even_though_json_would_survive_ascii(tmp_path)
     while `json.dump`'s `ensure_ascii=True` keeps the JSON half writable. Hence
     full JSON, empty Markdown.
 
-    Reading the bytes back and decoding UTF-8 explicitly pins the on-disk
-    encoding rather than the test host's locale, so this fails on any
-    non-UTF-8 write regardless of where it runs. The curly quotes mirror the
+    Observing fdopen pins explicit encoding even on a UTF-8 host. Reading the
+    complete bytes also checks the persisted rendering. The curly quotes mirror the
     real payload: they came from the Claude escalation text.
     """
     report = _report()
     report["escalation"] = {"analysis": "the resolver returned “no answer” for café.local"}
+    encodings = []
+    original_fdopen = report_storage.os.fdopen
+
+    def recording_fdopen(*args, **kwargs):
+        encodings.append(kwargs.get("encoding"))
+        return original_fdopen(*args, **kwargs)
+
+    monkeypatch.setattr(report_storage.os, "fdopen", recording_fdopen)
 
     paths = save_report(report, str(tmp_path))
 
     written = Path(paths["markdown_path"]).read_bytes().decode("utf-8")
     assert written == render_markdown(report)
     assert "“no answer”" in written
+    assert encodings == ["utf-8", "utf-8"]
 
 
 def test_markdown_file_is_the_complete_rendering_not_a_truncated_prefix(tmp_path):
@@ -92,7 +100,7 @@ def test_a_failed_render_leaves_the_previous_report_intact(tmp_path):
     """
     report = _report()
     paths = save_report(report, str(tmp_path))
-    good = Path(paths["markdown_path"]).read_bytes()
+    good = {key: Path(path).read_bytes() for key, path in paths.items()}
 
     class Unrenderable(dict):
         def __getitem__(self, key):
@@ -100,13 +108,13 @@ def test_a_failed_render_leaves_the_previous_report_intact(tmp_path):
                 raise RuntimeError("render blew up")
             return super().__getitem__(key)
 
-    broken = Unrenderable(report)
+    broken = Unrenderable({**report, "repair_outcome": "changed"})
     # The raise is the point of the fixture, not the thing under test -- what is
     # under test is the file on disk afterwards.
-    with contextlib.suppress(RuntimeError):
+    with pytest.raises(RuntimeError, match="render blew up"):
         save_report(broken, str(tmp_path))
 
-    assert Path(paths["markdown_path"]).read_bytes() == good
+    assert {key: Path(path).read_bytes() for key, path in paths.items()} == good
 
 
 def test_a_write_that_fails_after_the_temp_file_opens_leaves_the_destination_intact(tmp_path):

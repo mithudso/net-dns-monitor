@@ -502,12 +502,14 @@ def domain_problem(name) -> Optional[str]:
         return f"expected a domain name, got {name!r}"
     if not name.strip() or name != name.strip():
         return f"a domain name cannot be blank or padded with whitespace, got {name!r}"
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        return "a domain name cannot contain whitespace or control characters"
     if any(ch in name for ch in "/:@"):
         return f"expected a bare domain name, not a URL or address, got {name!r}"
-    if len(name) > 253:
-        return "a domain name is at most 253 characters"
     try:
-        name.encode("idna")
+        encoded = name.encode("idna").removesuffix(b".")
+        if len(encoded) > 253:
+            return "a domain name is at most 253 IDNA bytes without the root dot"
     except UnicodeError:
         return f"not a valid domain name (empty or over-long label), got {name!r}"
     return None
@@ -663,6 +665,9 @@ def validate_config(config: dict) -> None:
                 key,
                 f"config key '{key}' must be a whole number of at least {minimum}, got {value!r}",
             )
+        # YAML integral floats are accepted, but slice limits and deque sizes
+        # require an actual integer at their consumers.
+        config[key] = int(value)
 
     # `failover_enabled: "false"` is a non-empty string and so truthy: it arms
     # automatic failover. None is not False either, so a null is refused too.

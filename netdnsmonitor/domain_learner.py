@@ -77,7 +77,7 @@ SUCCESS_MARKERS = ("completed", "succeeded", " success", "resolved to", "answer 
 # ASCII letters; a lookalike name would pass here, then fail idna encoding in the
 # probe worker.
 _HOSTNAME_RE = re.compile(
-    r"(?<![a-z0-9_.-])((?:[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})\.?\b",
+    r"(?<![a-z0-9_.-])((?:[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})\.?(?![a-z0-9_.-])",
     re.IGNORECASE | re.ASCII,
 )
 
@@ -93,10 +93,7 @@ _REJECTED_SUFFIXES = (".arpa", ".in-addr.arpa", ".ip6.arpa")
 # opening bracket too, so an unclosed one cannot make the match scan to the line end.
 _BRACKETED_RE = re.compile(r"\[[^\[\]]*\]|<[^<>]*>")
 
-# Reverse-DNS bundle identifiers survive the bracket strip when they appear in free
-# text (com.apple.foo, org.mozilla.bar) and are not resolvable names. A real hostname
-# does not start with a TLD label.
-_REVERSE_DNS_FIRST_LABELS = ("com", "org", "net", "io", "co", "edu", "gov", "uk", "us")
+_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?", re.ASCII)
 
 
 def is_probeable_domain(candidate: str) -> bool:
@@ -115,9 +112,7 @@ def is_probeable_domain(candidate: str) -> bool:
     labels = domain.split(".")
     if not labels[-1].isalpha():
         return False
-    if labels[0] in _REVERSE_DNS_FIRST_LABELS:
-        return False
-    return all(0 < len(label) <= 63 for label in labels)
+    return all(_LABEL_RE.fullmatch(label) is not None for label in labels)
 
 
 def extract_failed_domains(log_lines: list[str]) -> list[str]:
@@ -131,12 +126,15 @@ def extract_failed_domains(log_lines: list[str]) -> list[str]:
         # timeout note contains "timed out" -- one of the failure markers.
         if line.startswith(NO_EVIDENCE_PREFIX):
             continue
-        lowered = line.lower()
+        evidence = _BRACKETED_RE.sub(" ", line)
+        # Hostnames may themselves contain status words (completed.example.com).
+        # Only the surrounding log text can describe the lookup's outcome.
+        lowered = _HOSTNAME_RE.sub(" ", line).lower()
         if not any(marker in lowered for marker in FAILURE_MARKERS):
             continue
         if any(marker in lowered for marker in SUCCESS_MARKERS):
             continue
-        for match in _HOSTNAME_RE.finditer(_BRACKETED_RE.sub(" ", line)):
+        for match in _HOSTNAME_RE.finditer(evidence):
             domain = match.group(1).strip(".").lower()
             if domain in seen or not is_probeable_domain(domain):
                 continue
@@ -180,6 +178,8 @@ class LearnedDomainStore:
             # second cap slot on the same name.
             normalized = []
             for entry in data:
+                if len(normalized) >= max(0, self.max_domains):
+                    break
                 if not isinstance(entry, str):
                     continue
                 domain = entry.strip().strip(".").lower()

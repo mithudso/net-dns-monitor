@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import plistlib
+import sys
 import threading
 import types
 
@@ -578,7 +579,41 @@ def test_real_udp_round_trip_over_loopback(tmp_path):
         server.stop()
 
 
-def test_server_start_failure_is_reported_not_raised(tmp_path):
+def test_server_start_failure_is_reported_not_raised(tmp_path, monkeypatch):
+    import netdnsmonitor.fleet_server as server_module
+
+    bound = set()
+
+    class Socket:
+        def __init__(self, *_):
+            self.closed = threading.Event()
+            self.port = None
+
+        def setsockopt(self, *_):
+            pass
+
+        def bind(self, address):
+            port = address[1] or 45738
+            if port in bound:
+                raise OSError("synthetic address already in use")
+            self.port = port
+            bound.add(port)
+
+        def getsockname(self):
+            return "127.0.0.1", self.port
+
+        def settimeout(self, *_):
+            pass
+
+        def recvfrom(self, *_):
+            assert self.closed.wait(2)
+            raise OSError("closed")
+
+        def close(self):
+            self.closed.set()
+            bound.discard(self.port)
+
+    monkeypatch.setattr(server_module.socket, "socket", Socket)
     first = FleetServer(
         FleetStore(str(tmp_path / "a"), str(tmp_path / "b")),
         port=0,
@@ -595,6 +630,7 @@ def test_server_start_failure_is_reported_not_raised(tmp_path):
         assert second.start_error
     finally:
         first.stop()
+        first.thread.join(2)
 
 
 # --- headless ---------------------------------------------------------------
@@ -731,9 +767,21 @@ def test_run_loops_until_stopped():
     m = monitor(machine)
     m.config["poll_interval_seconds"] = 0.01
     stop = threading.Event()
-    threading.Timer(0.1, stop.set).start()
-    m.run(stop)
-    assert m.polls >= 2
+    calls = []
+
+    def tick():
+        calls.append(True)
+        if len(calls) == 2:
+            stop.set()
+
+    machine.tick = tick
+    watchdog = threading.Timer(2, stop.set)
+    watchdog.start()
+    try:
+        m.run(stop)
+    finally:
+        watchdog.cancel()
+    assert m.polls == len(calls) == 2
 
 
 def test_machine_identity_is_stable_and_prefers_the_configured_name():
@@ -1011,3 +1059,475 @@ def test_fleet_keys_module_imports_no_network_modules():
         n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module
     }
     assert not imported & {"socket", "subprocess"}
+
+
+# --- maintenance regressions: entirely synthetic effects ---------------------
+
+
+@pytest.mark.parametrize("signature", ["é", "z" * 64, "a" * 63, "a" * 65])
+def test_invalid_signature_text_is_refused_as_data(signature):
+    raw = json.loads(message())
+    raw["sig"] = signature
+    assert proto.parse_message(json.dumps(raw).encode(), NOW, SECRET) == (
+        None,
+        proto.REFUSED_BAD_SIGNATURE,
+    )
+
+
+def test_nested_fleet_packet_is_refused_at_the_production_recursion_limit():
+    original = sys.getrecursionlimit()
+    try:
+        sys.setrecursionlimit(1000)
+        assert proto.parse_message(b"[" * 2000 + b"0" + b"]" * 2000, NOW) == (
+            None,
+            proto.REFUSED_MALFORMED,
+        )
+    finally:
+        sys.setrecursionlimit(original)
+
+
+@pytest.mark.parametrize("timestamp", [float("nan"), float("inf"), -float("inf"), 10**400])
+@pytest.mark.parametrize("signed", [False, True])
+def test_invalid_numeric_timestamp_is_refused(timestamp, signed):
+    raw = json.loads(message(secret=None))
+    raw["ts"] = timestamp
+    if signed:
+        raw["sig"] = proto.sign(raw, SECRET)
+    assert proto.parse_message(json.dumps(raw).encode(), NOW, SECRET, True) == (
+        None,
+        proto.REFUSED_MALFORMED,
+    )
+
+
+@pytest.mark.parametrize("duration", [10**400, float("inf"), float("nan"), -1, True])
+def test_invalid_duration_is_omitted_without_losing_the_event(duration):
+    parsed = accepted(message(data={"duration_seconds": duration, "classification": "dns"}))
+    assert parsed["data"] == {"classification": "dns"}
+
+
+@pytest.mark.parametrize("method", ["incident", "resolved"])
+def test_report_preparation_failure_is_counted_without_leaking(method):
+    def broken(_text):
+        raise ValueError("SECRET_MARKER")
+
+    rep = reporter(Transport(), redact_fn=broken)
+    if method == "incident":
+        rep.incident(REPORT)
+    else:
+        rep.resolved("dns", 5)
+    assert rep.last_error == "ValueError"
+    assert rep.dropped == 1 and rep.pending() == 0
+
+
+def test_report_preparation_failure_does_not_cost_the_local_report():
+    def broken(_text):
+        raise ValueError("SECRET_MARKER")
+
+    machine, saved = FakeMachine(), []
+    machine.reports = [REPORT]
+    rep = reporter(Transport(), redact_fn=broken)
+    mon = monitor(machine, rep, saved=saved)
+    mon.step()
+    assert saved == [REPORT]
+    assert rep.last_error == "ValueError" and rep.dropped == 1
+
+
+def test_default_transport_ignores_invalid_packets_before_a_valid_ack(monkeypatch):
+    import netdnsmonitor.fleet_client as client
+
+    clocks = [0.0]
+    sockets = []
+
+    class Socket:
+        def __init__(self, *_):
+            sockets.append(self)
+            self.timeouts, self.replies, self.closed = [], [], False
+
+        def setsockopt(self, *_):
+            pass
+
+        def settimeout(self, timeout):
+            self.timeouts.append(timeout)
+
+        def sendto(self, payload, target):
+            event = accepted(payload)
+            self.replies = [
+                b"garbage",
+                message(proto.ACK, eid="other"),
+                message(proto.ACK, eid=event["eid"], secret="wrong"),
+                message(proto.ACK, eid=event["eid"]),
+            ]
+
+        def recvfrom(self, _limit):
+            clocks[0] += 0.1
+            return self.replies.pop(0), ("127.0.0.1", 45738)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(client.socket, "socket", Socket)
+    monkeypatch.setattr(client.time, "monotonic", lambda: clocks[0])
+    rep = reporter(default_transport)
+    rep.incident(REPORT)
+    assert rep.flush() == 1 and rep.pending() == 0
+    assert len(sockets) == 1 and sockets[0].closed
+    assert sockets[0].timeouts == pytest.approx([2.0, 2.0, 1.9, 1.8, 1.7])
+
+
+def test_invalid_ack_flood_uses_one_deadline_and_closes_each_socket(monkeypatch):
+    import netdnsmonitor.fleet_client as client
+
+    clocks, sockets = [0.0], []
+
+    class Socket:
+        def __init__(self, *_):
+            self.closed, self.reads = False, 0
+            sockets.append(self)
+
+        def setsockopt(self, *_):
+            pass
+
+        def settimeout(self, timeout):
+            assert 0 < timeout <= 2
+
+        def sendto(self, *_):
+            pass
+
+        def recvfrom(self, _limit):
+            self.reads += 1
+            clocks[0] += 0.5
+            return b"garbage", ("127.0.0.1", 1)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(client.socket, "socket", Socket)
+    monkeypatch.setattr(client.time, "monotonic", lambda: clocks[0])
+    rep = reporter(default_transport)
+    rep.incident(REPORT)
+    assert rep.flush() == 0 and rep.pending() == 1
+    assert [sock.reads for sock in sockets] == [4, 4]
+    assert all(sock.closed for sock in sockets)
+    assert clocks[0] == 4
+
+
+def test_timestamp_preserving_registry_rewrite_revokes_cached_key(tmp_path):
+    path = tmp_path / "keys.json"
+    path.write_text(json.dumps({"machines": {"a": "key-a", "b": "key-b"}}))
+    clock = Clock(0)
+    registry = KeyRegistry(str(path), now_fn=clock)
+    assert registry.key_for("a") == "key-a"
+    before = path.stat()
+    # Same size and mtime, with an in-place update rather than an inode change.
+    path.write_text(json.dumps({"machines": {"b": "key-b", "c": "key-c"}}))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    clock.now += 2
+    assert registry.key_for("a") is None
+    assert registry.key_for("c") == "key-c"
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_key_writer_never_reuses_a_preexisting_temporary_path(tmp_path, symlink):
+    path, old_tmp, victim = (tmp_path / name for name in ("keys.json", "keys.json.tmp", "victim"))
+    victim.write_text("preserve me")
+    if symlink:
+        old_tmp.symlink_to(victim)
+    else:
+        old_tmp.write_text("stale scratch")
+        old_tmp.chmod(0o644)
+    KeyRegistry(str(path)).enroll("desk-a")
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert victim.read_text() == "preserve me"
+    assert old_tmp.is_symlink() if symlink else old_tmp.read_text() == "stale scratch"
+
+
+def test_key_writer_preserves_old_registry_and_cleans_up_on_replace_failure(tmp_path, monkeypatch):
+    import netdnsmonitor.fleet_keys as keys
+
+    path = tmp_path / "keys.json"
+    registry = KeyRegistry(str(path))
+    first = registry.enroll("a")
+    before = path.read_bytes()
+    before_paths = set(tmp_path.iterdir())
+
+    def broken(*_):
+        raise OSError("synthetic replace failure")
+
+    monkeypatch.setattr(keys.os, "replace", broken)
+    with pytest.raises(OSError):
+        registry.enroll("b")
+    assert path.read_bytes() == before and registry.key_for("a") == first
+    assert registry.names() == ["a"]
+    assert set(tmp_path.iterdir()) == before_paths
+
+
+def test_separate_registry_writers_serialize_refresh_and_write(tmp_path, monkeypatch):
+    path = str(tmp_path / "keys.json")
+    first, second = KeyRegistry(path), KeyRegistry(path)
+    entered, release, second_started, second_done = (threading.Event() for _ in range(4))
+    errors, returned = [], {}
+    write = first._write
+
+    def paused(keys):
+        entered.set()
+        assert release.wait(2)
+        write(keys)
+
+    monkeypatch.setattr(first, "_write", paused)
+
+    def enroll(registry, name):
+        try:
+            if name == "b":
+                second_started.set()
+            returned[name] = registry.enroll(name)
+        except Exception as exc:  # noqa: BLE001 - surface failures from both test threads
+            errors.append(exc)
+        finally:
+            if name == "b":
+                second_done.set()
+
+    a = threading.Thread(target=enroll, args=(first, "a"))
+    b = threading.Thread(target=enroll, args=(second, "b"))
+    a.start()
+    try:
+        assert entered.wait(2)
+        b.start()
+        assert second_started.wait(2)
+        assert not second_done.wait(0.1)
+    finally:
+        release.set()
+        a.join(2)
+        if b.ident is not None:
+            b.join(2)
+    assert not a.is_alive() and not b.is_alive() and errors == []
+    registry = KeyRegistry(path)
+    assert registry.names() == ["a", "b"]
+    assert {name: registry.key_for(name) for name in registry.names()} == returned
+
+
+def test_failed_incident_append_remains_retryable(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    append = store._append
+
+    def fail(_event):
+        raise OSError("synthetic disk full")
+
+    monkeypatch.setattr(store, "_append", fail)
+    with pytest.raises(OSError):
+        feed(store, proto.INCIDENT, "a")
+    assert "mac-1" not in store.machines
+    monkeypatch.setattr(store, "_append", append)
+    assert feed(store, proto.INCIDENT, "a") == "logged"
+    assert store.machines["mac-1"]["incidents_total"] == 1
+    assert [event["kind"] for event in read_events(store.log_path)] == ["incident"]
+    assert feed(store, proto.INCIDENT, "a") == "duplicate"
+
+
+def test_failed_recovery_append_preserves_existing_incident(tmp_path, monkeypatch):
+    import copy
+
+    store = make_store(tmp_path)
+    feed(store, proto.INCIDENT, "a")
+    original = copy.deepcopy(store.machines)
+    append = store._append
+
+    def fail(_event):
+        raise OSError("synthetic disk full")
+
+    monkeypatch.setattr(store, "_append", fail)
+    with pytest.raises(OSError):
+        feed(store, proto.RESOLVED, "b")
+    assert store.machines == original
+    monkeypatch.setattr(store, "_append", append)
+    assert feed(store, proto.RESOLVED, "b") == "logged"
+    assert [event["kind"] for event in read_events(store.log_path)] == ["incident", "resolved"]
+
+
+def test_duplicate_delivery_does_not_evict_distinct_event_ids(tmp_path):
+    clock = Clock()
+    store = make_store(tmp_path, clock)
+    feed(store, proto.INCIDENT, "a")
+    feed(store, proto.HELLO, "b", data={"status": "incident"})
+    for _ in range(35):
+        clock.now += 3
+        assert feed(store, proto.HELLO, "b", data={"status": "incident"}) == "duplicate"
+    assert store.machines["mac-1"]["recent_event_ids"] == ["a", "b"]
+    assert feed(store, proto.INCIDENT, "a") == "duplicate"
+    assert store.machines["mac-1"]["incidents_total"] == 1
+    assert [event["kind"] for event in read_events(store.log_path)] == ["incident"]
+
+
+def test_server_restarts_only_after_the_previous_reader_exits(tmp_path, monkeypatch):
+    import netdnsmonitor.fleet_server as server_module
+
+    entered, release = threading.Event(), threading.Event()
+    sockets = []
+
+    class Socket:
+        def __init__(self, *_):
+            self.closed, self.sent = threading.Event(), []
+            sockets.append(self)
+
+        def setsockopt(self, *_):
+            pass
+
+        def bind(self, *_):
+            pass
+
+        def getsockname(self):
+            return "127.0.0.1", 45738
+
+        def settimeout(self, *_):
+            pass
+
+        def recvfrom(self, *_):
+            entered.set()
+            assert release.wait(2)
+            return message(), ("127.0.0.1", 123)
+
+        def fileno(self):
+            return -1 if self.closed.is_set() else 1
+
+        def sendto(self, payload, target):
+            self.sent.append((payload, target))
+
+        def close(self):
+            self.closed.set()
+
+    monkeypatch.setattr(server_module.socket, "socket", Socket)
+    store = make_store(tmp_path)
+    server = FleetServer(store, now_fn=lambda: NOW, key_for=lambda _: SECRET)
+    assert server.start()
+    old = server.thread
+    try:
+        assert entered.wait(2)
+        assert server.start() is True  # already running is idempotent
+        assert len(sockets) == 1
+        server.stop()
+        assert server.start() is False
+        release.set()
+        old.join(2)
+        assert not old.is_alive()
+        assert store.machines == {} and sockets[0].sent == []
+        release.clear()
+        entered.clear()
+        assert server.start()
+        assert entered.wait(2)
+        assert len(sockets) == 2
+    finally:
+        server.stop()
+        release.set()
+        old.join(2)
+        server.thread.join(2)
+    assert store.machines == {} and all(not sock.sent for sock in sockets)
+
+
+def test_recovery_uses_wall_time_and_monotonic_duration():
+    machine, rep = FakeMachine(), RecordingReporter()
+    machine.reports = [REPORT]
+    received = []
+    rep.resolved = lambda *args, **kwargs: received.append((args, kwargs))
+    monotonic, wall = Clock(10), Clock(NOW)
+    mon = headless.HeadlessMonitor(
+        {"reports_dir": "/unused"},
+        machine,
+        reporter=rep,
+        save_report_fn=lambda *_: {"markdown_path": "unused"},
+        now_fn=monotonic,
+        wall_now_fn=wall,
+    )
+    machine.flap_gate.state = "incident"
+    mon.step()
+    monotonic.now += 60
+    wall.now += 90  # A wall-clock adjustment must not change duration.
+    machine.flap_gate.state = "healthy"
+    mon.step()
+    assert received[0][0][1] == 60
+    assert received[0][1]["occurred_at"] == "2027-01-15T08:01:30+00:00"
+    assert received[0][1]["occurred_at"] != REPORT["started_at"]
+
+
+@pytest.mark.parametrize("phase", ["poll", "recovery"])
+def test_headless_diagnostics_include_only_exception_classes(phase, capsys):
+    machine, logs = FakeMachine(), []
+    mon = headless.HeadlessMonitor({}, machine, log=logs.append)
+
+    def broken():
+        raise RuntimeError("SECRET_MARKER")
+
+    if phase == "poll":
+        machine.tick = broken
+    else:
+        mon._note_recovery = broken
+    mon.step()
+    assert mon.last_error == "RuntimeError"
+    assert logs == [f"[{phase}] failed: RuntimeError"]
+    captured = capsys.readouterr()
+    assert "SECRET_MARKER" not in captured.out + captured.err + " ".join(logs)
+
+
+def test_a_failing_diagnostic_sink_cannot_raise_out_of_a_poll():
+    machine = FakeMachine()
+    machine.raises = True
+
+    def broken(_text):
+        raise OSError("SECRET_MARKER")
+
+    mon = headless.HeadlessMonitor({}, machine, log=broken)
+    mon.step()
+    assert mon.last_error == "RuntimeError"
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_store_save_never_reuses_an_existing_temporary_path(tmp_path, symlink):
+    store = make_store(tmp_path)
+    path = pathlib.Path(store.state_path)
+    old_tmp = pathlib.Path(store.state_path + ".tmp")
+    victim = tmp_path / "victim"
+    victim.write_text("preserve me")
+    if symlink:
+        old_tmp.symlink_to(victim)
+    else:
+        old_tmp.write_text("stale scratch")
+    store.save()
+    assert json.loads(path.read_text())["machines"] == {}
+    assert victim.read_text() == "preserve me"
+    assert old_tmp.is_symlink() if symlink else old_tmp.read_text() == "stale scratch"
+
+
+def test_failed_state_replace_keeps_old_file_and_retries_only_state_save(tmp_path, monkeypatch):
+    import netdnsmonitor.fleet_store as store_module
+
+    store = make_store(tmp_path)
+    store.save()
+    before = pathlib.Path(store.state_path).read_bytes()
+    before_paths = set(tmp_path.iterdir())
+    replace = store_module.os.replace
+
+    def fail(*_):
+        raise OSError("synthetic replace failure")
+
+    monkeypatch.setattr(store_module.os, "replace", fail)
+    with pytest.raises(OSError):
+        feed(store, proto.INCIDENT, "a")
+    assert pathlib.Path(store.state_path).read_bytes() == before
+    assert set(tmp_path.iterdir()) == before_paths | {pathlib.Path(store.log_path)}
+    monkeypatch.setattr(store_module.os, "replace", replace)
+    assert feed(store, proto.INCIDENT, "a") == "duplicate"
+    assert len(read_events(store.log_path)) == 1
+    assert read_state(store.state_path)["machines"]["mac-1"]["incidents_total"] == 1
+
+
+@pytest.mark.parametrize("method", ["incident", "resolved"])
+def test_enqueue_failure_is_counted_as_class_only_data(monkeypatch, method):
+    rep = reporter(Transport())
+
+    def fail(*_):
+        raise OSError("SECRET_MARKER")
+
+    monkeypatch.setattr(rep, "_enqueue", fail)
+    if method == "incident":
+        rep.incident(REPORT)
+    else:
+        rep.resolved("dns", 10)
+    assert rep.last_error == "OSError" and rep.dropped == 1 and rep.pending() == 0

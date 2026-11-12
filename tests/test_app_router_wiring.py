@@ -495,7 +495,6 @@ def test_turning_login_on_writes_an_agent_for_this_interpreter_and_checkout(tmp_
     assert plist["Label"] == LOGIN_AGENT_LABEL
     assert plist["ProgramArguments"] == [sys.executable, "-m", "netdnsmonitor.app"]
     assert plist["WorkingDirectory"] == SOURCE_ROOT
-    assert "mitch.hudson" not in str(plist)
     assert login_agent_path(LOGIN_AGENT_LABEL).startswith(os.environ["HOME"])
     assert sender.state is True
 

@@ -9,7 +9,7 @@ default port.
 import pytest
 
 from netdnsmonitor.app import NetDnsMonitorApp
-from netdnsmonitor.peers import CURRENT, load_record
+from netdnsmonitor.peers import CURRENT, load_record, save_record
 
 
 class FakeFlapGate:
@@ -28,6 +28,9 @@ class FakeStateMachine:
 
 @pytest.fixture(autouse=True)
 def _loopback_only(monkeypatch):
+    # The constructor reads the default record before make_app can redirect its
+    # save path. Restoration tests explicitly load their own synthetic record.
+    monkeypatch.setattr("netdnsmonitor.app.load_record", lambda path: {})
     monkeypatch.setattr("netdnsmonitor.peer_net.broadcast_addresses", lambda: ["127.0.0.1"])
     monkeypatch.setattr(
         "netdnsmonitor.dashboard.DashboardWindow.show",
@@ -35,6 +38,14 @@ def _loopback_only(monkeypatch):
         # passes activate=False so it does not steal focus at login.
         lambda self, activate=True: None,
     )
+
+
+def test_constructor_does_not_import_persisted_probe_destinations(tmp_path):
+    previous = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    previous.peer_registry.observe("persisted-peer", host="synthetic", address="192.168.1.77")
+    assert save_record(previous.peer_registry, previous.config["peer_record_path"])
+    app = NetDnsMonitorApp(config_path=str(tmp_path / "no-such-config.yaml"))
+    assert app.peer_registry.addresses_to_probe() == []
 
 
 def make_app(tmp_path, **overrides):

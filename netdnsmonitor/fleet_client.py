@@ -28,6 +28,8 @@ log excerpts, no report path, no credential. See CLAUDE.md non-negotiable 6.
 """
 
 import contextlib
+import ipaddress
+import queue
 import socket
 import threading
 import time
@@ -42,10 +44,18 @@ DEFAULT_PORT = 45738
 MAX_OUTBOX = 100
 ACK_TIMEOUT_SECONDS = 2.0
 SEND_ATTEMPTS = 2
+_RESOLVER_SLOT = threading.BoundedSemaphore(1)
 
 
-def default_transport(payload: bytes, targets: list[str], port: int, timeout: float) -> list[bytes]:
-    """Send `payload` to each target and return every datagram that came back.
+def default_transport(
+    payload: bytes,
+    targets: list[str],
+    port: int,
+    timeout: float,
+    *,
+    accept_reply_fn: Optional[Callable[[bytes], bool]] = None,
+) -> list[bytes]:
+    """Send `payload` and return the first accepted reply within one deadline.
 
     One short-lived socket per exchange, bound to an ephemeral port, so the
     server's unicast ack finds its way back even when the request went out as a
@@ -56,21 +66,60 @@ def default_transport(payload: bytes, targets: list[str], port: int, timeout: fl
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.settimeout(timeout)
+        deadline = time.monotonic() + timeout
         sent = 0
         for address in targets:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
+                try:
+                    ipaddress.IPv4Address(address)
+                except ipaddress.AddressValueError:
+                    if not _RESOLVER_SLOT.acquire(timeout=max(0, deadline - time.monotonic())):
+                        break
+                    resolved = queue.Queue(maxsize=1)
+
+                    def resolve(host=address, result=resolved):
+                        try:
+                            result.put(
+                                socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)
+                            )
+                        except (OSError, UnicodeError):
+                            result.put([])
+                        finally:
+                            _RESOLVER_SLOT.release()
+
+                    threading.Thread(target=resolve, daemon=True).start()
+                    try:
+                        answers = resolved.get(timeout=max(0, deadline - time.monotonic()))
+                    except queue.Empty:
+                        break
+                    if not answers:
+                        continue
+                    address = answers[0][4][0]
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                sock.settimeout(remaining)
                 sock.sendto(payload, (address, port))
                 sent += 1
             except (OSError, UnicodeError, OverflowError):
                 continue
         if not sent:
             return replies
-        try:
-            data, _ = sock.recvfrom(proto.MAX_RECEIVE_BYTES)
-        except OSError:  # socket.timeout is an OSError: no ack arrived in time
-            return replies
-        replies.append(data)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            sock.settimeout(remaining)
+            try:
+                data, _ = sock.recvfrom(proto.MAX_RECEIVE_BYTES + 1)
+            except OSError:  # socket.timeout is an OSError: no ack arrived in time
+                break
+            if accept_reply_fn is None or accept_reply_fn(data):
+                replies.append(data)
+                break
     finally:
         with contextlib.suppress(OSError):
             sock.close()
@@ -126,6 +175,13 @@ class FleetReporter:
         """Queue the declared incident. The ladder has already run by now, so the
         steps it took are part of this event; the recovery follows as `resolved`.
         """
+        try:
+            self._incident(report, escalated)
+        except Exception as exc:  # noqa: BLE001 - reporting cannot cost the local incident
+            self.last_error = type(exc).__name__
+            self.dropped += 1
+
+    def _incident(self, report: dict, escalated: Optional[bool]) -> None:
         data = {
             "status": proto.STATUS_INCIDENT,
             "classification": self._safe(report.get("classification", "unknown")),
@@ -153,6 +209,19 @@ class FleetReporter:
         consecutive healthy probes, which is what happened, and a transient fault
         clears the same way.
         """
+        try:
+            self._resolved(classification, duration_seconds, steps, occurred_at)
+        except Exception as exc:  # noqa: BLE001 - preparation failures are data too
+            self.last_error = type(exc).__name__
+            self.dropped += 1
+
+    def _resolved(
+        self,
+        classification: str,
+        duration_seconds: Optional[float],
+        steps: Optional[list],
+        occurred_at: str,
+    ) -> None:
         data: dict[str, Any] = {
             "status": proto.STATUS_HEALTHY,
             "classification": self._safe(classification),
@@ -168,11 +237,16 @@ class FleetReporter:
         return proto.clean(self.redact_fn(str(text)))
 
     def _enqueue(self, kind: str, data: dict) -> None:
+        event_id = uuid.uuid4().hex[:16]
+        # Permanent encoding failures must not enter the retry queue.
+        proto.build_message(
+            kind, self.machine_id, self.host, event_id, self.now_fn(), data, self.secret
+        )
         with self._lock:
             if len(self.outbox) >= MAX_OUTBOX:
                 self.outbox.popleft()
                 self.dropped += 1
-            self.outbox.append((kind, uuid.uuid4().hex[:16], data))
+            self.outbox.append((kind, event_id, data))
         self._wake.set()
 
     # --- delivery ----------------------------------------------------------
@@ -196,15 +270,21 @@ class FleetReporter:
                 payload = proto.build_message(
                     kind, self.machine_id, self.host, event_id, self.now_fn(), data, self.secret
                 )
-                replies = self.transport(payload, targets, self.port, ACK_TIMEOUT_SECONDS)
+                if self.transport is default_transport:
+                    replies = self.transport(
+                        payload,
+                        targets,
+                        self.port,
+                        ACK_TIMEOUT_SECONDS,
+                        accept_reply_fn=lambda reply: self._ack_matches(reply, event_id),
+                    )
+                else:
+                    replies = self.transport(payload, targets, self.port, ACK_TIMEOUT_SECONDS)
             except Exception as exc:  # noqa: BLE001 - reported as data, never raised
                 self.last_error = type(exc).__name__
                 continue
             for reply in replies:
-                message, _reason = proto.parse_message(
-                    reply, self.now_fn(), self.secret, allow_unsigned=not self.secret
-                )
-                if message and message["t"] == proto.ACK and message["eid"] == event_id:
+                if self._ack_matches(reply, event_id):
                     self.last_error = None
                     self.last_delivery_at = self.now_fn()
                     self.delivered += 1
@@ -212,10 +292,18 @@ class FleetReporter:
             self.last_error = "no acknowledgement from the server"
         return False
 
+    def _ack_matches(self, reply: bytes, event_id: str) -> bool:
+        message, _reason = proto.parse_message(
+            reply, self.now_fn(), self.secret, allow_unsigned=not self.secret
+        )
+        return bool(message and message["t"] == proto.ACK and message["eid"] == event_id)
+
     def flush(self) -> int:
-        """Send queued events oldest first. Stops at the first failure."""
+        """Send at most the initial queued batch, oldest first, until failure or stop."""
         sent = 0
-        while True:
+        with self._lock:
+            batch_size = len(self.outbox)
+        for _ in range(batch_size):
             with self._lock:
                 if not self.outbox:
                     break
@@ -227,6 +315,8 @@ class FleetReporter:
                 if self.outbox and self.outbox[0][1] == event_id:
                     self.outbox.popleft()
             sent += 1
+            if self._stop.is_set():
+                break
         return sent
 
     def heartbeat(self) -> bool:
@@ -258,6 +348,8 @@ class FleetReporter:
         while not self._stop.is_set():
             try:
                 self.flush()
+                if self._stop.is_set():
+                    break
                 now = time.monotonic()
                 if now >= self._next_heartbeat_at:
                     self.heartbeat()

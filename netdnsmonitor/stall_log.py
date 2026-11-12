@@ -218,7 +218,7 @@ def _parse_line(line: str) -> Optional[dict]:
         return None
     try:
         record = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         # A crash mid-append can leave one torn line; skip it, keep the rest.
         return None
     return record if isinstance(record, dict) else None

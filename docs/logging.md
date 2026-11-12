@@ -5,7 +5,8 @@ files it owns, and it writes a small set of lines to stderr. This page lists
 each record, when it is written, what it may contain, and where it lives in
 each build.
 
-Checked against the working tree on 2026-09-14, at commit `a6aab33`.
+Historical table checked on 2026-09-14 at `a6aab33`; the source supplement below
+records the 2026-11-12 maintenance changes without claiming new live delivery.
 
 ## The one `logging` call site
 
@@ -163,3 +164,31 @@ keeps pointing inside the container.
 
 In the test suite, `tests/conftest.py` (`isolate_home`) sets `HOME` to a
 per-test temporary directory, so no test writes to the real data directory.
+
+## Maintained-feature and error-path supplement
+
+`HeadlessMonitor` retains `last_error` and emits class-only phase failures through
+its injected logger. Fleet reporting retains `last_error`, `dropped` and delivery
+counters; server refusals are counted and included in fleet state. Valid duplicate
+events are acknowledged. An append failure is not acknowledged as durable success,
+so the sender may retry. The event log rotates above 10 MiB with one previous
+generation. The log and state file are separate writes, not a crash-atomic
+exactly-once transaction (`fleet_store.py`).
+
+Persistence failures in history, resolution and forensic paths preserve useful
+failure data or class-only stderr diagnostics; the maintenance regressions assert
+these observable outcomes. CLI config failures now avoid quoting arbitrary YAML
+contents. User-notification authorization failures can retry, while explicit
+denial stays final. This does not prove banner delivery from an installed bundle.
+
+Credentials also include `FLEET_MACHINE_KEY`. Local evidence files can contain
+sensitive host/network data; outbound redaction and storage privacy are separate
+contracts. A redactor failure must not send the unredacted bundle as a fallback.
+The updated five-standard coverage limits are recorded in
+[external-calls.md](external-calls.md).
+
+`memory.md` and `prompts.md` are repository workflow journals, distinct from runtime
+incident logs. Automated journal writers must hold `journal_lock` for their entire
+read/write cycle. Keep the persistent lock inode; external tools that ignore it
+can still race a replacement. No runtime logs or live semantic stores were rotated
+or rewritten by this maintenance.

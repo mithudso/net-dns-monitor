@@ -57,6 +57,19 @@ password, remove), **Permissions ▾** and **Edit scripts…**. They call the sa
 as the menu bar. The build decides which exist: the App Store edition has no login item,
 no root grant and no script editor.
 
+### Saving values
+
+List settings continue to accept comma-separated entries. If a single value
+contains a comma, quotes, brackets, leading/trailing whitespace or an empty
+string, the editor displays a JSON list to preserve it on save. For example,
+`["error, retry"]` is one value; `error, retry` is two. This matters for literal
+redaction and suppression tokens. Saving an unrelated setting must not change
+those values.
+
+The Router window refuses Save Config while Start or Stop is in progress, so a
+confirmed operation keeps the configuration it captured. Saving can resume
+after that operation completes.
+
 ## Adding a control
 
 1. Add the action to `dashboard.ALL_ACTIONS` (or the key to `config.DEFAULT_CONFIG` and

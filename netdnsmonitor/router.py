@@ -77,6 +77,8 @@ _READBACK_FAILURES = {
     "NDM_START_BOOTPD_NOT_LOADED": "the bootpd launchd job is not loaded after the load",
     "NDM_NAT_STILL_LOADED": f"NAT rules are still loaded in {PF_ANCHOR} after the flush",
     "NDM_BOOTPD_STILL_LOADED": "the bootpd launchd job is still loaded after the unload",
+    "NDM_NAT_QUERY_FAILED": "could not verify that the NAT anchor is empty",
+    "NDM_BOOTPD_QUERY_FAILED": "could not verify that the bootpd launchd job is unloaded",
 }
 # `do shell script` makes osascript exit 1 whatever the script returned; the
 # script's own code survives only as the trailing "(5)" of the error text.
@@ -140,6 +142,11 @@ def validate(wan_if, lan_if, lan_ip, lan_netmask, dhcp_start, dhcp_end) -> Route
     # on it; a loopback, link-local, public or /0 network is never a LAN.
     if not lan.is_private or lan.is_loopback or lan.is_link_local or lan.is_unspecified:
         raise ValueError(f"lan_ip {lan} is not a private LAN address")
+    if not any(
+        network.subnet_of(ipaddress.IPv4Network(block))
+        for block in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    ):
+        raise ValueError("lan_netmask must keep the whole subnet in private LAN space")
     if not MIN_PREFIX <= network.prefixlen <= MAX_PREFIX:
         raise ValueError(
             f"lan_netmask /{network.prefixlen} is outside /{MIN_PREFIX} to /{MAX_PREFIX}"
@@ -276,12 +283,21 @@ def stop_script() -> str:
             f"if [ -s {PF_TOKEN_FILE} ]; then "
             f'/sbin/pfctl -X "$(/bin/cat {PF_TOKEN_FILE})" || true; /bin/rm -f {PF_TOKEN_FILE}; fi',
             f"/bin/launchctl unload -w {BOOTPS_DAEMON} || true",
-            # `set -e` does not fire on a negated test, hence the explicit exits.
-            # The marker names the read-back; see _READBACK_FAILURES.
-            f"if /sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null | /usr/bin/grep -q 'nat on'; "
-            "then echo NDM_NAT_STILL_LOADED >&2; exit 5; fi",
-            f"if /bin/launchctl print system/{BOOTPD_LABEL} >/dev/null 2>&1; "
-            "then echo NDM_BOOTPD_STILL_LOADED >&2; exit 6; fi",
+            # A failed query is unknown, never confirmation that cleanup
+            # worked. Capture its status before examining the returned data.
+            f"nat=$(/sbin/pfctl -a {PF_ANCHOR} -s nat 2>/dev/null) "
+            "|| { echo NDM_NAT_QUERY_FAILED >&2; exit 8; }",
+            'if [ -n "$nat" ]; then echo NDM_NAT_STILL_LOADED >&2; exit 5; fi',
+            # A job-specific print fails both for absence and for query errors.
+            # A successful root job listing can positively establish absence.
+            "jobs=$(/bin/launchctl list 2>/dev/null) "
+            "|| { echo NDM_BOOTPD_QUERY_FAILED >&2; exit 9; }",
+            "present=$(printf '%s\\n' \"$jobs\" | /usr/bin/awk '"
+            'NR == 1 && ($1 != "PID" || $2 != "Status" || $3 != "Label") {exit 2} '
+            f'$3 == "{BOOTPD_LABEL}" {{found=1}} '
+            "END {if (NR == 0) exit 2; print found + 0}') "
+            "|| { echo NDM_BOOTPD_QUERY_FAILED >&2; exit 9; }",
+            'if [ "$present" != 0 ]; then echo NDM_BOOTPD_STILL_LOADED >&2; exit 6; fi',
         ]
     )
 

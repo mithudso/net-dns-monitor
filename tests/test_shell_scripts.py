@@ -2,10 +2,11 @@
 
 Text-level assertions read the code with comments removed. Behavioural ones
 lift a function or loop out of the script and run it under bash with stub
-commands first on PATH, so no system tool (launchctl, route, sleep) is called.
+commands as shell functions, so no system tool (launchctl, route, sleep) is called.
 """
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -148,18 +149,17 @@ def test_service_plist_is_linted_before_it_replaces_the_working_one():
 def _running_pid(tmp_path, print_output, calls):
     code = _code(SERVICE)
     fn = "running_pid() {\n" + _function(code, "running_pid") + "}\n"
-    _stub(
-        tmp_path,
-        "launchctl",
-        f'echo "$@" >> "{calls}"\n'
-        "if [ \"$1\" = print ]; then cat <<'OUT'\n" + print_output + "\nOUT\nexit 0\nfi\nexit 1",
+    stub = (
+        f'launchctl() {{ echo "$@" >> {shlex.quote(str(calls))}; '
+        f'printf "%s\\n" {shlex.quote(print_output)}; }}\n'
     )
-    script = "SERVICE=gui/501/com.example\n" + fn + "running_pid"
+    script = "SERVICE=gui/501/com.example\n" + stub + fn + "running_pid"
     return subprocess.run(
         ["bash", "-c", script],
         env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
         capture_output=True,
         text=True,
+        timeout=5,
     )
 
 
@@ -185,13 +185,13 @@ def test_wan_wait_loop_survives_a_missing_default_route(tmp_path):
     pipeline killed the script on the first pass instead of waiting."""
     loop = re.search(r'^WAN="".*?^done$', ENABLE_NAT.read_text(), re.S | re.M)
     assert loop
-    _stub(tmp_path, "route", "exit 1")
-    _stub(tmp_path, "sleep", f'echo slept >> "{tmp_path}/sleep.log"')
+    stubs = f'route() {{ return 1; }}\nsleep() {{ echo slept >> "{tmp_path}/sleep.log"; }}\n'
     result = subprocess.run(
-        ["bash", "-c", "set -euo pipefail\n" + loop.group(0) + "\necho FELL_THROUGH"],
+        ["bash", "-c", "set -euo pipefail\n" + stubs + loop.group(0) + "\necho FELL_THROUGH"],
         env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
         capture_output=True,
         text=True,
+        timeout=5,
     )
     assert "FELL_THROUGH" in result.stdout, (result.returncode, result.stderr)
     assert len((tmp_path / "sleep.log").read_text().split()) == 30
@@ -199,13 +199,13 @@ def test_wan_wait_loop_survives_a_missing_default_route(tmp_path):
 
 def test_wan_wait_loop_returns_the_interface_when_a_route_exists(tmp_path):
     loop = re.search(r'^WAN="".*?^done$', ENABLE_NAT.read_text(), re.S | re.M).group(0)
-    _stub(tmp_path, "route", "printf '   gateway: 10.0.0.1\\n  interface: en7\\n'")
-    _stub(tmp_path, "sleep", "exit 0")
+    stubs = "route() { printf '   gateway: 10.0.0.1\\n  interface: en7\\n'; }\nsleep() { :; }\n"
     result = subprocess.run(
-        ["bash", "-c", "set -euo pipefail\n" + loop + '\necho "WAN=$WAN"'],
+        ["bash", "-c", "set -euo pipefail\n" + stubs + loop + '\necho "WAN=$WAN"'],
         env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
         capture_output=True,
         text=True,
+        timeout=5,
     )
     assert "WAN=en7" in result.stdout
 
@@ -245,7 +245,16 @@ def test_nat_installer_rolls_back_a_failure_after_unloading_the_old_daemon():
     cleanup = _function(code, "cleanup")
     assert "ROLLBACK_ARMED" in cleanup and 'launchctl load -w "$PLIST_PATH"' in cleanup
     backup = code.index('cp -p "$PLIST_PATH" "$OLD_PLIST_BACKUP"')
-    assert backup < code.index('launchctl unload -w "$PLIST_PATH"') < code.index("ROLLBACK_ARMED=1")
+    transaction = code[code.index("trap cleanup EXIT") :]
+    assert backup < code.index("ROLLBACK_ARMED=1")
+    assert transaction.index('cp -p "$HELPER_PATH" "$OLD_HELPER_BACKUP"') < transaction.index(
+        "ROLLBACK_ARMED=1"
+    )
+    assert (
+        transaction.index("ROLLBACK_ARMED=1")
+        < transaction.index('launchctl unload -w "$PLIST_PATH"')
+        < transaction.index('mv -f "$HELPER_TMP" "$HELPER_PATH"')
+    )
     assert code.index("ROLLBACK_ARMED=1") < code.index(
         'launchctl load -w "$PLIST_PATH"\nROLLBACK_ARMED=0'
     )
@@ -259,7 +268,7 @@ def test_unbound_install_verifies_unbound_on_port_53_before_the_banner():
     verify = code.index("lsof -nP -iUDP:53")
     banner = code.index("ARCHITECTURE DEPLOYED")
     assert verify < banner and "exit 1" in code[verify:banner]
-    assert "grep -q unbound" in code[verify:banner]
+    assert 'has_lan_udp_listener unbound 53 <<<"$LSOF_DNS"' in code[verify:banner]
 
 
 def test_diagnostics_nat_check_matches_the_current_upstream():
@@ -288,7 +297,7 @@ def test_diagnostics_warn_when_dig_is_missing():
 def test_indexer_installer_refuses_a_missing_venv_python():
     code = _code(INDEXER)
     check = code.index('[ -x "$REPO_ROOT/.venv/bin/python3" ]')
-    assert check < code.index("cat <<EOF")
+    assert check < code.index("import plistlib")
     assert "exit 1" in code[check : code.index("mkdir -p")]
 
 
@@ -319,5 +328,6 @@ def test_install_pid_poll_survives_launchctl_failing_under_pipefail(tmp_path):
         env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
         capture_output=True,
         text=True,
+        timeout=5,
     )
     assert "reached:[]" in result.stdout, (result.returncode, result.stderr)

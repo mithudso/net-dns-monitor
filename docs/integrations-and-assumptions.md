@@ -1,7 +1,7 @@
 # Integrations and assumptions
 
 This page lists the services the code talks to, the facts about macOS and the
-network that the code takes as given, and how the three ways of running the app
+network that the code takes as given, and how the supported ways of running the app
 differ. `docs/external-calls.md` has the call-by-call inventory with file and
 line.
 
@@ -69,8 +69,9 @@ below are `config.DEFAULT_CONFIG` values; `tests/test_config.py` checks that
 
 ### The two router stacks
 
-The two stacks conflict: both serve DHCP on UDP 67 and both set
-`net.inet.ip.forwarding`. Which one is canonical is an owner decision.
+The owner keeps both implementations. They must never run together: both serve
+DHCP on UDP 67 and both set `net.inet.ip.forwarding`. The separate router stack
+is retired; maintenance must not reinstall its LaunchDaemons.
 
 | | App router (`netdnsmonitor/router.py`) | `router/` stack |
 |---|---|---|
@@ -101,7 +102,30 @@ see `docs/known-issues.md`.
 | Start at Login item | Writes `com.netdnsmonitor.plist` running `sys.executable -m netdnsmonitor.app` with `WorkingDirectory` set to the checkout | Writes `com.netdnsmonitor.plist` running the bundle executable | Not offered; System Settings > General > Login Items |
 
 In the test suite, `tests/conftest.py` makes every test a direct build with no
-real side effects: `HOME` points at a temporary directory, the Keychain is an
+access to user state: `HOME` points at a temporary directory, the Keychain is an
 in-memory fake, `APP_SANDBOX_CONTAINER_ID` and `NETDNS_DISTRIBUTION` are
 removed, the Dock icon is stubbed, and the privilege probes and `log show`
 readers are stubbed outside their own test modules.
+
+## Current fleet and remediation integration contract
+
+The tables above retain dated baseline anchors. Current source symbols are the
+reference where line numbers have moved. Direct builds include `fleet_reporting`
+and `remediation_editor`; both are false for the Mac App Store edition in
+`distribution.Capabilities`. Existing shell, privilege, unified-log, router and
+login-item gates remain independent.
+
+Fleet uses UDP `fleet_port` (default 45738), protocol `ndm-fleet/1`. A client uses
+`fleet_server_address` or discovered broadcast addresses. Each enrolled machine
+has an HMAC-SHA256 key; the receiver holds those symmetric keys. It refuses bad
+signatures and nonfinite/out-of-window signing timestamps. Signed acknowledgements
+identify the event. The client retries unacknowledged events through its bounded
+in-memory outbox. A heartbeat can close an incident as inferred recovery; a
+resolved event never credits a repair step. See [FLEET.md](FLEET.md) for settings,
+key enrollment and the persistence boundary. Loopback tests do not prove subnet
+broadcast, Local Network permission or launchd-loaded operation between Macs.
+
+Editable remediation scripts execute through an injected context. Public settings
+and script metadata validation live in `config.py` and `remediation_scripts.py`.
+The menu-bar incident pipeline still runs synchronously; the existing deferred
+architecture decision preserves anti-flap edge ownership and report ordering.

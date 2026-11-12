@@ -686,6 +686,10 @@ def test_direct_build_privileged_path_is_unchanged(tmp_path, monkeypatch):
     app._refresh_privilege_status()
     assert app._privilege_status_thread is not None
     app._privilege_status_thread.join(timeout=5)
+    assert not app._privilege_status_thread.is_alive()
+    app._drain_privilege_results()
+    assert app.privileges_probed is True
+    assert app.primary_dhcp_interface == "en9"
     assert app._permission_rows() != [
         ("Elevated permissions", unavailable("privileged_repairs", "elevated permissions"))
     ]
@@ -868,16 +872,29 @@ def test_a_credential_saved_but_not_applied_says_restart(tmp_path, monkeypatch):
     )
 
 
-def test_remove_saved_credentials_asks_then_deletes_all_three(tmp_path):
+def test_remove_saved_credentials_asks_then_deletes_all_saved_items(tmp_path):
     answers = iter([False, True])
+    messages = []
+
+    def choose(_title, message, *_buttons):
+        messages.append(message)
+        return next(answers)
+
     app = build_app(
         tmp_path,
-        keychain=FakeKeychain({"ANTHROPIC_API_KEY": API_KEY, "SLACK_WEBHOOK_URL": SLACK_URL}),
-        choice_prompt=lambda *a: next(answers),
+        keychain=FakeKeychain(
+            {
+                "ANTHROPIC_API_KEY": API_KEY,
+                "SLACK_WEBHOOK_URL": SLACK_URL,
+                "FLEET_MACHINE_KEY": "synthetic-fleet-key",
+            }
+        ),
+        choice_prompt=choose,
     )
 
     assert app.remove_credentials() == "cancelled: nothing was changed"
-    assert len(app.keychain.items) == 2
+    assert len(app.keychain.items) == 3
+    assert "fleet machine key" in messages[-1].lower()
 
     outcome = app.remove_credentials()
 
@@ -885,6 +902,8 @@ def test_remove_saved_credentials_asks_then_deletes_all_three(tmp_path):
     assert "ok: ANTHROPIC_API_KEY removed from the Keychain" in outcome
     assert "ok: SLACK_WEBHOOK_URL removed from the Keychain" in outcome
     assert "ok: SMTP_PASSWORD was not in the Keychain" in outcome
+    assert "ok: FLEET_MACHINE_KEY removed from the Keychain" in outcome
+    assert "synthetic-fleet-key" not in outcome
     assert API_KEY not in outcome and SLACK_URL not in outcome
     assert app.notes == [(CREDENTIALS_MENU, outcome)]
 

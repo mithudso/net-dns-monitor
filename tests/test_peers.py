@@ -220,16 +220,30 @@ def test_the_registry_survives_a_listener_writing_while_the_timer_reads():
         reg.observe(f"seed-{index}", address=f"10.0.0.{index}")
 
     stop = threading.Event()
+    reading = threading.Event()
+    progress = threading.Event()
+    errors = []
+    mutations = []
 
     def churn():
         counter = 0
-        while not stop.is_set():
-            counter += 1
-            reg.observe(f"churn-{counter}", address=f"10.1.{counter % 200}.1")
+        try:
+            assert reading.wait(timeout=5)
+            while not stop.is_set():
+                counter += 1
+                reg.observe(f"churn-{counter}", address=f"10.1.{counter % 200}.1")
+                mutations[:] = [counter]
+                progress.set()
+        except Exception as exc:  # noqa: BLE001 - report writer failures on the test thread
+            errors.append(exc)
+            progress.set()
 
     writer = threading.Thread(target=churn, daemon=True)
     writer.start()
     try:
+        reg.localization_view()
+        reading.set()
+        assert progress.wait(timeout=5), "writer did not mutate during the read phase"
         for _ in range(300):
             # The point is that the readers do not raise while the writer churns;
             # one address per id keeps the per-address cap out of the way.
@@ -239,6 +253,9 @@ def test_the_registry_survives_a_listener_writing_while_the_timer_reads():
     finally:
         stop.set()
         writer.join(timeout=5)
+    assert not writer.is_alive()
+    assert errors == []
+    assert mutations and mutations[0] > 0
 
 
 # --- healthchecks ----------------------------------------------------------
@@ -604,13 +621,23 @@ def test_readers_survive_the_listener_thread_mutating_the_table():
     """
     reg = PeerRegistry(self_id="me", max_peers=20)
     stop = threading.Event()
+    reading = threading.Event()
+    progress = threading.Event()
+    mutations = []
 
     def flood():
         index = 0
-        while not stop.is_set():
-            reg.observe(f"peer-{index}", host="h", address=f"10.0.{index % 250}.1")
-            reg.note_healthcheck_miss(f"peer-{index - 3}")
-            index += 1
+        try:
+            assert reading.wait(timeout=5)
+            while not stop.is_set():
+                reg.observe(f"peer-{index}", host="h", address=f"10.0.{index % 250}.1")
+                reg.note_healthcheck_miss(f"peer-{index - 3}")
+                index += 1
+                mutations[:] = [index]
+                progress.set()
+        except Exception as exc:  # noqa: BLE001 - report writer failures on the test thread
+            errors.append(exc)
+            progress.set()
 
     old_interval = sys.getswitchinterval()
     sys.setswitchinterval(1e-6)
@@ -618,6 +645,9 @@ def test_readers_survive_the_listener_thread_mutating_the_table():
     writer = threading.Thread(target=flood, daemon=True)
     writer.start()
     try:
+        reg.to_dict()
+        reading.set()
+        assert progress.wait(timeout=5), "writer did not mutate during the read phase"
         deadline = time.monotonic() + 1.0
         while time.monotonic() < deadline:
             try:
@@ -633,6 +663,8 @@ def test_readers_survive_the_listener_thread_mutating_the_table():
         writer.join(timeout=5)
         sys.setswitchinterval(old_interval)
     assert errors == []
+    assert not writer.is_alive()
+    assert mutations and mutations[0] > 0
 
 
 def test_buckets_hand_out_copies_not_the_live_entries():

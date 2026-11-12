@@ -360,10 +360,10 @@ SUDO_LIST_WITH_GRANT = """Matching Defaults entries for mitch.hudson on host:
     !visiblepw, always_set_home
 
 User mitch.hudson may run the following commands on host:
+    (ALL) ALL
     (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder
     (root) NOPASSWD: /usr/sbin/ipconfig set en0 DHCP
     (root) NOPASSWD: /usr/sbin/ipconfig set en9 DHCP
-    (ALL) ALL
 """
 
 # The exact machine state that defeated both earlier versions of this check: an
@@ -392,6 +392,60 @@ def test_several_specs_on_one_line_are_split():
         "    (root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder, /bin/ls\n"
     )
     assert specs == ["/usr/bin/killall -HUP mDNSResponder", "/bin/ls"]
+
+
+@pytest.mark.parametrize(
+    "restriction",
+    [
+        "(root) PASSWD: /usr/bin/killall -HUP mDNSResponder",
+        "(root) /usr/bin/killall -HUP mDNSResponder",
+        "(root) PASSWD: /usr/bin/killall",
+        "(ALL) ALL",
+        "(root) NOPASSWD: !/usr/bin/killall -HUP mDNSResponder",
+        "(root) PASSWD: /usr/bin/killall *",
+    ],
+)
+def test_a_later_matching_restriction_removes_the_passwordless_grant(restriction):
+    listing = f"(root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder\n{restriction}\n"
+    assert is_granted_from(parse_granted_commands(listing)) is False
+
+
+@pytest.mark.parametrize("grant", ["ALL", "/usr/bin/killall"])
+def test_a_later_restriction_cannot_leave_a_broader_grant(grant):
+    listing = f"(root) NOPASSWD: {grant}\n(root) PASSWD: /usr/bin/killall -HUP mDNSResponder\n"
+    assert is_granted_from(parse_granted_commands(listing)) is False
+
+
+def test_password_tags_follow_command_order_on_the_same_line():
+    listing = (
+        "(root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder, "
+        "PASSWD: /usr/bin/killall -HUP mDNSResponder\n"
+    )
+    assert is_granted_from(parse_granted_commands(listing)) is False
+    listing += "(root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder\n"
+    assert is_granted_from(parse_granted_commands(listing)) is True
+
+
+@pytest.mark.parametrize(
+    "restriction",
+    [
+        "(root) PASSWD: /bin/ls",
+        "(root) PASSWD: /usr/bin/killall -9 mDNSResponder",
+        "(_postgres) PASSWD: ALL",
+        "(ALL, !root) PASSWD: ALL",
+    ],
+)
+def test_an_unrelated_restriction_keeps_a_valid_grant(restriction):
+    listing = f"(root) NOPASSWD: /usr/bin/killall -HUP mDNSResponder\n{restriction}\n"
+    assert is_granted_from(parse_granted_commands(listing)) is True
+
+
+def test_a_later_interface_restriction_removes_only_overlapping_grants():
+    listing = (
+        "(root) NOPASSWD: /usr/sbin/ipconfig set en0 DHCP, /usr/sbin/ipconfig set en9 DHCP\n"
+        "(root) PASSWD: /usr/sbin/ipconfig set en0 DHCP\n"
+    )
+    assert granted_interfaces_from(parse_granted_commands(listing)) == ["en9"]
 
 
 def test_the_grant_is_detected_by_its_rule_not_by_policy():

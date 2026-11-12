@@ -71,6 +71,12 @@ def apply_window_glass(AppKit, window) -> str:
             content.setAutoresizingMask_(_RESIZE_BOTH)
             kind = "vibrancy"
     except Exception:  # noqa: BLE001 - a missing style must not cost the window
+        # Installing or configuring a wrapper can fail after it has replaced
+        # the content. Restore the controls before declaring a plain fallback.
+        with contextlib.suppress(Exception):
+            window.setContentView_(content)
+        with contextlib.suppress(Exception):
+            content.setFrame_(frame)
         return "plain"
     with contextlib.suppress(Exception):
         window.setOpaque_(False)

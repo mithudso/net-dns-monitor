@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.semantic-index-locks/
+.*.rotate.lock
 # Finder drops these into any directory it displays, including this one and
 # .github/. Not anchored to the repo root, so it covers subdirectories too.
 .DS_Store

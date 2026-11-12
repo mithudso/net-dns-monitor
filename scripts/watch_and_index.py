@@ -16,8 +16,8 @@ from semantic_indexer import REQUIREMENTS_HINT, should_index
 
 INDEXER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "semantic_indexer.py")
 INDEXER_TIMEOUT_SECONDS = 300
-# One editor save arrives as several events (create, modify, modify). Waiting
-# this long after the last one runs the indexer once per path, not three times.
+# One editor save arrives as several events. Batch from the first event so
+# continuing activity cannot postpone pending work indefinitely.
 COALESCE_SECONDS = 1.0
 
 
@@ -29,11 +29,11 @@ def indexer_argv(event_type: str, src_path: str, dest_path: str, root: str) -> l
     if event_type in ("modified", "created"):
         if not should_index(src_path, root):
             return None
-        return [sys.executable, INDEXER_SCRIPT, src_path]
+        return [sys.executable, INDEXER_SCRIPT, "--root", root, src_path]
     if event_type == "deleted":
         if not should_index(src_path, root):
             return None
-        return [sys.executable, INDEXER_SCRIPT, "--remove", src_path]
+        return [sys.executable, INDEXER_SCRIPT, "--root", root, "--remove", src_path]
     if event_type == "moved":
         # Two halves, run separately: the old name leaves the index whether or
         # not the new name qualifies to enter it.
@@ -44,9 +44,9 @@ def indexer_argv(event_type: str, src_path: str, dest_path: str, root: str) -> l
 def moved_argvs(src_path: str, dest_path: str, root: str) -> list[list[str]]:
     argvs = []
     if should_index(src_path, root):
-        argvs.append([sys.executable, INDEXER_SCRIPT, "--remove", src_path])
+        argvs.append([sys.executable, INDEXER_SCRIPT, "--root", root, "--remove", src_path])
     if should_index(dest_path, root):
-        argvs.append([sys.executable, INDEXER_SCRIPT, dest_path])
+        argvs.append([sys.executable, INDEXER_SCRIPT, "--root", root, dest_path])
     return argvs
 
 
@@ -71,8 +71,17 @@ def handle_event(
 ) -> list[list[str]]:
     """Returns the commands it ran, for the tests."""
     if is_directory:
-        return []
-    if event_type == "moved":
+        paths = [src_path, dest_path] if event_type == "moved" else [src_path]
+        argvs = (
+            [
+                [sys.executable, INDEXER_SCRIPT, "--root", root, "--reconcile", path]
+                for path in paths
+                if directory_in_scope(path, root)
+            ]
+            if event_type in {"created", "deleted", "moved"}
+            else []
+        )
+    elif event_type == "moved":
         argvs = moved_argvs(src_path, dest_path, root)
     else:
         argv = indexer_argv(event_type, src_path, dest_path, root)
@@ -83,54 +92,107 @@ def handle_event(
     return argvs
 
 
-class EventCoalescer:
-    """Collapse a burst of events for one path into the last one.
+def directory_in_scope(path, root):
+    from semantic_indexer import EXCLUDED
 
-    The timer factory is injected (threading.Timer-shaped: start(), cancel()) so
-    the tests run without sleeping. Each new event for a path restarts that
-    path's timer; when it fires, `handle` gets the newest event only. A move is
-    kept apart from other events on the same path, because it is the only
-    event that carries the destination. Handlers run one at a time: each timer
-    fires on its own thread, and a branch switch would otherwise start one
-    indexer process per file against the same Chroma store.
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(root))
+    return (
+        rel != os.pardir
+        and not rel.startswith(os.pardir + os.sep)
+        and not (set(rel.split(os.sep)) & EXCLUDED)
+    )
+
+
+class EventCoalescer:
+    """Batch a burst with one timer and run its latest events serially.
+
+    Distinct move destinations survive coalescing. A running handler retains
+    execution ownership; new events wait as data, without a thread per path.
     """
 
-    def __init__(self, handle, delay: float = COALESCE_SECONDS, timer_factory=threading.Timer):
+    def __init__(
+        self, handle, delay: float = COALESCE_SECONDS, timer_factory=threading.Timer, root=None
+    ):
         self._handle = handle
+        self._root = root
         self._delay = delay
         self._timer_factory = timer_factory
         self._lock = threading.Lock()
         self._run_lock = threading.Lock()
         self._pending: dict[tuple, tuple] = {}
-        self._timers: dict[tuple, object] = {}
+        self._tokens: dict[tuple, object] = {}
+        self._timer = None
+        self._timer_token = None
+        self._running = False
+
+    def _schedule(self):
+        if self._timer is not None:
+            return
+        token = object()
+        self._timer_token = token
+        self._timer = self._timer_factory(self._delay, self._flush, args=(token,))
+        self._timer.daemon = True
+        self._timer.start()
 
     def add(self, event_type: str, src_path: str, dest_path: str, is_directory: bool) -> None:
-        key = (event_type == "moved", src_path)
-        with self._lock:
-            old = self._timers.pop(key, None)
-            if old is not None:
-                old.cancel()
-            self._pending[key] = (event_type, src_path, dest_path, is_directory)
-            timer = self._timer_factory(self._delay, self._flush, args=(key,))
-            timer.daemon = True
-            self._timers[key] = timer
-            timer.start()
-
-    def _flush(self, key: tuple) -> None:
-        with self._lock:
-            event = self._pending.pop(key, None)
-            self._timers.pop(key, None)
-        if event is None:
+        if event_type not in {"created", "modified", "deleted", "moved"}:
             return
-        with self._run_lock:
-            try:
-                self._handle(*event)
-            except Exception as exc:  # noqa: BLE001 - one bad event must not stop the watcher
-                print(
-                    f"indexing {event[1]} failed ({type(exc).__name__})",
-                    file=sys.stderr,
-                    flush=True,
+        if self._root is not None and not (
+            (
+                directory_in_scope(src_path, self._root)
+                if is_directory
+                else should_index(src_path, self._root)
+            )
+            or (
+                event_type == "moved"
+                and (
+                    directory_in_scope(dest_path, self._root)
+                    if is_directory
+                    else should_index(dest_path, self._root)
                 )
+            )
+        ):
+            return
+        if is_directory and event_type == "modified":
+            return
+        key = (True, src_path, dest_path) if event_type == "moved" else (False, src_path)
+        with self._lock:
+            self._pending[key] = (event_type, src_path, dest_path, is_directory)
+            self._tokens[key] = object()
+            if not self._running:
+                self._schedule()
+
+    def _flush(self, token: object) -> None:
+        with self._lock:
+            if self._timer_token is not token or self._running:
+                return
+            self._timer_token = None
+            self._timer = None
+            self._running = True
+            batch = list(self._tokens.items())
+        try:
+            with self._run_lock:
+                for key, generation in batch:
+                    with self._lock:
+                        # An event can be replaced while this callback waits
+                        # for execution ownership or an earlier handler.
+                        if self._tokens.get(key) is not generation:
+                            continue
+                        self._tokens.pop(key)
+                        event = self._pending.pop(key)
+                    try:
+                        self._handle(*event)
+                    except Exception as exc:  # noqa: BLE001 - keep watching after a bad event
+                        print(
+                            f"indexing {event[1]} failed ({type(exc).__name__})",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+        finally:
+            with self._lock:
+                self._running = False
+                if self._pending:
+                    self._schedule()
 
 
 def main(argv: list[str]) -> int:
@@ -144,7 +206,8 @@ def main(argv: list[str]) -> int:
     root = os.path.realpath(argv[1] if len(argv) > 1 else ".")
 
     coalescer = EventCoalescer(
-        lambda event_type, src, dest, is_dir: handle_event(event_type, src, dest, is_dir, root)
+        lambda event_type, src, dest, is_dir: handle_event(event_type, src, dest, is_dir, root),
+        root=root,
     )
 
     class IndexingEventHandler(FileSystemEventHandler):

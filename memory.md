@@ -410,3 +410,57 @@ heartbeats (`MISSED_BEFORE_ADDRESS_DROP`).
 Verified: ruff clean, 2792 tests, check_docs passes. Not verified: the GUI (console colour,
 menu contents) is a manual check.
 Open: running switch_to_backup_network from the menu is a real failover attempt.
+
+## v21 - 2026-11-12 - Full owned-repository maintenance
+
+Delta: 1
+
+Active task: NetDNS full bootstrap and maintained-source optimization, TASK-1779; queued modernization TASK-61. Work uses an isolated fetched-master worktree. Primary master is clean but divergent and stays untouched. Both retired routers, live resolver configuration, installed apps, services, Keychain, signing/submission and semantic stores/embeddings remain protected.
+
+The initial uncapped diagnostic round reviewed all 198 maintained executable/declarative targets across all 270 tracked paths, including current fleet/headless and editable-remediation features. The safety guard confines outbound traffic, OS-management execution and filesystem writes; synthetic factories protect Keychain/notifications and system resolution. Baseline collected 2792 tests: 2768 passed, 17 synthetic UDP cases were held locally and 7 failed. Failures include a username-hardcoded test, another UDP case, a real-interface-dependent test and four Foundation atomic-image writes incompatible with owned-only host write access. Full fresh CI remains required.
+
+Corroborated regression probes cover privilege policy precedence, malformed fleet/peer packets, timestamp-preserving revocation, key-file permissions and reporter exception containment. Source repairs, targeted advisory pin updates, current documentation/static indexes, final checks and bounded blind review are in progress. No model/semantic run or live repair is part of this maintenance. Existing owner-deferred GUI pipeline ordering remains a recorded limitation. Delivery is not complete until the final PR is merged and exact remote content verified.
+
+Correction during corroboration: the original combined probe run had six failures and four passes. The bounded nested peer and fleet packet examples were passing, including explicit recursion limit 1000. Independent file workers caught the overstatement; the packet-recursion findings are retracted. Signature/NaN timestamp, privilege precedence, key permissions/revocation and reporter-error probes remain reproduced. A later immutable-baseline check also safely refused both packets on Python 3.13, 3.14 and 3.15. A larger persisted-log decoder failure is separate evidence.
+
+## v22 - 2026-11-12 - User pause checkpoint
+
+Delta: 1
+
+Status: PAUSED_USER. The owner requested stop after the active YouTube release. NetDNS source and all child readers are stopped; no further fixes, diagnostics, blind gates or merge will run. The initial198-target round and first repair batch are preserved. The changed-source round has37/104 complete reports,67 remaining, plus97 unchanged hash-matching reports; no blind attempt has started. Last aggregate:3035 collected across84 modules,3013 passed and22 explicitly held for isolated fresh CI. Fenced journal headings have a confirmed synthetic red and remain unfixed. Documentation/static dossier and final reports remain unfinished. See docs/maintenance-paused-2026-11-12.md and the private batch netdns-pause-continuation.json. Keep this task and queued modernization active but paused; retain the divergent primary, live resolver hashes, guard proofs, snapshots and limits. Resume only on explicit owner instruction.
+
+## v23 - 2026-11-12 - Selected maintenance resume
+
+Delta: 1
+
+Active task: TASK-1779, resumed by TASK-1942 / KNOW-1943. Retired claim handoff verified; clean PR41 checkpoint b0a1c818 retained. Continue missing 67/104 changed-source reviews with two contexts; preserve 198/198 initial reports, five-iteration cap and two unused blind attempts. Primary master remains divergent and live resolver hashes protected. Tests use the existing combined network/exec/filesystem guard with fake Keychain/scratch HOME. Eighteen UDP and four Foundation tests remain local-held pending fresh macOS CI. The synchronous GUI pipeline remains explicitly deferred. No live service, model, semantic or installer activation. Next: finish reviews, corroborate findings, fix journal fenced headings, refresh factual docs/static census, verify and deliver PR41.
+
+## v24 - 2026-11-12 - Bounded maintenance delivery candidate
+
+Delta: 1
+
+Task TASK-1779 continues the selected owner resume. The initial full audit covered
+198 targets; the next rounds completed 104 changed reports and 49 changed reports.
+All 207 maintained targets are accounted for. Final source hashes match 176
+diagnostic reports; 31 files contain focused post-diagnostic repairs with owned
+diff review and passing regressions. The canonical per-file app comparison is
+STABLE-REWRITE at 0.0051, yielding NO_CHANGE after three of five iterations. The
+High synchronous incident pipeline remains explicitly owner-deferred. No blind
+attempt was used and no CLEAN claim is made.
+
+Final local verification: 3171 passed, 22 explicitly held, 3193 collected in
+90 modules; pinned Ruff lint/format and the static paths/component/count guard
+pass. Held cases remain 18 UDP integrations and four Foundation PNG atomic writes.
+Shared test setup establishes scratch HOME and captured synthetic credential and
+notification defaults before collection. Fresh-process sentinels verify this.
+Actual models, indexes, Keychain items, router/service state, signing and
+privileged network actions were not activated.
+
+The static dossier remains shallow and partial. Optional Chroma advisories and
+the unverified privileged-shell timeout lifetime remain explicit residuals.
+The divergent original checkout and protected resolver configuration stay held.
+PR41 https://github.com/mithudso/net-dns-monitor/pull/41 is the delivery record;
+verify its final checks, merge state and remote content before repeating work.
+The external task receipt retains exact heads, checks, content proof and cleanup.
+
+Fresh source-equivalent macOS CI on 911bfc7 passed 3191 cases with two headless graph skips (run43284421759). All 22 local UDP/Foundation holds were exercised. Final PR41 head checks remain the delivery gate; this entry does not activate or synchronize the protected original checkout.

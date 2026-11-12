@@ -1,12 +1,13 @@
 """Tests for the app's bootpd/pf router mode.
 
 Nothing here runs osascript, pfctl or launchctl: `run_fn` and `exists_fn` are
-injected, and the root script is asserted on as a string.
+injected. Shell logic runs only after replacing every host command and state path.
 """
 
 import base64
 import plistlib
 import re
+import shlex
 import subprocess
 import threading
 from types import SimpleNamespace
@@ -518,3 +519,84 @@ def test_starting_the_router_never_enables_dhcp_at_boot():
     assert "launchctl unload -w" not in start
     assert f"/bin/launchctl load -F {router_module.BOOTPS_DAEMON}" in start
     assert f"/bin/launchctl unload -w {router_module.BOOTPS_DAEMON}" in stop_script()
+
+
+@pytest.mark.parametrize(
+    "nat_status, nat_output, job_status, jobs, marker",
+    [
+        (1, "", 0, "PID Status Label", "NDM_NAT_QUERY_FAILED"),
+        (0, "", 1, "", "NDM_BOOTPD_QUERY_FAILED"),
+        (0, "", 0, "", "NDM_BOOTPD_QUERY_FAILED"),
+        (0, "", 0, "unexpected header", "NDM_BOOTPD_QUERY_FAILED"),
+        (0, "", 0, "PID Status Label", None),
+        (
+            0,
+            "nat on en3 from en0:network to any -> (en3)",
+            0,
+            "PID Status Label",
+            "NDM_NAT_STILL_LOADED",
+        ),
+        (0, "", 0, "PID Status Label\n- 0 com.apple.bootpd", "NDM_BOOTPD_STILL_LOADED"),
+        (0, "", 0, "PID Status Label\n- 0 com.apple.bootpd.other", None),
+    ],
+)
+def test_stop_script_requires_successful_queries_and_confirmed_absence(
+    tmp_path, nat_status, nat_output, job_status, jobs, marker
+):
+    # Replace every system-changing command and every host state path before
+    # executing the shell logic. Only grep/awk (stdin filters) remain real.
+    script = stop_script()
+    replacements = {
+        "/sbin/pfctl": "fake_pfctl",
+        "/bin/launchctl": "fake_launchctl",
+        "/usr/sbin/sysctl": "unexpected_operation",
+        "/bin/cat": "unexpected_operation",
+        "/bin/rm": "unexpected_operation",
+        router_module.FORWARDING_FILE: shlex.quote(str(tmp_path / "absent-forwarding")),
+        PF_TOKEN_FILE: shlex.quote(str(tmp_path / "absent-token")),
+    }
+    for old, new in replacements.items():
+        script = script.replace(old, new)
+    assert all(path not in script for path in replacements)
+    assert all(path not in script for path in ("/sbin/", "/bin/launchctl", "/etc/", "/var/run/"))
+    print_status = (
+        0
+        if job_status == 0
+        and any(row.split()[2:] == [router_module.BOOTPD_LABEL] for row in jobs.splitlines())
+        else 1
+    )
+    # No root filesystem mutation can occur: the branches use absent scratch
+    # files, and every command in those branches fails closed if reached.
+    fixtures = (
+        "unexpected_operation() { echo UNEXPECTED_OPERATION >&2; exit 99; }; "
+        'fake_pfctl() { case "$3" in -F) return 1;; -s) '
+        f"printf '%s' {shlex.quote(nat_output)}; return {nat_status};; "
+        "*) unexpected_operation;; esac; }; "
+        'fake_launchctl() { case "$1" in unload) return 0;; list) '
+        f"printf '%s\\n' {shlex.quote(jobs)}; return {job_status};; "
+        # Model the original ambiguous job-specific query too, so this
+        # regression exposes the old false success without running launchctl.
+        f"print) return {print_status};; *) unexpected_operation;; esac; }}; "
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", fixtures + script],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        timeout=5,
+    )
+    assert "UNEXPECTED_OPERATION" not in result.stderr
+    if marker is None:
+        assert result.returncode == 0, result.stderr
+        assert result.stderr == ""
+    else:
+        assert result.returncode != 0
+        assert marker in result.stderr
+
+
+@pytest.mark.parametrize("marker", ["NDM_NAT_QUERY_FAILED", "NDM_BOOTPD_QUERY_FAILED"])
+def test_stop_query_failures_have_fixed_non_sensitive_explanations(marker):
+    outcome = make_router(Recorder(returncode=1, stderr=f"{marker} private-details (8)")).stop()
+    assert outcome.startswith("failed: exit 8;")
+    assert "could not verify" in outcome
+    assert "private-details" not in outcome

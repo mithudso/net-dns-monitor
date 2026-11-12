@@ -38,8 +38,11 @@ Beyond that the server refuses and counts it, so unsigned trial mode, or a
 buggy client, cannot fill the disk.
 """
 
+import contextlib
+import copy
 import json
 import os
+import tempfile
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -81,6 +84,8 @@ class FleetStore:
         self.machines: dict[str, dict[str, Any]] = {}
         self.refused: dict[str, int] = {}
         self.started_at = now_fn()
+        self._refused_saved_at = float("-inf")
+        self._silence_save_pending = False
         self._recent: dict[str, deque[float]] = {}
         self.load()
 
@@ -109,20 +114,27 @@ class FleetStore:
                 }
 
     def save(self) -> None:
-        os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
-        temporary = f"{self.state_path}.tmp"
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(
-                {
-                    "machines": self.machines,
-                    "refused": self.refused,
-                    "saved_at": _iso(self.now_fn()),
-                },
-                handle,
-                indent=2,
-                sort_keys=True,
-            )
-        os.replace(temporary, self.state_path)
+        directory = os.path.dirname(self.state_path) or "."
+        os.makedirs(directory, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{os.path.basename(self.state_path)}.", dir=directory
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "machines": self.machines,
+                        "refused": self.refused,
+                        "saved_at": _iso(self.now_fn()),
+                    },
+                    handle,
+                    indent=2,
+                    sort_keys=True,
+                )
+            os.replace(temporary, self.state_path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary)
 
     def _append(self, event: dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(self.log_path) or ".", exist_ok=True)
@@ -138,7 +150,10 @@ class FleetStore:
 
     def note_refused(self, reason: str) -> None:
         self.refused[reason] = self.refused.get(reason, 0) + 1
-        self.save()
+        now = self.now_fn()
+        if now - self._refused_saved_at >= 30.0:
+            self._refused_saved_at = now
+            self.save()
 
     def _rate_ok(self, machine_id: str, now: float) -> bool:
         window = self._recent.setdefault(machine_id, deque())
@@ -169,6 +184,7 @@ class FleetStore:
             return REFUSED_RATE
 
         is_new = machine is None
+        previous = machine
         if machine is None:
             machine = {
                 "id": machine_id,
@@ -178,7 +194,10 @@ class FleetStore:
                 "last_incident": None,
                 "recent_event_ids": [],
             }
-            self.machines[machine_id] = machine
+        else:
+            # Fold into a candidate. A failed log append must not turn the
+            # sender's retry into an acknowledged, never-logged duplicate.
+            machine = copy.deepcopy(machine)
 
         duplicate = message["eid"] in machine["recent_event_ids"]
         was_silent = bool(machine.get("silent"))
@@ -195,22 +214,42 @@ class FleetStore:
         version = message["data"].get("version")
         if version:
             machine["version"] = version
-        if message["eid"]:
+        if was_silent:
+            self._event(
+                ONLINE,
+                machine,
+                now,
+                status=message["data"].get("status") or machine.get("status", proto.STATUS_UNKNOWN),
+                signed=message["signed"],
+            )
+            # Retain successful return-append progress before a possible second
+            # append (inferred resolution). Do not retain this message's ID yet.
+            # This is retry progress within this process, not crash atomicity.
+            previous.update(machine)
+
+        if message["eid"] and not duplicate:
             machine["recent_event_ids"] = (machine["recent_event_ids"] + [message["eid"]])[
                 -RECENT_EVENT_IDS:
             ]
 
         if duplicate:
+            previous.update(machine)
             self.save()
             return "duplicate"
 
         kind = message["t"]
         if kind == proto.HELLO:
-            self._on_hello(machine, message, now, is_new, was_silent)
+            self._on_hello(machine, message, now, is_new)
         elif kind == proto.INCIDENT:
             self._on_incident(machine, message, now)
         elif kind == proto.RESOLVED:
             self._on_resolved(machine, message, now)
+        if previous is None:
+            self.machines[machine_id] = machine
+        else:
+            previous.update(machine)
+        # Once the log append succeeded, retain the ID even if this save fails.
+        # A retry then retries only the state save, without duplicating the log.
         self.save()
         return "logged"
 
@@ -226,10 +265,10 @@ class FleetStore:
             }
         )
 
-    def _on_hello(self, machine, message, now, is_new, was_silent) -> None:
+    def _on_hello(self, machine, message, now, is_new) -> None:
         status = message["data"].get("status") or proto.STATUS_UNKNOWN
         machine["status"] = status
-        if is_new or was_silent:
+        if is_new:
             self._event(ONLINE, machine, now, status=status, signed=message["signed"])
         if status == proto.STATUS_HEALTHY and machine.get("open_incident"):
             # The resolved event was lost, or never sent. Close on the heartbeat's
@@ -306,8 +345,6 @@ class FleetStore:
             last = machine.get("last_seen_epoch")
             if last is None or machine.get("silent") or now - last <= self.stale_seconds:
                 continue
-            machine["silent"] = True
-            newly_silent.append(machine["id"])
             self._event(
                 SILENT,
                 machine,
@@ -316,8 +353,14 @@ class FleetStore:
                 last_status=machine.get("status"),
                 open_incident=bool(machine.get("open_incident")) or None,
             )
-        if newly_silent:
+            machine["silent"] = True
+            newly_silent.append(machine["id"])
+            self._silence_save_pending = True
+        if self._silence_save_pending:
+            # The event is already appended. Retry only its state save after a
+            # disk error, including when no further transition arrives.
             self.save()
+            self._silence_save_pending = False
         return newly_silent
 
 

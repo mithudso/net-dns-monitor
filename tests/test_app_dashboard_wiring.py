@@ -284,16 +284,30 @@ def test_a_manual_step_waits_for_the_incident_pipeline_lock(tmp_path):
     """
     app = make_app(tmp_path)
     ran = threading.Event()
+    attempted = threading.Event()
     app.state_machine.repair_executor = lambda step: (ran.set(), "done")[1]
+    underlying = threading.Lock()
 
-    app.state_machine.lock.acquire()
+    class RecordingLock:
+        def __enter__(self):
+            attempted.set()
+            underlying.acquire()
+
+        def __exit__(self, *args):
+            underlying.release()
+
+    app.state_machine.lock = RecordingLock()
+    underlying.acquire()
     try:
         app.handle_dashboard_action("flush_dns_cache")
-        assert not ran.wait(timeout=0.3), "the step ran while the pipeline held the lock"
+        assert attempted.wait(timeout=5), "the worker never attempted the pipeline lock"
+        assert not ran.is_set(), "the step ran while the pipeline held the lock"
     finally:
-        app.state_machine.lock.release()
+        underlying.release()
+        if app._action_thread is not None:
+            app._action_thread.join(timeout=5)
     assert ran.wait(timeout=5)
-    app._action_thread.join(timeout=5)
+    assert not app._action_thread.is_alive()
 
 
 def test_full_diagnosis_uses_the_configured_failover_classifications(tmp_path):

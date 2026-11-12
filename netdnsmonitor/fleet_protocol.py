@@ -37,6 +37,7 @@ sender before it gets here (CLAUDE.md non-negotiable 6).
 import hashlib
 import hmac
 import json
+import math
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -159,6 +160,11 @@ def parse_message(
     ts = raw.get("ts")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return None, REFUSED_MALFORMED
+    try:
+        if not math.isfinite(ts):
+            return None, REFUSED_MALFORMED
+    except OverflowError:
+        return None, REFUSED_MALFORMED
 
     signature = raw.get("sig")
     if key_for is not None:
@@ -172,7 +178,11 @@ def parse_message(
         if not isinstance(signature, str):
             if not allow_unsigned:
                 return None, REFUSED_UNSIGNED
-        elif not hmac.compare_digest(signature, sign(raw, secret)):
+        elif (
+            len(signature) != 64
+            or any(ch not in "0123456789abcdef" for ch in signature)
+            or not hmac.compare_digest(signature, sign(raw, secret))
+        ):
             return None, REFUSED_BAD_SIGNATURE
     elif not allow_unsigned:
         # No secret to check against, and unsigned is not allowed: nothing here
@@ -204,7 +214,13 @@ def _clean_data(data: dict[str, Any]) -> dict[str, Any]:
             out[key] = data[key]
     duration = data.get("duration_seconds")
     if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:
-        out["duration_seconds"] = round(float(duration), 1)
+        try:
+            duration = float(duration)
+        except OverflowError:
+            pass
+        else:
+            if math.isfinite(duration):
+                out["duration_seconds"] = round(duration, 1)
     steps = data.get("steps")
     if isinstance(steps, list):
         out["steps"] = [

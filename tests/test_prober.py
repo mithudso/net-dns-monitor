@@ -289,9 +289,11 @@ def test_a_domains_callable_is_re_read_on_every_probe():
         resolve_fn=resolve_fn,
     )
     prober()
+    assert seen == ["a.example"]
+    seen.clear()
     current.append("b.example")
     prober()
-    assert seen == ["a.example", "a.example", "b.example"]
+    assert sorted(seen) == ["a.example", "b.example"]
 
 
 def test_a_refused_connection_counts_as_the_target_answering(monkeypatch):

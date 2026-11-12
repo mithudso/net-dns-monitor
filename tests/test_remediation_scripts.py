@@ -167,6 +167,25 @@ def test_a_nul_byte_is_a_problem_not_a_crash():
     assert problems
 
 
+@pytest.mark.parametrize(
+    "signature",
+    ["ctx, /", "ctx, optional=None", "ctx=None", "*args", "ctx, *args", "ctx, *, opt=None"],
+)
+def test_inspection_accepts_signatures_that_can_receive_one_context(signature):
+    source = CUSTOM.replace("def run(ctx):", f"def run({signature}):")
+    assert inspect_source(source, expected_name="my_check")[1] == []
+    assert execute("my_check", source, SimpleNamespace(log_lines=[])).outcome == "ok: custom ran"
+
+
+@pytest.mark.parametrize(
+    "signature",
+    ["ctx, required", "ctx, /, required", "ctx, *, required", "*args, required", "**kw"],
+)
+def test_inspection_rejects_signatures_that_cannot_receive_one_context(signature):
+    source = CUSTOM.replace("def run(ctx):", f"def run({signature}):")
+    assert any("run(ctx)" in p for p in inspect_source(source, expected_name="my_check")[1])
+
+
 def test_listing_and_inspecting_never_execute_a_script(tmp_path):
     marker = tmp_path / "ran"
     evil = CUSTOM + f"\nopen({str(marker)!r}, 'w').write('x')\nraise SystemExit(1)\n"
@@ -263,6 +282,26 @@ def test_saving_text_identical_to_the_builtin_removes_the_override(tmp_path):
     assert store.save("check_interface_state", original) == []
     assert store.info("check_interface_state").origin == ORIGIN_BUILTIN
     assert not (tmp_path / "u" / "check_interface_state.py").exists()
+
+
+def test_saving_builtin_text_reports_failed_reset_and_preserves_override(tmp_path, monkeypatch):
+    store = ScriptStore(user_dir=tmp_path / "u")
+    original = store.builtin_source("check_interface_state")
+    edited = original.replace("--nwi", "--proxy")
+    assert store.save("check_interface_state", edited) == []
+    path = store.user_dir / "check_interface_state.py"
+    unlink = Path.unlink
+
+    def denied(target, *args, **kwargs):
+        if target == path:
+            raise PermissionError("sensitive filesystem detail")
+        return unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    problems = store.save("check_interface_state", original)
+    assert problems == ["could not remove check_interface_state (PermissionError)"]
+    assert store.source("check_interface_state") == edited
+    assert store.info("check_interface_state").origin == ORIGIN_MODIFIED
 
 
 def test_invalid_text_is_not_saved(tmp_path):
@@ -362,11 +401,19 @@ def test_a_disabled_script_is_reported_skipped(tmp_path):
 
 
 def test_the_default_executor_never_reads_a_user_directory(tmp_path, monkeypatch):
-    user = (
-        tmp_path / "home" / "Library" / "Application Support" / "net-dns-monitor" / "remediations"
-    )
+    from netdnsmonitor.remediation_scripts import DEFAULT_USER_DIR
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    user = home / "Library" / "Application Support" / "net-dns-monitor" / "remediations"
     user.mkdir(parents=True)
-    (user / "flush_dns_cache.py").write_text("raise SystemExit\n")
+    assert Path(DEFAULT_USER_DIR).expanduser() == user
+    override = (
+        'NAME = "flush_dns_cache"\nKIND = "repair"\ndef run(ctx):\n    return "override ran"\n'
+    )
+    (user / "flush_dns_cache.py").write_text(override)
+    opted_in = repair_executor.make_repair_executor(run_fn=fake_run(), store=ScriptStore(user))
+    assert opted_in(LadderStep("flush_dns_cache", "repair", False)) == "override ran"
     executor = repair_executor.make_repair_executor(run_fn=fake_run())
     assert executor(LadderStep("flush_dns_cache", "repair", False)) == "ok"
 

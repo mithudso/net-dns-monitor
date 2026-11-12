@@ -48,6 +48,7 @@ CONNECT_SLACK_SECONDS = 1.0
 # error or empty body as a number. A read cut off by the budget is different --
 # that is the link's pace and stays a measurement.
 MIN_SAMPLE_BYTES = 64 * 1024
+MAX_HEADER_BYTES = 64 * 1024
 
 MeasureFn = Callable[..., Optional[float]]
 # One pre-resolved literal, or several (one per family, from resolve_addresses).
@@ -238,8 +239,13 @@ def default_measure(
         target.settimeout(max(MIN_STEP_TIMEOUT, remaining()))
 
     try:
+        if remaining() <= 0:
+            return None
         arm(sock)
         stream = (tls_wrap or _default_tls_wrap)(sock, host)
+        if remaining() <= 0:
+            return None
+        arm(stream)
         stream.sendall(
             f"GET {path} HTTP/1.1\r\nHost: {host}\r\n"
             "Connection: close\r\nUser-Agent: net-dns-monitor\r\n\r\n".encode()
@@ -250,26 +256,31 @@ def default_measure(
         first = stream.recv(65536)
         if not first:
             return None
-        # The status line may be split across reads, so gather until the first
-        # CRLF before judging it -- bounded, so a server that never sends one
-        # cannot hold the thread.
-        while b"\r\n" not in first and remaining() > 0:
+        # Headers can span reads. They prove status but are not download bytes,
+        # and a server that never ends them must not consume an unbounded buffer.
+        header_end = first.find(b"\r\n\r\n")
+        while header_end < 0:
+            if len(first) >= MAX_HEADER_BYTES or remaining() <= 0:
+                return None
             arm(stream)
             more = stream.recv(65536)
             if not more:
-                break
+                return None
             first += more
+            header_end = first.find(b"\r\n\r\n")
+        if header_end + 4 > MAX_HEADER_BYTES:
+            return None
         # A redirect or an error page still transfers bytes, and timing those
         # would report a broken target as a slow interface. Only a 2xx counts.
         if not is_success_status(first):
             return None
 
-        total = len(first)
+        total = min(len(first) - header_end - 4, max_bytes)
         ended = False
         while total < max_bytes and remaining() > 0:
             arm(stream)
             try:
-                chunk = stream.recv(65536)
+                chunk = stream.recv(min(65536, max_bytes - total))
             except TimeoutError:
                 # Each read is armed with the remaining budget, so a timeout
                 # here means the budget ran out mid-read. The bytes that did
@@ -279,7 +290,7 @@ def default_measure(
             if not chunk:
                 ended = True
                 break
-            total += len(chunk)
+            total += min(len(chunk), max_bytes - total)
 
         if ended and total < MIN_SAMPLE_BYTES and total < max_bytes:
             return None

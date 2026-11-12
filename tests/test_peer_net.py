@@ -68,12 +68,14 @@ def pair():
         status_fn=lambda: "incident",
         broadcast_fn=lambda: ["127.0.0.1"],
     )
-    assert a.start(), a.start_error
-    assert b.start(), b.start_error
-    connect(a, b)
-    yield a, b
-    a.stop()
-    b.stop()
+    try:
+        assert a.start(), a.start_error
+        assert b.start(), b.start_error
+        connect(a, b)
+        yield a, b
+    finally:
+        a.stop()
+        b.stop()
 
 
 # --- message encoding ------------------------------------------------------
@@ -256,9 +258,9 @@ def test_on_change_fires_when_a_peer_is_heard_from():
         broadcast_fn=lambda: ["127.0.0.1"],
         on_change=lambda: calls.append(1),
     )
-    assert a.start() and b.start()
-    connect(a, b)
     try:
+        assert a.start() and b.start()
+        connect(a, b)
         a.announce()
         assert wait_for(lambda: calls)
     finally:
@@ -310,7 +312,10 @@ def test_a_probe_from_outside_the_local_network_is_ignored():
     `is_private`.
     """
     net = PeerNetwork(
-        registry=PeerRegistry(self_id="id-a"), host="mac-a", broadcast_fn=lambda: ["127.0.0.1"]
+        registry=PeerRegistry(self_id="id-a"),
+        host="mac-a",
+        broadcast_fn=lambda: ["127.0.0.1"],
+        local_networks_fn=lambda: [ipaddress.ip_network("192.168.1.0/24")],
     )
     payload = build_message(PROBE, "id-far", "far-away", "healthy", 1)
     net._handle(payload, "8.8.8.8")
@@ -395,8 +400,24 @@ def test_an_unroutable_broadcast_address_does_not_stop_the_others(pair):
     expected and must not abort the sweep.
     """
     a, b = pair
-    a.broadcast_fn = lambda: ["203.0.113.255", "127.0.0.1"]
-    a.announce()
+    a.broadcast_fn = lambda: ["synthetic-unroutable", "127.0.0.1"]
+    original = a.socket
+    failed = []
+
+    class FailingSend:
+        def __getattr__(self, name):
+            return getattr(original, name)
+
+        def sendto(self, payload, destination):
+            if destination[0] == "synthetic-unroutable":
+                failed.append(destination)
+                raise OSError("synthetic send failure")
+            assert destination[0] == "127.0.0.1"
+            return original.sendto(payload, destination)
+
+    a.socket = FailingSend()
+    assert a.announce() == 1
+    assert failed == [("synthetic-unroutable", a.send_port)]
     assert wait_for(lambda: "id-a" in b.registry.peers)
 
 

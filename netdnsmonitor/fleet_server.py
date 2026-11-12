@@ -57,10 +57,20 @@ class FleetServer:
         self.started = False
         self.start_error: Optional[str] = None
         self._stop = threading.Event()
+        self._lifecycle_lock = threading.Lock()
         self._swept_at = 0.0
 
     def start(self) -> bool:
-        """Bind and listen. False if the port could not be opened; never raises."""
+        """Bind and listen; refuse while the previous reader is still stopping."""
+        with self._lifecycle_lock:
+            if self.thread is not None and self.thread.is_alive():
+                if self.started and not self._stop.is_set():
+                    return True
+                self.start_error = "previous listener is still stopping"
+                return False
+            return self._start()
+
+    def _start(self) -> bool:
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -81,14 +91,16 @@ class FleetServer:
         self.thread = threading.Thread(target=self._read_loop, name="fleet-server", daemon=True)
         self.thread.start()
         self.started = True
+        self.start_error = None
         return True
 
     def stop(self) -> None:
-        self._stop.set()
-        if self.socket is not None:
-            with contextlib.suppress(OSError):
-                self.socket.close()
-        self.started = False
+        with self._lifecycle_lock:
+            self._stop.set()
+            if self.socket is not None:
+                with contextlib.suppress(OSError):
+                    self.socket.close()
+            self.started = False
 
     def alive(self) -> bool:
         return (
@@ -99,6 +111,15 @@ class FleetServer:
         )
 
     def _read_loop(self) -> None:
+        try:
+            self._receive_loop()
+        finally:
+            try:
+                self.store.save()
+            except Exception:  # noqa: BLE001 - shutdown persistence is best effort
+                traceback.print_exc()
+
+    def _receive_loop(self) -> None:
         sock = self.socket
         if sock is None:
             return
@@ -113,6 +134,8 @@ class FleetServer:
                     return
                 self._stop.wait(1.0)
                 continue
+            if self._stop.is_set():
+                return
             try:
                 self.handle(payload, sender[0], sender[1])
             except Exception:  # noqa: BLE001 - one bad packet must not end the server

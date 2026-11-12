@@ -9,8 +9,8 @@ Outcomes:
   * `failed: could not read /etc/resolver (...)` when listing it raised, so a
     permissions problem is never reported as "no overrides".
 
-The directory lookups are `ctx.resolver_dir_exists` and `ctx.listdir` so a test
-can supply a fake filesystem.
+The directory lookup uses `ctx.listdir` so a test can supply a fake filesystem.
+It lists directly because a false existence check can also mean permission denied.
 """
 
 NAME = "check_resolver_overrides"
@@ -27,14 +27,12 @@ ENABLED = True
 
 def run(ctx):
     directory = ctx.tools.RESOLVER_DIR
-    if not ctx.resolver_dir_exists(directory):
-        return f"no {directory} overrides configured"
     try:
         entries = ctx.listdir(directory)
+    except FileNotFoundError:
+        return f"no {directory} overrides configured"
     except OSError as exc:
-        # os.listdir can raise PermissionError, or FileNotFoundError if the
-        # directory vanished after the check above.
-        return f"failed: could not read {directory} ({exc})"
+        return f"failed: could not read {directory} ({type(exc).__name__})"
     if not entries:
         return f"no {directory} overrides configured"
     return f"{directory} overrides present for: {', '.join(entries)}"

@@ -94,7 +94,7 @@ report, because someone will act on it.
 ## Commands — before you claim a change works
 
 ```bash
-ruff check . && ruff format --check . && python3 -m pytest -q   # 2792 tests, offline
+ruff check . && ruff format --check . && python3 -m pytest -q   # 3193 tests, offline
 ```
 
 That is the CI gate (`.github/workflows/ci.yml`). An autouse fixture in
@@ -139,6 +139,15 @@ passes 200 KB, run `scripts/rotate_workflow_logs.py`; it moves older sections to
 session's files, preserve unrelated changes, and commit the completed work.
 The journals' versions track work entries; they do not change the App Store
 product version or build number.
+
+Every automated journal writer must hold
+`scripts.rotate_workflow_logs.journal_lock(path)` across its complete read and
+write cycle. The rotation command uses the same advisory lock. Do not remove
+the lock file: waiting writers must keep using its inode. An editor or tool
+that ignores the lock can still race a replacement; the tool detects changed
+content before replacement but cannot guarantee safety against a later
+noncooperating write. Preserve editor swap-file refusals and coordinate such
+writers before rotating.
 
 ## House style
 

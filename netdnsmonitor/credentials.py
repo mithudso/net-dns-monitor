@@ -1,7 +1,7 @@
-"""Where the app's three credentials come from.
+"""Where the application's credentials come from.
 
-The direct-download build reads ANTHROPIC_API_KEY, SLACK_WEBHOOK_URL and
-SMTP_PASSWORD from the environment, which is set when the app is run directly
+The direct-download build reads ANTHROPIC_API_KEY, SLACK_WEBHOOK_URL,
+SMTP_PASSWORD and FLEET_MACHINE_KEY from the environment, which is set when the app is run directly
 from a shell that exports them (python -m netdnsmonitor.app, or the CLI).
 scripts/start.sh launches it through `open -n`, which does not pass the shell's
 environment on. A Mac App Store build is launched by LaunchServices inside the
@@ -195,8 +195,8 @@ class CredentialStore:
         backend = self._keychain()
         if backend is None:
             return "failed: the Keychain is not available in this process"
-        encoded = value.encode("utf-8")
         try:
+            encoded = value.encode("utf-8")
             status = backend.add(name, encoded)
             if status == ERR_SEC_DUPLICATE_ITEM:
                 status = backend.update(name, encoded)
