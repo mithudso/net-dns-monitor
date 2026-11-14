@@ -10,7 +10,7 @@
 # Verify loop:
 #   ruff check . && ruff format --check . && python -m pytest -q
 -r requirements.txt
-pytest==9.1.1
+pytest==9.2.0
 ruff==0.16.10
 # Parity test only (tests/test_launchd_supervisor_parity.py skips without it). Private repo.
 macos-launchd-supervisor @ git+https://github.com/mithudso/macos-launchd-supervisor
