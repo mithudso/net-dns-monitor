@@ -33,6 +33,22 @@ from netdnsmonitor.failover import _BUSY, _neither_side
 from netdnsmonitor.repair_executor import make_repair_executor
 
 
+@pytest.mark.parametrize("unload_ok", [True, False])
+def test_headless_uninstall_can_remove_an_agent_with_broken_yaml(tmp_path, monkeypatch, unload_ok):
+    from netdnsmonitor import headless
+
+    config_file = tmp_path / "broken.yaml"
+    config_file.write_text("poll_interval_seconds: [")
+    outcome = "removed: synthetic agent" if unload_ok else "failed: unload not confirmed"
+    monkeypatch.setattr(headless, "uninstall_agent", lambda: outcome)
+    output = []
+
+    assert main(["--config", str(config_file), "headless", "--uninstall"], output.append) == (
+        0 if unload_ok else 1
+    )
+    assert output == [outcome]
+
+
 def collect():
     lines = []
     return lines, lines.append

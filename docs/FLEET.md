@@ -67,7 +67,10 @@ it is signed with the key enrolled for the machine name it claims.
    This stores the key in that Mac's Keychain (the agent has no shell environment, so
    an exported variable alone would never reach it), writes
    `~/Library/LaunchAgents/com.netdnsmonitor.headless.plist` (`KeepAlive`, so it
-   restarts if it stops) and loads it. Remove it with `headless --uninstall`.
+   restarts if it stops) and loads it. Install reports a running monitor only
+   after launchd reports a PID. If launchd loaded the job but has not reported
+   a process, check the log named in the output. Remove it with
+   `headless --uninstall`, which also works when the config cannot be read.
 4. Check: the log is `~/Library/Logs/net-dns-monitor-headless.log`, and on the
    server `netdns fleet` should list the machine within one heartbeat
    (`fleet_heartbeat_seconds`, default 300).
@@ -97,7 +100,9 @@ The server adds `online` (first heard, or heard again after silence), `silent`
 - A machine that goes quiet is `silent`, never `healthy`. A machine that went quiet
   during an incident shows as `incident (silent)`: it may be the one whose network is
   down, which is the only case where it cannot say so.
-- `unknown` means the first probe has not finished. It is reported as unknown.
+- `unknown` means no probe has established a state at the flap gate. An
+  inconclusive first poll keeps that status and leaves an existing fleet
+  incident open.
 
 **Delivery.** Each incident and resolution waits in an in-memory outbox (100 events)
 and is re-sent, oldest first, until the server acknowledges it, so an incident

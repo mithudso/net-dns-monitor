@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 3198 tests; the whole decision surface
+python3 -m pytest -q          # 3205 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 3198 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 3198 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 3205 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -875,7 +875,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 3198 tests collected, with skips reported separately
+python3 -m pytest -q            # 3205 tests collected, with skips reported separately
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -889,8 +889,8 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | Tests | File |
 |---|---|
 | 310 | `test_config.py` |
-| 132 | `test_failover.py` |
-| 115 | `test_fleet.py` |
+| 134 | `test_failover.py` |
+| 117 | `test_fleet.py` |
 | 114 | `test_settings_window.py` |
 | 103 | `test_privileges.py` |
 | 84 | `test_router.py` |
@@ -908,8 +908,8 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 51 | `test_repair_executor.py` |
 | 51 | `test_system_log.py` |
 | 50 | `test_maintenance_resume_core.py` |
+| 48 | `test_cli.py` |
 | 47 | `test_maintenance_core_regressions.py` |
-| 46 | `test_cli.py` |
 | 46 | `test_router_window.py` |
 | 45 | `test_throughput.py` |
 | 43 | `test_maintenance_resume_tooling.py` |
@@ -930,8 +930,8 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 29 | `test_app_ping_wiring.py` |
 | 29 | `test_notifications.py` |
 | 28 | `test_credentials.py` |
+| 27 | `test_app_router_wiring.py` |
 | 27 | `test_indexer_scripts.py` |
-| 26 | `test_app_router_wiring.py` |
 | 26 | `test_graphs.py` |
 | 26 | `test_net_stats.py` |
 | 25 | `test_history.py` |
@@ -979,7 +979,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 2 | `test_app_report_storage_wiring.py` |
 | 2 | `test_maintenance_resume_safety.py` |
 | 1 | `test_launchd_supervisor_parity.py` |
-| **3198** | **total** |
+| **3205** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

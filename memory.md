@@ -467,7 +467,7 @@ Fresh source-equivalent macOS CI on 911bfc7 passed 3191 cases with two headless 
 
 ## v25 - 2026-11-17 - Application deep optimizer
 
-Delta: 2
+Delta: 3
 
 TASK-429 covers the menu bar, CLI, incident handoffs, App Store, headless and
 fleet workflows, the router boundary, and the fresh checkout and deployment
@@ -484,6 +484,12 @@ cases reproduced the two behavior defects and pass on the repaired source.
 The first full run exposed one console assertion for the old wording. That
 assertion now checks the new priority label. Fresh isolated CLI help, empty
 fleet status and unconfigured failover were exercised without live writes.
+
+Independent source review of `50da7fa` caught five further defects in
+headless heartbeat, install/uninstall, supervised login status, and disabled
+preferred service handling. Eight focused cases reproduced these defects on
+that candidate and passed after the repairs. The fresh collection has
+3205 cases, including the optional parity comparison.
 
 The synchronous incident pipeline remains owner-deferred. The public privacy
 notice also needs a coordinated cross-repository update. Live GUI, privilege

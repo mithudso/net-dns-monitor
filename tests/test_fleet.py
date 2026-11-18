@@ -28,6 +28,7 @@ from netdnsmonitor.fleet_store import (
     render_events,
     render_fleet,
 )
+from netdnsmonitor.state_machine import StateMachine
 
 SECRET = "correct horse battery staple"
 NOW = 1_800_000_000.0
@@ -640,6 +641,7 @@ class Gate:
     def __init__(self):
         self.state = "healthy"
         self.consecutive_failures = 0
+        self.consecutive_successes = 0
 
 
 class FakeMachine:
@@ -651,6 +653,7 @@ class FakeMachine:
     def tick(self):
         if self.raises:
             raise RuntimeError("probe blew up")
+        self.flap_gate.consecutive_successes += self.flap_gate.state == "healthy"
         return self.reports.pop(0) if self.reports else None
 
 
@@ -685,6 +688,30 @@ def test_status_is_unknown_until_a_poll_finishes():
     assert m.status() == "unknown"
     m.step()
     assert m.status() == "healthy"
+
+
+def test_inconclusive_first_poll_does_not_close_a_fleet_incident(tmp_path):
+    probes = iter(
+        [
+            {"external_reachable": None, "dns_ok": True},
+            {"external_reachable": True, "dns_ok": True},
+        ]
+    )
+    machine = StateMachine(lambda: next(probes), lambda _: "", lambda _: {}, lambda: [])
+    monitor_instance = monitor(machine)
+    store = make_store(tmp_path)
+    feed(store, proto.INCIDENT, "previous", data={"classification": "dns"})
+
+    monitor_instance.step()
+    feed(store, proto.HELLO, "first", data={"status": monitor_instance.status()})
+    assert monitor_instance.status() == "unknown"
+    assert store.machines["mac-1"]["open_incident"] is not None
+
+    monitor_instance.step()
+    feed(store, proto.HELLO, "second", data={"status": monitor_instance.status()})
+    assert monitor_instance.status() == "healthy"
+    assert store.machines["mac-1"]["open_incident"] is None
+    assert store.machines["mac-1"]["last_incident"]["inferred"] is True
 
 
 def test_incident_is_saved_reported_and_recovery_follows():
@@ -800,7 +827,8 @@ def test_install_agent_writes_the_plist_and_loads_it(tmp_path):
 
     def run(argv, **kwargs):
         calls.append(argv)
-        return types.SimpleNamespace(returncode=0)
+        stdout = "\tpid = 321\n" if argv[1] == "print" else ""
+        return types.SimpleNamespace(returncode=0, stdout=stdout)
 
     line = headless.install_agent(
         str(tmp_path / "c.yaml"),
@@ -814,7 +842,31 @@ def test_install_agent_writes_the_plist_and_loads_it(tmp_path):
     assert line.startswith("installed and running")
     with open(headless.agent_path(str(tmp_path / "agents")), "rb") as handle:
         assert plistlib.load(handle)["Label"] == headless.AGENT_LABEL
-    assert calls[-1][:3] == ["/bin/launchctl", "bootstrap", "gui/501"]
+    assert calls[-2][:3] == ["/bin/launchctl", "bootstrap", "gui/501"]
+    assert calls[-1] == ["/bin/launchctl", "print", f"gui/501/{headless.AGENT_LABEL}"]
+
+
+def test_headless_install_without_a_running_pid_does_not_claim_success(tmp_path, monkeypatch):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv[1])
+        return types.SimpleNamespace(returncode=0, stdout="\tstate = spawn scheduled\n")
+
+    monkeypatch.setattr(headless.time, "sleep", lambda _: None)
+    result = headless.install_agent(
+        "/c",
+        "/py",
+        "/src",
+        agents_dir=str(tmp_path),
+        log_path=str(tmp_path / "headless.log"),
+        run_fn=run,
+        uid=501,
+    )
+
+    assert result.startswith("loaded:")
+    assert "running process not confirmed" in result
+    assert calls == ["bootout", "bootstrap", "print", "print", "print"]
 
 
 def test_install_agent_reports_a_launchctl_failure_instead_of_claiming_success(tmp_path):

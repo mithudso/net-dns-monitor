@@ -1326,6 +1326,20 @@ def test_switch_now_to_preferred_names_a_third_service_at_the_head(store):
     assert runner.applied_orders == []
 
 
+@pytest.mark.parametrize("all_disabled", [False, True])
+def test_switch_now_does_not_claim_a_disabled_preferred_service_is_active(store, all_disabled):
+    runner = FakeRunner(order=["AX88179B", "Thunderbolt Bridge", "Wi-Fi"])
+    runner.disabled.add("AX88179B")
+    if all_disabled:
+        runner.disabled.update(runner.order)
+    failover = build(store, runner)
+    outcome = failover.switch_now("preferred")
+    assert outcome.startswith("no switch:")
+    assert "already on" not in outcome
+    assert ("no enabled" if all_disabled else "Thunderbolt Bridge") in outcome
+    assert runner.applied_orders == []
+
+
 def test_a_named_backup_with_no_device_is_not_called_absent(store, monkeypatch):
     """A VPN-style service sits in the order with no device. Calling it absent
     sends someone looking for a service that is right there.

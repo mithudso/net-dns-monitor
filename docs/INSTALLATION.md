@@ -39,6 +39,10 @@ session, log out and back in before installing the supervised service. Its
 installer refuses to replace the bundle or register a second job while the
 standalone agent is installed or loaded.
 
+With the supervised service installed, **Start at Login** reflects whether
+supervision is enabled. A stopped supervisor leaves the box unchecked. Use
+`net-dns-monitor-service start` to re-enable its startup job.
+
 ```bash
 NDM_SOURCE_BUNDLE=dist/Net-DNS-Monitor.app scripts/net-dns-monitor-service update
 scripts/net-dns-monitor-service uninstall

@@ -528,7 +528,7 @@ def cmd_console(args, config, out) -> int:
 # --- parser -----------------------------------------------------------------
 
 
-def cmd_headless(args, config, out) -> int:
+def cmd_headless(args, _config, out) -> int:
     """Run the monitor with no windows, or install it to run at login."""
     from netdnsmonitor import headless
 
@@ -749,11 +749,15 @@ def main(
     # A config the loader refuses is the user's to fix, so it gets one line and
     # exit 2, not a traceback. ConfigError and a non-UTF-8 file are ValueErrors;
     # a YAML syntax error is not.
-    try:
-        config = load_config_fn(os.path.expanduser(args.config))
-    except (ValueError, OSError, yaml.YAMLError) as exc:
-        print(f"config error: {args.config}: {exc}", file=sys.stderr)
-        return 2
+    config = {}
+    # Uninstall uses the fixed job label. A broken config must not trap the
+    # owner with a loaded KeepAlive agent attempting to start that config.
+    if args.command != "headless" or not args.uninstall:
+        try:
+            config = load_config_fn(os.path.expanduser(args.config))
+        except (ValueError, OSError, yaml.YAMLError) as exc:
+            print(f"config error: {args.config}: {exc}", file=sys.stderr)
+            return 2
     try:
         return args.func(args, config, out)
     except KeyboardInterrupt:

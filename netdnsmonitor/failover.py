@@ -71,7 +71,7 @@ _BUSY = "no switch: another switch attempt is in progress"
 
 def _neither_side(head: str) -> str:
     return (
-        f"no switch: '{head}' is at the head of the order, "
+        f"no switch: '{head}' is first among enabled services, "
         "which is neither the preferred link nor a configured backup"
     )
 
@@ -648,8 +648,11 @@ class NetworkFailover:
         if target == BACKUP and service and services[0].name == service and services[0].enabled:
             return f"no switch: already on '{service}'"
         if target == PREFERRED and active_side == PREFERRED:
-            if services[0].name != self.preferred_service:
-                return _neither_side(services[0].name)
+            first_enabled = self._active_service(services)
+            if first_enabled is None:
+                return "no switch: no enabled network service"
+            if first_enabled.name != self.preferred_service:
+                return _neither_side(first_enabled.name)
             self._end_stale_pause(services)
             return "no switch: already on the preferred network"
 
@@ -847,13 +850,17 @@ class NetworkFailover:
             names = [s.name for s in services]
             undone = ""
             if self.store.original_order is not None and (
-                names[0] == self.preferred_service or names == self.store.original_order
+                (names[0] == self.preferred_service and preferred.enabled)
+                or names == self.store.original_order
             ):
                 self.store.original_order = None
                 undone = self._undo_enable(head=names[0])
                 self.store.save()
-            if names[0] != self.preferred_service:
-                outcome = _neither_side(names[0]) + undone
+            first_enabled = self._active_service(services)
+            if first_enabled is None:
+                outcome = "no switch: no enabled network service" + undone
+            elif first_enabled.name != self.preferred_service:
+                outcome = _neither_side(first_enabled.name) + undone
             else:
                 outcome = "no switch: already on the preferred network" + undone
             if undone:
@@ -1105,7 +1112,12 @@ class NetworkFailover:
         reason. attempt_failback cannot list it while paused without spending
         the subprocess the pause exists to save.
         """
-        if self.store.failback_paused and services and services[0].name == self.preferred_service:
+        first_enabled = self._active_service(services)
+        if (
+            self.store.failback_paused
+            and first_enabled is not None
+            and first_enabled.name == self.preferred_service
+        ):
             self.store.failback_paused = False
             self.store.save()
 

@@ -13,11 +13,19 @@ selected 211 of the application optimizer's 240 methods.
 | Failover displays called the first enabled service active, even when its probe showed it was unreachable. | Medium | The menu and CLI describe priority order explicitly, including the case with no enabled service. The reachability rows remain separate, and the App Store menu still shows its read-only state. |
 | Moving from Start at Login to the supervised installer could leave two desktop jobs. | Medium | The service installer refuses an existing or loaded standalone login agent before it replaces the bundle. The menu and installer use the same reservation to coordinate agent creation. The installation guide describes the migration. |
 | The fleet guide and security model denied sending probe results, even though incident messages carry reachability and DNS health summaries. | Medium | Both documents now describe the transmitted summaries and identify the detailed probe fields that stay local. |
+| A first inconclusive headless probe could send a healthy heartbeat and close an existing fleet incident. | Medium | Heartbeats stay unknown until a probe scores at the flap gate. A receiver fixture keeps the prior incident open and then observes inferred recovery on healthy evidence. |
+| Malformed config blocked removal of the headless KeepAlive job. | Medium | The CLI reaches uninstall using the fixed job label. It preserves the return code for confirmed removal or unload failure. |
+| Headless install equated successful bootstrap with a running monitor. | Medium | The installer checks the job for a PID within a bounded interval. It reports an unconfirmed start separately from successful launch. |
+| Start at Login stayed checked after stopping supervision. | Medium | The menu uses the supervision flag and explains how to re-enable the existing job without creating a second agent. |
+| A disabled preferred service at the front of the raw order could be reported as already active. | Medium | No-op decisions use the first enabled service and report a refusal when no service is enabled or a third service leads. |
 
 An injected regression run against the original source reproduced the two
 behavior defects. The same nine cases passed after the changes. The tests use
 synthetic LaunchAgent data and stubbed launchd queries. The optimizer retains
 the before/after receipts and source bindings in its local run record.
+An independent review of the first candidate found the five additional
+journey defects above. Eight further cases reproduced them against that
+candidate and passed on the repaired source.
 
 The synchronous menu-bar incident pipeline remains a High finding under the
 existing owner deferral. The ladder, unified log and escalation can still delay

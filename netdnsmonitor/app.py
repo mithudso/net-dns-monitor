@@ -794,14 +794,18 @@ def login_agent_path(label: str) -> str:
     return os.path.join(os.path.expanduser("~/Library/LaunchAgents"), f"{label}.plist")
 
 
-def login_item_installed() -> bool:
-    """True when either LaunchAgent is on disk. The service script's agent also
-    starts the app at login (while its supervision flag is set), so a checkmark
-    that ignored it would read "off" on a machine that starts the app anyway.
-    """
-    return any(
-        os.path.exists(login_agent_path(label))
-        for label in (LOGIN_AGENT_LABEL, SERVICE_AGENT_LABEL)
+def _service_support_dir() -> pathlib.Path:
+    return pathlib.Path.home() / "Library" / "Application Support" / "net-dns-monitor"
+
+
+def _service_supervision_enabled() -> bool:
+    return (_service_support_dir() / "supervise.enabled").exists()
+
+
+def login_item_enabled() -> bool:
+    """The installed supervisor can remain on disk even after the user stops it."""
+    return os.path.exists(login_agent_path(LOGIN_AGENT_LABEL)) or (
+        os.path.exists(login_agent_path(SERVICE_AGENT_LABEL)) and _service_supervision_enabled()
     )
 
 
@@ -833,17 +837,11 @@ def login_agent_plist(frozen: bool, executable: str, source_root: str) -> dict:
 def _install_login_agent(path: str) -> None:
     # Share the service installer's reservation so it cannot pass its legacy
     # agent check while the menu writes another login item.
-    reservation = (
-        pathlib.Path.home()
-        / "Library"
-        / "Application Support"
-        / "net-dns-monitor"
-        / "service-install.lock"
-    )
+    reservation = _service_support_dir() / "service-install.lock"
     reservation.parent.mkdir(parents=True, exist_ok=True)
     reservation.mkdir()
     try:
-        if login_item_installed():
+        if os.path.exists(path) or os.path.exists(login_agent_path(SERVICE_AGENT_LABEL)):
             return
         frozen = bool(getattr(sys, "frozen", False))
         executable = _bundle_executable() if frozen else sys.executable
@@ -1127,7 +1125,7 @@ class NetDnsMonitorApp(rumps.App):
         set_dock_icon("healthy")
 
         if self.capabilities.launch_agent_login_item:
-            self.menu["Start at Login"].state = login_item_installed()
+            self.menu["Start at Login"].state = login_item_enabled()
 
         # Built but never started here. Starting runs a root script behind the
         # macOS admin dialog, and __init__ runs on every launch and login: the
@@ -2323,7 +2321,7 @@ class NetDnsMonitorApp(rumps.App):
         """What the Settings window's checkboxes should show, read from the system."""
         consent = self.consent.granted() if self.consent is not None else False
         return {
-            "app_toggle_login": login_item_installed()
+            "app_toggle_login": login_item_enabled()
             if self.capabilities.launch_agent_login_item
             else False,
             "app_toggle_claude": consent,
@@ -3621,20 +3619,26 @@ class NetDnsMonitorApp(rumps.App):
         own = login_agent_path(LOGIN_AGENT_LABEL)
         service = login_agent_path(SERVICE_AGENT_LABEL)
         try:
-            if login_item_installed():
-                if os.path.exists(own):
-                    os.remove(own)
-                if os.path.exists(service):
+            if os.path.exists(own):
+                os.remove(own)
+            elif not os.path.exists(service):
+                _install_login_agent(own)
+            if os.path.exists(service):
+                if _service_supervision_enabled():
                     self._notify(
                         "Start at Login",
                         "Still on: net-dns-monitor-service installed its own login agent. "
                         "Run `net-dns-monitor-service uninstall` to remove it.",
                     )
-            else:
-                _install_login_agent(own)
+                else:
+                    self._notify(
+                        "Start at Login",
+                        "Off: supervised startup is stopped. Run "
+                        "`net-dns-monitor-service start` to turn it on.",
+                    )
         except OSError as exc:
             self._notify("Start at Login", f"Not changed ({type(exc).__name__}).")
-        sender.state = login_item_installed()
+        sender.state = login_item_enabled()
 
 
 STARTUP_FAILED_TITLE = "Net-DNS-Monitor could not start"
