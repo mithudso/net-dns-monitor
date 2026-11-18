@@ -1,7 +1,7 @@
 # net-dns-monitor — static and optional semantic retrieval maps
-> Source: repository worktree · remote URL omitted @ 911bfc7 dirty
-> Generated: 2026-11-12 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 279 enumerated / 0 deep-read / 279 shallow · partial: census only; no deep cards or executable inventory
+> Source: repository worktree · remote URL omitted @ cff5ff0 dirty
+> Generated: 2026-11-17 by crawl-repo-to-llms v1.2.0 (partial static adapter)
+> Census: 281 enumerated / 0 deep-read / 281 shallow · partial: census only; no deep cards or executable inventory
 
 Static high-signal paths live in docs/high_signal_file_index.json. [src: docs/high_signal_file_index.json#L1]
 Semantic tooling is developer-only and invokes an embedding service. [src: docs/MCP.md#L1]

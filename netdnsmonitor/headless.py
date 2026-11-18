@@ -30,6 +30,7 @@ probes, which is what happened; it does not know why.
 import contextlib
 import os
 import plistlib
+import re
 import signal
 import socket
 import subprocess
@@ -77,15 +78,16 @@ class HeadlessMonitor:
         self.log = log
         self.last_error: Optional[str] = None
         self.polls = 0
-        self.ticked = False
         self._open: Optional[dict] = None
         self._last_state = "healthy"
 
     def status(self) -> str:
-        """What the heartbeat says: unknown until a poll has finished."""
-        if not self.ticked:
-            return proto.STATUS_UNKNOWN
+        """Keep the initial heartbeat unknown until a probe scores at the gate."""
         gate = self.state_machine.flap_gate
+        # An inconclusive probe can leave the gate in its initial healthy state.
+        # Reporting it as healthy could close a pre-restart fleet incident.
+        if not (gate.consecutive_successes or gate.consecutive_failures):
+            return proto.STATUS_UNKNOWN
         return status_state(gate.state, gate.consecutive_failures)
 
     def step(self) -> None:
@@ -108,7 +110,6 @@ class HeadlessMonitor:
 
     def _poll(self) -> None:
         report = self.state_machine.tick()
-        self.ticked = True
         if report is not None:
             self._on_incident(report)
         elif self.failover is not None and self.failback_enabled:
@@ -385,6 +386,7 @@ def install_agent(
     start: bool = True,
     run_fn: Callable = subprocess.run,
     uid: Optional[int] = None,
+    sleep_fn: Optional[Callable[[float], None]] = None,
 ) -> str:
     """Write the LaunchAgent and (unless start is False) load it. Returns a line
     saying exactly what happened -- written, loaded, or why not.
@@ -401,10 +403,11 @@ def install_agent(
     if not start:
         return f"written: {path} (not loaded; it starts at next login)"
     domain = f"gui/{os.getuid() if uid is None else uid}"
+    target = f"{domain}/{AGENT_LABEL}"
     # bootout first so a reinstall picks up the new plist; its failure (not loaded
     # yet) is expected and ignored.
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        run_fn([LAUNCHCTL, "bootout", f"{domain}/{AGENT_LABEL}"], capture_output=True, timeout=20)
+        run_fn([LAUNCHCTL, "bootout", target], capture_output=True, timeout=20)
     try:
         result = run_fn(
             [LAUNCHCTL, "bootstrap", domain, path], capture_output=True, text=True, timeout=20
@@ -416,7 +419,26 @@ def install_agent(
             f"written: {path}; launchctl bootstrap exited {result.returncode}. "
             f"It will start at next login, or run: launchctl bootstrap {domain} {path}"
         )
-    return f"installed and running: {path}"
+    if _agent_has_pid(target, run_fn, sleep_fn or time.sleep):
+        return f"installed and running: {path}"
+    return f"loaded: {path}; running process not confirmed. Check {log_path}"
+
+
+def _agent_has_pid(target: str, run_fn: Callable, sleep_fn: Callable[[float], None]) -> bool:
+    # Bootstrap can return before launchd starts the executable. Check the
+    # actual job for a PID, giving it a bounded window to appear.
+    for attempt in range(3):
+        try:
+            result = run_fn([LAUNCHCTL, "print", target], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and re.search(
+                r"(?m)^[ \t]*pid[ \t]*=[ \t]*[1-9][0-9]*[ \t]*$", result.stdout or ""
+            ):
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if attempt < 2:
+            sleep_fn(0.5)
+    return False
 
 
 def _unload_agent(target: str, run_fn: Callable) -> Optional[str]:

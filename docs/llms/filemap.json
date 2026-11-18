@@ -336,6 +336,14 @@
     "provenance": "[src: \"docs/USER_INTERFACE.md\"#L1]"
   },
   {
+    "path": "docs/application-deep-optimizer-2026-11-17.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: \"docs/application-deep-optimizer-2026-11-17.md\"#L1]"
+  },
+  {
     "path": "docs/caching-and-optimization.md",
     "role": "docs",
     "importance": "high",
@@ -1830,6 +1838,14 @@
     "read_depth": "shallow",
     "purpose": "Filename-based test retrieval entry. [asserted]",
     "provenance": "[src: \"tests/test_ladder.py\"#L1]"
+  },
+  {
+    "path": "tests/test_launchd_supervisor_parity.py",
+    "role": "test",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based test retrieval entry. [asserted]",
+    "provenance": "[src: \"tests/test_launchd_supervisor_parity.py\"#L1]"
   },
   {
     "path": "tests/test_localize.py",

@@ -1,7 +1,7 @@
 # net-dns-monitor — infrastructure retrieval map
-> Source: repository worktree · remote URL omitted @ 911bfc7 dirty
-> Generated: 2026-11-12 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 279 enumerated / 0 deep-read / 279 shallow · partial: census only; no deep cards or executable inventory
+> Source: repository worktree · remote URL omitted @ cff5ff0 dirty
+> Generated: 2026-11-17 by crawl-repo-to-llms v1.2.0 (partial static adapter)
+> Census: 281 enumerated / 0 deep-read / 281 shallow · partial: census only; no deep cards or executable inventory
 
 - ".github/FUNDING.yml". [src: ".github/FUNDING.yml"#L1]
 - ".github/ISSUE_TEMPLATE/bug_report.md". [src: ".github/ISSUE_TEMPLATE/bug_report.md"#L1]

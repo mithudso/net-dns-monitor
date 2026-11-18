@@ -71,7 +71,7 @@ _BUSY = "no switch: another switch attempt is in progress"
 
 def _neither_side(head: str) -> str:
     return (
-        f"no switch: '{head}' is at the head of the order, "
+        f"no switch: '{head}' is first among enabled services, "
         "which is neither the preferred link nor a configured backup"
     )
 
@@ -648,8 +648,11 @@ class NetworkFailover:
         if target == BACKUP and service and services[0].name == service and services[0].enabled:
             return f"no switch: already on '{service}'"
         if target == PREFERRED and active_side == PREFERRED:
-            if services[0].name != self.preferred_service:
-                return _neither_side(services[0].name)
+            first_enabled = self._active_service(services)
+            if first_enabled is None:
+                return "no switch: no enabled network service"
+            if first_enabled.name != self.preferred_service:
+                return _neither_side(first_enabled.name)
             self._end_stale_pause(services)
             return "no switch: already on the preferred network"
 
@@ -667,8 +670,7 @@ class NetworkFailover:
         return outcome
 
     def snapshot(self) -> dict:
-        """What the menu bar shows: which side is live, and whether each side
-        can actually carry traffic right now.
+        """Read priority order and probe reachability for the configured services.
 
         Probes every configured interface at once, so this costs one probe
         deadline and a subprocess. Only ever called from an explicit user action
@@ -848,13 +850,17 @@ class NetworkFailover:
             names = [s.name for s in services]
             undone = ""
             if self.store.original_order is not None and (
-                names[0] == self.preferred_service or names == self.store.original_order
+                (names[0] == self.preferred_service and preferred.enabled)
+                or names == self.store.original_order
             ):
                 self.store.original_order = None
                 undone = self._undo_enable(head=names[0])
                 self.store.save()
-            if names[0] != self.preferred_service:
-                outcome = _neither_side(names[0]) + undone
+            first_enabled = self._active_service(services)
+            if first_enabled is None:
+                outcome = "no switch: no enabled network service" + undone
+            elif first_enabled.name != self.preferred_service:
+                outcome = _neither_side(first_enabled.name) + undone
             else:
                 outcome = "no switch: already on the preferred network" + undone
             if undone:
@@ -1055,8 +1061,12 @@ class NetworkFailover:
         matches = (
             bool(recorded) and set(recorded) == current_names and len(recorded) == len(services)
         )
+        enabled = {service.name for service in services if service.enabled}
+        recorded_first_enabled = (
+            next((name for name in recorded if name in enabled), None) if matches else None
+        )
         note = ""
-        if matches and recorded[0] not in self.backup_services:
+        if matches and recorded_first_enabled not in self.backup_services:
             new_order = recorded
         else:
             # A stale record cannot be applied without dropping or inventing a
@@ -1067,7 +1077,8 @@ class NetworkFailover:
             new_order = promote(services, self.preferred_service)
             if matches:
                 note = (
-                    " (the recorded pre-failover order starts with a backup, so the "
+                    " (the recorded pre-failover order would put a backup first among "
+                    "enabled services, so the "
                     "preferred link was promoted instead of an exact restore)"
                 )
             elif recorded:
@@ -1097,16 +1108,21 @@ class NetworkFailover:
         )
 
     def _end_stale_pause(self, services) -> None:
-        """End the manual-switch pause once the live order starts with the
-        preferred service again, for example after the user reordered by hand.
-        The backup the user chose no longer heads the service order, so the
-        pause has nothing left to hold.
+        """Clear the pause after the enabled preferred service leads the raw order.
+
+        A disabled backup can still lead the raw order and resume when enabled.
+        Skipping over it for routing priority does not end the user's pause.
 
         Called only where the order has already been listed for another
         reason. attempt_failback cannot list it while paused without spending
         the subprocess the pause exists to save.
         """
-        if self.store.failback_paused and services and services[0].name == self.preferred_service:
+        if (
+            self.store.failback_paused
+            and services
+            and services[0].enabled
+            and services[0].name == self.preferred_service
+        ):
             self.store.failback_paused = False
             self.store.save()
 

@@ -374,19 +374,22 @@ def test_unreadable_order_is_reported_not_invented():
 
 
 def test_three_rows_in_a_fixed_order():
-    """The answer to "which one am I on" has to be in the same place each time."""
+    """Show order and reachability as separate observations."""
     lines = build_failover_lines(snapshot())
     assert len(lines) == 3
-    assert lines[0].startswith("Active:")
+    assert lines[0].startswith("First enabled in service order: AX88179B")
     assert "Preferred:" in lines[1]
     assert "Backup:" in lines[2]
 
 
-def test_the_live_side_is_marked_and_the_other_is_not():
+def test_the_first_enabled_service_is_marked_even_if_unreachable():
     on_preferred = build_failover_lines(snapshot(active_side="preferred"))
     assert on_preferred[1].startswith("●") and on_preferred[2].startswith("○")
     on_backup = build_failover_lines(snapshot(active_side="backup"))
     assert on_backup[1].startswith("○") and on_backup[2].startswith("●")
+    unreachable = build_failover_lines(snapshot(preferred=dict(PREFERRED_ROW, reachable=False)))
+    assert unreachable[0].startswith("First enabled in service order: AX88179B")
+    assert "unreachable" in unreachable[1]
 
 
 def test_a_third_service_at_the_head_fills_neither_marker():

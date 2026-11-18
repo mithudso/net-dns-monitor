@@ -99,12 +99,14 @@ Names must match `networksetup -listnetworkserviceorder` exactly; a name that
 doesn't match is reported as a failure listing the names that do exist, and
 nothing is reordered.
 
-**Menu bar controls.** Three indicator rows show which service is carrying
-traffic (`●`) and which is not (`○`), each with its device and whether it can
-actually reach anything right now:
+**Menu bar controls.** The first row names the first enabled service in macOS
+priority order. A filled marker (`●`) identifies that service when it is one of
+the configured sides. The preferred and backup rows show probe reachability
+separately. Check the live default route if you need to know which link is
+carrying traffic.
 
 ```
-Active: Wi-Fi — failover is automatic
+First enabled in service order: Wi-Fi — failover is automatic
 ○ Preferred: AX88179B (en6) — unreachable
 ● Backup: Wi-Fi (en0) — reachable
 Switch to backup now

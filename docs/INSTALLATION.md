@@ -33,6 +33,16 @@ is unhealthy.
 
 ## Upgrade and uninstall
 
+To move from the menu bar's **Start at Login** to the supervised service, turn
+off the menu item first. If the standalone agent was loaded earlier in this
+session, log out and back in before installing the supervised service. Its
+installer refuses to replace the bundle or register a second job while the
+standalone agent is installed or loaded.
+
+With the supervised service installed, **Start at Login** reflects whether
+supervision is enabled. A stopped supervisor leaves the box unchecked. Use
+`net-dns-monitor-service start` to re-enable its startup job.
+
 ```bash
 NDM_SOURCE_BUNDLE=dist/Net-DNS-Monitor.app scripts/net-dns-monitor-service update
 scripts/net-dns-monitor-service uninstall
@@ -47,7 +57,7 @@ build keeps everything in `~/Library/Containers/<bundle id>/`.
 
 `start.sh` and `install.sh` reserve `.netdns-build.lock` in the checkout and
 `startup.lock` under the user's Application Support directory. The service
-wrapper reserves `service-install.lock`; the optional indexer installer reserves
+wrapper and the **Start at Login** writer share `service-install.lock`; the optional indexer installer reserves
 its plist's `.install.lock`. A concurrent owner causes a refusal. Normal exits
 remove only reservations created by that invocation. An abrupt `SIGKILL` can
 leave an empty directory reservation behind.

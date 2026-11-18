@@ -201,3 +201,11 @@ Prompt scope from the owner, preserved by the selected resume coordinator:
 > Run repo-bootstrapper and code-deep-optimizer on exactly skills-explorer, mdb-expertise-search, net-dns-monitor, storytui and skills-tui using agent fan-out.
 
 This checkout owns only NetDNS. The parent receipt retains the exact full request.
+
+## v25 - 2026-11-17 - Application deep optimizer
+
+Delta: 1
+
+Prompt:
+
+> run the application deep optimizer on this repo

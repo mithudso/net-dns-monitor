@@ -137,13 +137,6 @@ Measured, reproducible, and currently unfixed.
   line `[net-dns-monitor] no log evidence: log show timed out after 10s (lookback
   30m)` instead of excerpts. The default `5m` measured 2.25s.
 
-- **The failover indicator can name a dead adapter as active.** The "Active:"
-  row shows the head of the network *service order*
-  (`NetworkFailover.snapshot()["active_service"]`), not the live default route.
-  On this machine the order leads with an unplugged adapter while traffic goes out
-  a lower-priority one, and the indicator says the unplugged one is active.
-  Nothing decides on this row, but it reads as wrong to anyone checking.
-
 - **`external_targets: []` gives a permanent `unclassified` state.** With no
   external target, the prober reports `external_reachable: None`, so every tick
   classifies as `unclassified`. If DNS is positively healthy, the state machine
@@ -200,13 +193,6 @@ Measured, reproducible, and currently unfixed.
   content (the results pane) can sit off screen. The fix moves the content into an
   `NSScrollView`. That change needs a manual visual check, which the suite cannot
   do.
-- **Failback from a record taken with a third service at the head says "failed
-  back to preferred".** `NetworkFailover._do_failback` restores the recorded
-  pre-failover order when it still matches the current services and does not
-  start with a backup. If a third service (neither preferred nor a backup) led
-  that record, failback puts that service back at the head. The outcome still
-  reads `ok: ... (failed back to preferred '<preferred>')`.
-
 ## Decided
 
 Owner decisions that are now implemented, with what they leave open.
@@ -258,6 +244,14 @@ Owner decisions that are now implemented, with what they leave open.
 
 Earlier revisions of this file listed these. They no longer apply.
 
+- Failover status labeled the first enabled service as "Active". The menu and
+  CLI now name the service's priority and show reachability separately. The
+  snapshot retains the compatibility key `active_service`.
+- Restoring a recorded service order headed by a third service now names the
+  restored head. It reports that the configured preferred service was not promoted.
+- The supervised installer could start a second monitor after **Start at Login**
+  had registered its own agent. It now refuses while that agent is installed or
+  loaded. See [Installation](INSTALLATION.md) for the migration.
 - `log_watcher` returned `[]` on a timeout, indistinguishable from "no errors
   found". Fixed in `b07eee5`: it now returns the `no log evidence` sentinel line.
 - `renew_dhcp_lease` and `toggle_network_service` were listed as doing nothing.
@@ -279,18 +273,6 @@ Each was re-checked against the code on 2026-09-14.
   a `router/` stack client would go to a closed port. `unbound/install.sh`
   flushes the anchor `com.apple/unbound_dns` and loads nothing into it. Whether
   to delete or fix the file belongs to the router-stack owner decision above.
-- **Two LaunchAgents can start the app at login.** The menu's Start at Login
-  item writes `~/Library/LaunchAgents/com.netdnsmonitor.plist`
-  (`app.LOGIN_AGENT_LABEL`, `RunAtLoad` true). `net-dns-monitor-service install`
-  writes `com.mitchhudson.net-dns-monitor.plist` (`app.SERVICE_AGENT_LABEL`).
-  The app recognises both: `login_item_installed` shows the item as on when
-  either file exists, and `toggle_login` does not add its own agent while the
-  service agent exists. The service script does not know the other label. If
-  Start at Login was turned on first and the service is installed afterwards,
-  both agents exist and launchd starts two copies at login. The app has no
-  single-instance guard. `net-dns-monitor-service status` warns about copies it
-  finds with `pgrep -x Net-DNS-Monitor`. UNVERIFIED: whether that matches a
-  source-run copy started by the `com.netdnsmonitor` agent.
 - **`netdns failover backup|preferred` and `netdns priority --promote` rewrite
   the service order without `--yes`.** `cli.cmd_run` refuses a catalogue
   command marked `mutates` unless `--yes` is given. `cli.cmd_failover` calls

@@ -12,6 +12,7 @@ import plistlib
 import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -510,6 +511,21 @@ def test_turning_login_off_removes_the_agent(tmp_path):
     assert sender.state is False
 
 
+def test_start_at_login_does_not_create_an_agent_during_service_install(tmp_path):
+    support = Path.home() / "Library" / "Application Support" / "net-dns-monitor"
+    reservation = support / "service-install.lock"
+    reservation.mkdir(parents=True)
+    app = build_app(tmp_path)
+    sender = Sender()
+
+    app.toggle_login(sender)
+
+    assert not os.path.exists(login_agent_path(LOGIN_AGENT_LABEL))
+    assert reservation.is_dir()
+    assert sender.state is False
+    assert any("Not changed" in message for _, message in app.notes)
+
+
 def test_a_failed_write_leaves_the_item_unchecked_and_says_why(tmp_path):
     """The checkmark used to flip before the write, so a failure left it on."""
     app = build_app(tmp_path)
@@ -536,6 +552,9 @@ def test_the_service_scripts_agent_counts_as_on_and_is_not_removed(tmp_path):
     os.makedirs(os.path.dirname(service), exist_ok=True)
     with open(service, "wb") as f:
         plistlib.dump({"Label": SERVICE_AGENT_LABEL}, f)
+    flag = Path.home() / "Library" / "Application Support" / "net-dns-monitor" / "supervise.enabled"
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.touch()
 
     app = build_app(tmp_path)
     assert app.menu["Start at Login"].state
@@ -546,6 +565,22 @@ def test_the_service_scripts_agent_counts_as_on_and_is_not_removed(tmp_path):
     assert os.path.exists(service)
     assert sender.state is True
     assert any("net-dns-monitor-service uninstall" in message for _s, message in app.notes)
+
+
+def test_stopped_supervision_shows_login_off_without_installing_a_second_job(tmp_path):
+    service = Path(login_agent_path(SERVICE_AGENT_LABEL))
+    service.parent.mkdir(parents=True)
+    service.write_bytes(plistlib.dumps({"Label": SERVICE_AGENT_LABEL}))
+    app = build_app(tmp_path)
+    assert not app.menu["Start at Login"].state
+    sender = Sender()
+
+    app.toggle_login(sender)
+
+    assert service.is_file()
+    assert not Path(login_agent_path(LOGIN_AGENT_LABEL)).exists()
+    assert sender.state is False
+    assert any("net-dns-monitor-service start" in message for _, message in app.notes)
 
 
 def test_a_frozen_app_starts_its_own_bundle_executable():

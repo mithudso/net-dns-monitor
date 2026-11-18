@@ -464,3 +464,44 @@ verify its final checks, merge state and remote content before repeating work.
 The external task receipt retains exact heads, checks, content proof and cleanup.
 
 Fresh source-equivalent macOS CI on 911bfc7 passed 3191 cases with two headless graph skips (run43284421759). All 22 local UDP/Foundation holds were exercised. Final PR41 head checks remain the delivery gate; this entry does not activate or synchronize the protected original checkout.
+
+## v25 - 2026-11-17 - Application deep optimizer
+
+Delta: 4
+
+TASK-429 covers the menu bar, CLI, incident handoffs, App Store, headless and
+fleet workflows, the router boundary, and the fresh checkout and deployment
+journeys. The optimizer frozen plan has 11 journey cells and 211 selected
+methods of 240. The baseline is `cff5ff0`. The synchronous GUI incident
+pipeline remains owner-deferred. Live services, router, credentials, index,
+and model activity are excluded from verification. The baseline remote
+macOS job failed while trying to fetch a private development dependency
+(https://github.com/mithudso/net-dns-monitor/actions/runs/43596434375).
+The repair changes priority labels in the menu and CLI, coordinates the
+standalone and supervised login writers, restores public development setup,
+and corrects the fleet disclosure of health summaries. The nine targeted
+cases reproduced the two behavior defects and pass on the repaired source.
+The first full run exposed one console assertion for the old wording. That
+assertion now checks the new priority label. Fresh isolated CLI help, empty
+fleet status and unconfigured failover were exercised without live writes.
+
+Independent source review of `50da7fa` caught five further defects in
+headless heartbeat, install/uninstall, supervised login status, and disabled
+preferred service handling. Eight focused cases reproduced these defects on
+that candidate and passed after the repairs. The fresh collection has
+3207 cases, including the optional parity comparison.
+
+The second source review caught a manual failback pause regression and a
+pre-existing exact-restore bug. A temporarily disabled raw-head backup
+keeps its pause. When an exact restoration would prioritize a backup,
+failback promotes the enabled preferred service. Two targeted tests now
+replay those cases against the candidate and the final source.
+
+The synchronous incident pipeline remains owner-deferred. The public privacy
+notice also needs a coordinated cross-repository update. Live GUI, privilege
+changes, delivery, signed App Store and two-Mac fleet runs remain unverified.
+The application review is in docs/application-deep-optimizer-2026-11-17.md.
+Next: inspect the final local and remote verification receipts and confirm
+the merged tree. Resume the remaining application evidence from the versioned
+local run record (run 2026-11-17.BaXUDj) when the needed operating environment
+or owner decisions are available.

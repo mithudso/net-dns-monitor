@@ -1,7 +1,7 @@
 # net-dns-monitor — complete source census with shallow cards
-> Source: repository worktree · remote URL omitted @ 911bfc7 dirty
-> Generated: 2026-11-12 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 279 enumerated / 0 deep-read / 279 shallow · partial: census only; no deep cards or executable inventory
+> Source: repository worktree · remote URL omitted @ cff5ff0 dirty
+> Generated: 2026-11-17 by crawl-repo-to-llms v1.2.0 (partial static adapter)
+> Census: 281 enumerated / 0 deep-read / 281 shallow · partial: census only; no deep cards or executable inventory
 
 - ".editorconfig" | source | ordinary | shallow. [src: ".editorconfig"#L1] Role and importance are retrieval hints. [asserted]
 - ".env.example" | source | ordinary | shallow. [src: ".env.example"#L1] Role and importance are retrieval hints. [asserted]
@@ -45,6 +45,7 @@
 - "docs/SECURITY.md" | docs | high | shallow. [src: "docs/SECURITY.md"#L1] Role and importance are retrieval hints. [asserted]
 - "docs/TESTING.md" | docs | high | shallow. [src: "docs/TESTING.md"#L1] Role and importance are retrieval hints. [asserted]
 - "docs/USER_INTERFACE.md" | docs | ordinary | shallow. [src: "docs/USER_INTERFACE.md"#L1] Role and importance are retrieval hints. [asserted]
+- "docs/application-deep-optimizer-2026-11-17.md" | docs | ordinary | shallow. [src: "docs/application-deep-optimizer-2026-11-17.md"#L1] Role and importance are retrieval hints. [asserted]
 - "docs/caching-and-optimization.md" | docs | high | shallow. [src: "docs/caching-and-optimization.md"#L1] Role and importance are retrieval hints. [asserted]
 - "docs/code-deep-optimizer-2026-10-05.md" | docs | ordinary | shallow. [src: "docs/code-deep-optimizer-2026-10-05.md"#L1] Role and importance are retrieval hints. [asserted]
 - "docs/code-deep-optimizer-2026-11-12.md" | docs | high | shallow. [src: "docs/code-deep-optimizer-2026-11-12.md"#L1] Role and importance are retrieval hints. [asserted]
@@ -232,6 +233,7 @@
 - "tests/test_indexer_scripts.py" | test | ordinary | shallow. [src: "tests/test_indexer_scripts.py"#L1] Role and importance are retrieval hints. [asserted]
 - "tests/test_interface_probe.py" | test | ordinary | shallow. [src: "tests/test_interface_probe.py"#L1] Role and importance are retrieval hints. [asserted]
 - "tests/test_ladder.py" | test | ordinary | shallow. [src: "tests/test_ladder.py"#L1] Role and importance are retrieval hints. [asserted]
+- "tests/test_launchd_supervisor_parity.py" | test | ordinary | shallow. [src: "tests/test_launchd_supervisor_parity.py"#L1] Role and importance are retrieval hints. [asserted]
 - "tests/test_localize.py" | test | ordinary | shallow. [src: "tests/test_localize.py"#L1] Role and importance are retrieval hints. [asserted]
 - "tests/test_log_watcher.py" | test | ordinary | shallow. [src: "tests/test_log_watcher.py"#L1] Role and importance are retrieval hints. [asserted]
 - "tests/test_maintenance_app_regressions.py" | test | high | shallow. [src: "tests/test_maintenance_app_regressions.py"#L1] Role and importance are retrieval hints. [asserted]
