@@ -505,3 +505,19 @@ Next: inspect the final local and remote verification receipts and confirm
 the merged tree. Resume the remaining application evidence from the versioned
 local run record (run 2026-11-17.BaXUDj) when the needed operating environment
 or owner decisions are available.
+
+## v26 - 2026-11-18 - Todoist Automations MCP
+
+Delta: 2
+
+Registered `todoist` with `https://ai.todoist.net/mcp/automations` over
+Streamable HTTP in the local user profiles for Codex, Claude Code,
+Antigravity, Copilot CLI, and Copilot in VS Code. The installed commands
+for the four CLI clients recognized the exact endpoint. The VS Code user
+profile parsed with a matching entry. The endpoint answered an unauthenticated
+MCP initialize request with HTTP 401 and published Todoist OAuth metadata.
+Codex and Claude Code reported that sign-in was pending.
+
+Remaining: approve Todoist access in the clients that will use it, then verify
+authenticated tool discovery. VS Code runtime discovery remains unverified.
+Stele tracks configuration in TASK-451 and verification in TASK-449.
