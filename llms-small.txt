@@ -1,7 +1,7 @@
 # net-dns-monitor — small retrieval guide
-> Source: repository worktree · remote URL omitted @ 870e5cf dirty
+> Source: repository worktree · remote URL omitted @ b0ec7b8 dirty
 > Generated: 2026-11-18 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 295 enumerated / 0 deep-read / 295 shallow · partial: census only; no deep cards or executable inventory
+> Census: 296 enumerated / 0 deep-read / 296 shallow · partial: census only; no deep cards or executable inventory
 
 - Product/setup: README.md. [src: README.md#L1]
 - Agent constraints and verification: CLAUDE.md. [src: CLAUDE.md#L1]

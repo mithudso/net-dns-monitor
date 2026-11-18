@@ -333,3 +333,9 @@ steps[4]:
 Delta: 1
 
 It's set
+
+## v31 - 2026-11-18 - AdSense storefront verification
+
+Delta: 1
+
+Add these adsense code pieces to the site: "/Users/mitch/Library/Containers/com.wiheads.paste/Data/tmp/images/Google Chrome Beta 2026-11-18 17.30.24.heic" "/Users/mitch/Library/Containers/com.wiheads.paste/Data/tmp/images/Google Chrome Beta 2026-11-18 17.30.19.heic" "/Users/mitch/Library/Containers/com.wiheads.paste/Data/tmp/images/Google Chrome Beta 2026-11-18 17.30.12.heic"

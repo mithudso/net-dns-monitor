@@ -9,6 +9,8 @@ const SECURITY = {
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
 };
+const HOME_CSP = SECURITY["Content-Security-Policy"] +
+  "; script-src https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";
 const ORDER_KEY = /^[0-9a-f]{64}$/;
 const PACKAGE_KEY = /^(free|premium)\/Net-DNS-Monitor-[A-Za-z0-9.-]+\.zip$/;
 
@@ -87,7 +89,7 @@ async function home(request, env) {
     page = page.replace('<span class="small">Waiting for Apple review.</span>',
       `<a class="button outline" href="${env.APP_STORE_URL}">View on the Mac App Store</a>`);
   }
-  return html(request.method === "HEAD" ? null : page);
+  return html(request.method === "HEAD" ? null : page, 200, { "Content-Security-Policy": HOME_CSP });
 }
 
 function hex(bytes) {
@@ -250,7 +252,7 @@ export function handler(fetcher = fetch) {
     const read = method === "GET" || method === "HEAD";
     if (url.origin !== origin) {
       if (read && url.hostname === `www.${new URL(origin).hostname}` &&
-          ["/", "/privacy", "/privacy/"].includes(url.pathname)) {
+          ["/", "/ads.txt", "/privacy", "/privacy/"].includes(url.pathname)) {
         return Response.redirect(`${origin}${url.pathname}`, 308);
       }
       return text("Not found", 404);
@@ -271,6 +273,7 @@ export function handler(fetcher = fetch) {
           if (read) return Response.redirect(`${origin}/privacy/`, 308);
           break;
         case "/privacy/":
+        case "/ads.txt":
         case "/site.css":
         case "/favicon.png":
           if (read) {
