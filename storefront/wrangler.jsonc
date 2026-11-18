@@ -1,0 +1,42 @@
+{
+  "name": "netdnsmonitor-storefront",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-18",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "netdnsmonitor.com", "custom_domain": true },
+    { "pattern": "www.netdnsmonitor.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "force-trailing-slash"
+  },
+  "d1_databases": [
+    {
+      "binding": "ORDERS",
+      "database_name": "netdnsmonitor-orders",
+      "database_id": "d2d2eda8-8cda-470a-ae40-87e191410893"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "netdnsmonitor-downloads" }
+  ],
+  "ratelimits": [
+    { "name": "CHECKOUT_LIMIT", "namespace_id": "48191072", "simple": { "limit": 12, "period": 60 } }
+  ],
+  "vars": {
+    "STORE_URL": "https://netdnsmonitor.com",
+    "PREMIUM_CENTS": "2900",
+    "BILLING_MODE": "live",
+    "FREE_RELEASE": "free/Net-DNS-Monitor-Free-1.0.zip",
+    "PREMIUM_RELEASE": "premium/Net-DNS-Monitor-Premium-1.0.zip",
+    "APP_STORE_URL": "",
+    "STRIPE_PRICE_ID": "",
+    "STRIPE_AUTOMATIC_TAX": "false",
+    "ENABLE_PAYPAL": "false",
+    "ENABLE_VENMO": "false"
+  }
+}

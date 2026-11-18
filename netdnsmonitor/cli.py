@@ -23,7 +23,7 @@ from typing import Callable, Optional
 
 import yaml
 
-from netdnsmonitor import privileges
+from netdnsmonitor import distribution, privileges
 from netdnsmonitor.classifier import classify
 from netdnsmonitor.commands import BY_KEY, CATALOG, missing_placeholder, resolve
 from netdnsmonitor.config import load_config
@@ -378,6 +378,10 @@ def cmd_status(
 
 
 def cmd_failover(args, config, out, context: Optional[tuple] = None) -> int:
+    caps = distribution.detect()
+    if caps.is_free and args.action != "status":
+        out(caps.unavailable("network_order_write", "switching networks"))
+        return 2
     _, _, failover, _ = context or build_context(config)
     if failover is None:
         out(render_failover_status(None))
@@ -396,6 +400,10 @@ def cmd_failover(args, config, out, context: Optional[tuple] = None) -> int:
 
 
 def cmd_priority(args, config, out) -> int:
+    caps = distribution.detect()
+    if caps.is_free and args.promote:
+        out(caps.unavailable("network_order_write", "changing network service priority"))
+        return 2
     _, _, _, run_fn = build_context(config)
     services = list_services(run_fn)
     if not services:
@@ -440,6 +448,10 @@ def cmd_ladder(
     failover_configured: Optional[bool] = None,
     executor: Optional[Callable] = None,
 ) -> int:
+    caps = distribution.detect()
+    if caps.is_free and args.repair:
+        out(caps.unavailable("network repairs"))
+        return 2
     injected = executor is not None
     if executor is None:
         if failover_configured is None:
@@ -490,6 +502,10 @@ def cmd_run(args, config, out, run_fn: Callable = subprocess.run) -> int:
     if command is None:
         out(f"unknown command '{args.key}'. Known: " + ", ".join(BY_KEY))
         return 2
+    caps = distribution.detect()
+    if caps.is_free and command.mutates:
+        out(caps.unavailable("network repairs", f"running {command.key}"))
+        return 2
     missing = missing_placeholder(args.key, **dict(args.value or []))
     if missing:
         out(f"'{args.key}' needs a {missing}: pass --value {missing}=<x>")
@@ -520,6 +536,10 @@ def cmd_guide(args, config, out) -> int:
 
 
 def cmd_console(args, config, out) -> int:
+    caps = distribution.detect()
+    if caps.is_free:
+        out(caps.unavailable("shell_console", "the interactive console"))
+        return 2
     from netdnsmonitor.cli_console import run_console
 
     return run_console(config, out=out)

@@ -28,7 +28,9 @@ Detection reads the environment only, so it is a pure function of its input
 and testable offline. The sandbox sets APP_SANDBOX_CONTAINER_ID for every
 sandboxed process. NETDNS_DISTRIBUTION=appstore forces the App Store behaviour
 outside the sandbox, which is how the gated paths get exercised during
-development without building and signing a bundle.
+development without building and signing a bundle. NETDNS_DISTRIBUTION=free
+exercises the read-only edition. A Free package has its edition stamped in
+source so a stale environment or network configuration cannot enable repairs.
 """
 
 import os
@@ -36,13 +38,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 
+from netdnsmonitor._direct_edition import EDITION
+
 SANDBOX_ENV = "APP_SANDBOX_CONTAINER_ID"
 OVERRIDE_ENV = "NETDNS_DISTRIBUTION"
 
 APP_STORE = "appstore"
 DIRECT = "direct"
+FREE = "free"
 
 UNAVAILABLE_PREFIX = "UNAVAILABLE_IN_APP_STORE_BUILD"
+FREE_UNAVAILABLE_PREFIX = "UNAVAILABLE_IN_FREE_EDITION"
 
 # One sentence per feature, phrased as the reason rather than an apology, so the
 # report tells IT what was not attempted and why.
@@ -89,32 +95,40 @@ class Capabilities:
     def is_app_store(self) -> bool:
         return self.distribution == APP_STORE
 
+    @property
+    def is_free(self) -> bool:
+        return self.distribution == FREE
+
+    def unavailable(self, feature: str, detail: Optional[str] = None) -> str:
+        if self.is_free:
+            what = detail or feature.replace("_", " ")
+            return f"{FREE_UNAVAILABLE_PREFIX}: Premium required for {what}. Nothing was changed."
+        return unavailable(feature, detail)
+
 
 def detect(env: Optional[Mapping[str, str]] = None) -> Capabilities:
     env = os.environ if env is None else env
     sandboxed = bool(env.get(SANDBOX_ENV))
     forced = str(env.get(OVERRIDE_ENV, "")).strip().lower()
-    if forced not in ("", APP_STORE, DIRECT):
-        # An unrecognised value must not silently re-enable root-requiring
-        # features, and must not silently disable them on a direct build either.
-        # Falling back to what the process actually is keeps both honest.
-        forced = ""
-    app_store = sandboxed or forced == APP_STORE
+    free = EDITION == FREE or forced == FREE
+    app_store = sandboxed or (forced == APP_STORE and not free)
     # The override cannot turn a sandboxed process back into the direct build:
     # the sandbox would refuse the calls whatever this module said.
     full = not app_store
+    can_change_network = full and not free
+    edition = APP_STORE if app_store else FREE if free else DIRECT
     return Capabilities(
-        distribution=APP_STORE if app_store else DIRECT,
+        distribution=edition,
         sandboxed=sandboxed,
-        shell_console=full,
-        privileged_repairs=full,
-        network_order_write=full,
+        shell_console=can_change_network,
+        privileged_repairs=can_change_network,
+        network_order_write=can_change_network,
         unified_log=full,
-        router=full,
+        router=can_change_network,
         launch_agent_login_item=full,
         credentials_from_keychain=True,
         requires_ai_consent=app_store,
-        remediation_editor=full,
+        remediation_editor=can_change_network,
         fleet_reporting=full,
     )
 
@@ -150,4 +164,6 @@ def unavailable(feature: str, detail: Optional[str] = None) -> str:
 
 
 def is_unavailable(outcome: object) -> bool:
-    return isinstance(outcome, str) and outcome.startswith(UNAVAILABLE_PREFIX)
+    return isinstance(outcome, str) and outcome.startswith(
+        (UNAVAILABLE_PREFIX, FREE_UNAVAILABLE_PREFIX)
+    )

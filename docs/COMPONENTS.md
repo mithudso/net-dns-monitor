@@ -388,12 +388,21 @@ The sudoers grant: builds and validates `/etc/sudoers.d/net-dns-monitor` (`sudoe
 
 ### `netdnsmonitor/distribution.py`
 
-`detect` returns `Capabilities` for this process: the store build (sandboxed, or `NETDNS_DISTRIBUTION=appstore`) switches off six features and requires AI consent. `unavailable` builds the fixed `UNAVAILABLE_IN_APP_STORE_BUILD` outcome text.
+`detect` returns `Capabilities` for this process. The App Store edition disables features the sandbox cannot support and requires AI consent. Direct Free keeps diagnostics and logging while disabling repairs, network service writes, the router and the shell console. Direct Premium keeps the full direct feature set. `Capabilities.unavailable` identifies the edition in a refusal.
 
-- **Used by:** `app` (`Capabilities`, `detect`, `unavailable`).
-- **Imports:** package: none.
+- **Used by:** `app`, `alert`, `cli` and `headless` (edition detection and capability gates).
+- **Imports:** package: `_direct_edition`.
 - **Side effects:** Reads the environment through `env`.
-- **Tests:** `tests/test_app_appstore_wiring.py`, `tests/test_app_settings_wiring.py`, `tests/test_distribution.py`, `tests/test_repair_executor.py`.
+- **Tests:** `tests/test_app_appstore_wiring.py`, `tests/test_app_settings_wiring.py`, `tests/test_cli.py`, `tests/test_distribution.py`, `tests/test_repair_executor.py`.
+
+### `netdnsmonitor/_direct_edition.py`
+
+Supplies the direct edition marker. The release builder sets the value for each website package and the bundled module carries it into the locally built app.
+
+- **Used by:** `distribution` (`EDITION`).
+- **Imports:** None.
+- **Side effects:** None.
+- **Tests:** `tests/test_distribution.py`.
 
 ## Menu bar app and windows
 

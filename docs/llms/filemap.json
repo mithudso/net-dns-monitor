@@ -608,6 +608,14 @@
     "provenance": "[src: git]"
   },
   {
+    "path": "netdnsmonitor/_direct_edition.py",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"netdnsmonitor/_direct_edition.py\"#L1]"
+  },
+  {
     "path": "netdnsmonitor/ai_consent.py",
     "role": "source",
     "importance": "high",
@@ -1368,6 +1376,14 @@
     "provenance": "[src: \"scripts/appstore/shoot_screenshots.py\"#L1]"
   },
   {
+    "path": "scripts/build_direct_release.py",
+    "role": "tooling",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based tooling retrieval entry. [asserted]",
+    "provenance": "[src: \"scripts/build_direct_release.py\"#L1]"
+  },
+  {
     "path": "scripts/check_docs.py",
     "role": "tooling",
     "importance": "high",
@@ -1470,6 +1486,86 @@
     "read_depth": "shallow",
     "purpose": "Filename-based source retrieval entry. [asserted]",
     "provenance": "[src: \"setup.py\"#L1]"
+  },
+  {
+    "path": "storefront/README.md",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/README.md\"#L1]"
+  },
+  {
+    "path": "storefront/migrations/0001_orders.sql",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/migrations/0001_orders.sql\"#L1]"
+  },
+  {
+    "path": "storefront/payments.mjs",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/payments.mjs\"#L1]"
+  },
+  {
+    "path": "storefront/public/favicon.png",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/favicon.png\"#L1]"
+  },
+  {
+    "path": "storefront/public/index.html",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/index.html\"#L1]"
+  },
+  {
+    "path": "storefront/public/privacy.html",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/privacy.html\"#L1]"
+  },
+  {
+    "path": "storefront/public/site.css",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/site.css\"#L1]"
+  },
+  {
+    "path": "storefront/worker.mjs",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/worker.mjs\"#L1]"
+  },
+  {
+    "path": "storefront/worker.test.mjs",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/worker.test.mjs\"#L1]"
+  },
+  {
+    "path": "storefront/wrangler.jsonc",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/wrangler.jsonc\"#L1]"
   },
   {
     "path": "tests/__init__.py",

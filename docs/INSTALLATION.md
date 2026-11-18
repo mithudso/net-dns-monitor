@@ -1,9 +1,10 @@
 # Installation
 
-Choose one of three ways to run the app.
+Choose the installation path for your edition.
 
 | Way | For | Guide |
 |---|---|---|
+| Direct download, Free or Premium | Build and run on your Mac with the edition selected by the package | [Net DNS Monitor](https://netdnsmonitor.com) and the package's `START-HERE.md` |
 | Direct build, supervised LaunchAgent | Daily use on your own Mac, with every feature | [HOWTO.md](../HOWTO.md) → Installation, then `./scripts/install.sh` |
 | From source | Development | [DEVELOPMENT.md](DEVELOPMENT.md) |
 | Mac App Store build | Distribution through the store (reduced edition) | [APP_STORE_SUBMISSION.md](APP_STORE_SUBMISSION.md) |
@@ -13,6 +14,26 @@ Choose one of three ways to run the app.
 - macOS on Apple silicon. macOS 26 or later for the store build (`LSMinimumSystemVersion` 26.0, set by `scripts/appstore/build_appstore.py`).
 - Python 3.13. `scripts/install.sh` and `scripts/start.sh` refuse older versions.
 - Xcode 26 or later, only for the Mac App Store build.
+
+## Website downloads
+
+The website ZIPs contain complete source packages. Each runs the same setup
+script on the buyer's Mac using Python 3.13 and first-run internet access.
+Free records incidents and runs diagnostics. Premium can also run repairs.
+Premium's elevated repairs need permissions. Automatic failover requires
+configured services and is off by default.
+
+To assemble both packages for distribution, run this from the checkout root
+and specify a fresh artifact directory.
+
+```bash
+python3 scripts/build_direct_release.py /path/to/release-artifacts
+```
+
+The script reads the checked-out application sources and a public sample
+configuration. Each ZIP includes setup instructions and the MIT license.
+The script prints the package checksums. Keep the Premium ZIP in private
+storage for delivery after checkout.
 
 ## Verify an install
 

@@ -596,7 +596,7 @@ def build_state_machine(
         # unavailable_fn makes the two root steps say why they did nothing.
         privilege_options = {
             "is_granted_fn": lambda: False,
-            "unavailable_fn": lambda what: distribution.unavailable("privileged_repairs", what),
+            "unavailable_fn": lambda what: capabilities.unavailable("privileged_repairs", what),
         }
 
     if capabilities.network_order_write:
@@ -606,14 +606,21 @@ def build_state_machine(
         # this build either way, and "not configured" would send someone to
         # config.yaml to fix something that no setting can fix.
         def failover_fn(_classification: str) -> str:
-            return distribution.unavailable(
+            return capabilities.unavailable(
                 "network_order_write", "switching to the backup network"
             )
 
+    if capabilities.is_free:
+        # A supplied editable store can override a check with arbitrary code.
+        # The monitoring edition runs only the shipped read-only diagnostics.
+        remediation_store = None
     repair_executor = make_repair_executor(
         failover_fn=failover_fn,
         store=remediation_store,
         script_timeout=config.get("remediation_script_timeout_seconds", 60),
+        repairs_unavailable=capabilities.unavailable("network repairs")
+        if capabilities.is_free
+        else None,
         **privilege_options,
     )
 
@@ -2543,7 +2550,7 @@ class NetDnsMonitorApp(rumps.App):
             return [
                 (
                     "Elevated permissions",
-                    distribution.unavailable("privileged_repairs", "elevated permissions"),
+                    self.capabilities.unavailable("privileged_repairs", "elevated permissions"),
                 )
             ]
         return privileges.status_rows(
@@ -2558,7 +2565,7 @@ class NetDnsMonitorApp(rumps.App):
         """None when this build has `feature`; otherwise the text saying it does not."""
         if getattr(self.capabilities, feature):
             return None
-        return distribution.unavailable(feature, what)
+        return self.capabilities.unavailable(feature, what)
 
     def handle_dashboard_action(self, action_id: str):
         """A button was clicked. Main thread.

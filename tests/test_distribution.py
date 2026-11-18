@@ -53,6 +53,16 @@ def test_an_empty_container_id_is_not_a_sandbox():
     assert detect({"APP_SANDBOX_CONTAINER_ID": ""}).distribution == DIRECT
 
 
+def test_a_packaged_free_edition_keeps_logging_and_cannot_be_reenabled_by_environment(monkeypatch):
+    monkeypatch.setattr(distribution, "EDITION", distribution.FREE)
+    for forced in ("", "direct", "appstore"):
+        caps = detect({"NETDNS_DISTRIBUTION": forced})
+        assert caps.is_free and caps.unified_log
+        assert caps.launch_agent_login_item and caps.fleet_reporting
+        assert not caps.privileged_repairs and not caps.network_order_write
+        assert not caps.shell_console and not caps.router and not caps.remediation_editor
+
+
 def test_unavailable_text_says_nothing_changed_and_is_recognisable():
     text = unavailable("network_order_write", "switching to the backup network")
     assert text.startswith(distribution.UNAVAILABLE_PREFIX)

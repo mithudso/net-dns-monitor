@@ -42,6 +42,7 @@ from netdnsmonitor.credentials import (
 from netdnsmonitor.distribution import UNAVAILABLE_PREFIX, is_unavailable, unavailable
 from netdnsmonitor.ladder import LadderStep
 from netdnsmonitor.log_watcher import NO_EVIDENCE_PREFIX
+from netdnsmonitor.repair_executor import make_repair_executor
 
 STORE = distribution.detect({"NETDNS_DISTRIBUTION": "appstore"})
 DIRECT = distribution.detect({})
@@ -183,6 +184,38 @@ def config(**overrides):
     cfg = dict(DEFAULT_CONFIG)
     cfg.update(overrides)
     return cfg
+
+
+def test_free_app_runs_diagnostics_and_reports_an_incident_without_repairing(tmp_path, monkeypatch):
+    ran = []
+
+    def run(args, **kwargs):
+        ran.append(args)
+        return subprocess.CompletedProcess(args, 0, "fake diagnostic evidence", "")
+
+    monkeypatch.setattr(
+        app_module,
+        "make_repair_executor",
+        lambda **options: make_repair_executor(run_fn=run, query_fn=lambda _host: False, **options),
+    )
+    app = build_app(
+        tmp_path,
+        capabilities=distribution.detect({"NETDNS_DISTRIBUTION": "free"}),
+        failure_threshold=1,
+    )
+    assert app.capabilities.unified_log
+    assert "Open console" not in top_level_titles(app)
+    assert not app.remediation_store.editable
+    machine = app.state_machine
+    machine.prober = lambda: {"external_reachable": True, "dns_ok": False}
+    machine.log_watcher = lambda: ["local DNS incident evidence"]
+    report = machine.tick()
+    assert report["classification"] == "dns"
+    assert report["log_excerpts"] == ["local DNS incident evidence"]
+    assert any(command[0].endswith("/scutil") for command in ran)
+    assert all("-flushcache" not in command for command in ran)
+    results = {step["name"]: step for step in report["ladder_results"]}
+    assert is_unavailable(results["flush_dns_cache"]["outcome"])
 
 
 # --- the menu ----------------------------------------------------------------

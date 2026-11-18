@@ -1,7 +1,7 @@
 # net-dns-monitor — infrastructure retrieval map
-> Source: repository worktree · remote URL omitted @ cff5ff0 dirty
-> Generated: 2026-11-17 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 281 enumerated / 0 deep-read / 281 shallow · partial: census only; no deep cards or executable inventory
+> Source: repository worktree · remote URL omitted @ 8be0662 dirty
+> Generated: 2026-11-18 by crawl-repo-to-llms v1.2.0 (partial static adapter)
+> Census: 293 enumerated / 0 deep-read / 293 shallow · partial: census only; no deep cards or executable inventory
 
 - ".github/FUNDING.yml". [src: ".github/FUNDING.yml"#L1]
 - ".github/ISSUE_TEMPLATE/bug_report.md". [src: ".github/ISSUE_TEMPLATE/bug_report.md"#L1]
@@ -26,6 +26,7 @@
 - "scripts/appstore/record_demo.py". [src: "scripts/appstore/record_demo.py"#L1]
 - "scripts/appstore/sandbox_probe.py". [src: "scripts/appstore/sandbox_probe.py"#L1]
 - "scripts/appstore/shoot_screenshots.py". [src: "scripts/appstore/shoot_screenshots.py"#L1]
+- "scripts/build_direct_release.py". [src: "scripts/build_direct_release.py"#L1]
 - "scripts/check_docs.py". [src: "scripts/check_docs.py"#L1]
 - "scripts/com.mitchhudson.net-dns-monitor.plist". [src: "scripts/com.mitchhudson.net-dns-monitor.plist"#L1]
 - "scripts/generate_static_dossier.py". [src: "scripts/generate_static_dossier.py"#L1]
