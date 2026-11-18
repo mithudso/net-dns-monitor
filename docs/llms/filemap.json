@@ -1528,6 +1528,14 @@
     "provenance": "[src: \"storefront/payments.mjs\"#L1]"
   },
   {
+    "path": "storefront/public/ads.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/ads.txt\"#L1]"
+  },
+  {
     "path": "storefront/public/favicon.png",
     "role": "source",
     "importance": "ordinary",

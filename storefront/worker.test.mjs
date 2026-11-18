@@ -10,6 +10,8 @@ const free = "free/Net-DNS-Monitor-Free-1.0.zip";
 const premium = "premium/Net-DNS-Monitor-Premium-1.0.zip";
 const release = new Map([[free, "free archive"], [premium, "premium archive"]]);
 const index = await readFile(new URL("./public/index.html", import.meta.url), "utf8");
+const privacy = await readFile(new URL("./public/privacy.html", import.meta.url), "utf8");
+const ads = await readFile(new URL("./public/ads.txt", import.meta.url), "utf8");
 const migrations = await Promise.all(["0001_orders.sql", "0002_paypal_tax.sql", "0003_managed_payments.sql"].map(
   (file) => readFile(new URL(`./migrations/${file}`, import.meta.url), "utf8"),
 ));
@@ -31,7 +33,17 @@ function setup(t, simulation) {
       head: (key) => release.has(key) ? { size: release.get(key).length, httpEtag: '"test"' } : null,
       get: (key) => release.has(key) ? { size: release.get(key).length, httpEtag: '"test"', body: release.get(key) } : null,
     },
-    ASSETS: { fetch: () => new Response(index) },
+    ASSETS: {
+      fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/ads.txt") {
+          return new Response(request.method === "HEAD" ? null : ads, {
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+          });
+        }
+        return new Response(path === "/privacy/" ? privacy : index);
+      },
+    },
     STORE_URL: origin,
     FREE_RELEASE: free,
     PREMIUM_RELEASE: premium,
@@ -59,6 +71,36 @@ function setup(t, simulation) {
   };
   return { env, hit, post, event, db, fetcher };
 }
+
+test("AdSense verification is public and its script runs only on the homepage", async (t) => {
+  const { hit } = setup(t, () => assert.fail("Verification should not call the payment provider"));
+  const home = await hit("/");
+  assert.equal(home.status, 200);
+  const head = (await home.text()).match(/<head>([\s\S]*?)<\/head>/)[1];
+  const loader = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";
+  const publisher = "ca-pub-1706083044457708";
+  assert.ok(head.includes(`<meta name="google-adsense-account" content="${publisher}">`));
+  assert.ok(head.includes(`<script async src="${loader}?client=${publisher}" crossorigin="anonymous"></script>`));
+  assert.ok(home.headers.get("Content-Security-Policy").split("; ").includes(`script-src ${loader}`));
+
+  const record = await hit("/ads.txt");
+  assert.equal(record.status, 200);
+  assert.match(record.headers.get("Content-Type"), /^text\/plain\b/);
+  assert.equal(await record.text(), "google.com, pub-1706083044457708, DIRECT, f08c47fec0942fa0\n");
+  const recordHead = await hit("/ads.txt", { method: "HEAD" });
+  assert.equal(recordHead.status, 200);
+  assert.equal(await recordHead.text(), "");
+  const www = await hit("https://www.netdnsmonitor.com/ads.txt");
+  assert.equal(www.status, 308);
+  assert.equal(www.headers.get("Location"), `${origin}/ads.txt`);
+
+  for (const path of ["/privacy/", "/order", "/checkout"]) {
+    const response = await hit(path);
+    assert.equal(response.headers.get("Referrer-Policy"), "no-referrer");
+    assert.doesNotMatch(response.headers.get("Content-Security-Policy"), /googlesyndication/);
+    assert.doesNotMatch(await response.text(), /adsbygoogle\.js/);
+  }
+});
 
 test("free delivery works and unavailable checkout is hidden", async (t) => {
   const { env, hit, post } = setup(t, () => assert.fail("Payment call should be disabled"));
