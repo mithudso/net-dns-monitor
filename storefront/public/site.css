@@ -107,12 +107,10 @@ details a, .order-page p a { color: var(--mint); }
 .order-page p, .order-page h2 { margin: 1.15rem 0; }
 .order-page h2 { font-size: 1.55rem; }
 .order-page form { margin-block: 1rem; }
-.address-form { display: grid; gap: .75rem; max-width: 400px; }
-.address-form label { display: grid; gap: .23rem; }
-.address-form input { min-height: 44px; border-radius: .45rem; border: 1px solid var(--line); padding: .5rem .75rem; background: var(--surface); color: var(--text); font: inherit; }
-.address-form input:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
-.address-form .button { justify-self: start; }
-
+.purchase-options { display: grid; gap: .55rem; }
+.purchase-options label { font-size: .87rem; }
+.purchase-options select { min-height: 44px; border-radius: .45rem; border: 1px solid var(--line); padding: .4rem .65rem; background: var(--surface); color: var(--text); font: inherit; }
+.purchase-options select:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
 @media (max-width: 900px) {
   .hero { grid-template-columns: minmax(0, 1fr) minmax(310px, .8fr); }
   .desktop-break { display: none; }
