@@ -4,16 +4,27 @@ export function billingMode(env) {
   return env.BILLING_MODE === "test" ? "test" : "live";
 }
 
-export function stripeReady(env) {
+function stripeKeyReady(env) {
   const mode = billingMode(env);
-  return new RegExp(`^(?:rk|sk)_${mode}_`).test(env.STRIPE_API_KEY ?? "") &&
+  return new RegExp(`^(?:rk|sk)_${mode}_`).test(env.STRIPE_API_KEY ?? "");
+}
+
+export function stripeReady(env) {
+  return (billingMode(env) === "test" || taxEnabled(env)) && stripeKeyReady(env) &&
     /^whsec_/.test(env.STRIPE_WEBHOOK_SECRET ?? "") &&
     /^price_[a-zA-Z0-9]+$/.test(env.STRIPE_PRICE_ID ?? "");
 }
 
+export function taxEnabled(env) {
+  return env.STRIPE_AUTOMATIC_TAX === "true";
+}
+
 export function paypalReady(env, provider) {
+  const taxReady = taxEnabled(env)
+    ? stripeKeyReady(env) && /^txcd_[0-9]{8}$/.test(env.STRIPE_TAX_CODE ?? "")
+    : billingMode(env) === "test";
   return Boolean(env.ENABLE_PAYPAL === "true" && env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET &&
-    env.STRIPE_AUTOMATIC_TAX !== "true" &&
+    taxReady &&
     (provider === "paypal" || env.ENABLE_VENMO === "true"));
 }
 
@@ -24,13 +35,15 @@ async function jsonFrom(response) {
   return response.json();
 }
 
-export async function stripe(path, env, data, fetcher) {
+export async function stripe(path, env, data, fetcher, requestId) {
+  const headers = {
+    Authorization: `Bearer ${env.STRIPE_API_KEY}`,
+    "Stripe-Version": "2026-10-28.endive",
+  };
+  if (requestId) headers["Idempotency-Key"] = requestId;
   return jsonFrom(await fetcher(`https://api.stripe.com/v1/${path}`, {
     method: data ? "POST" : "GET",
-    headers: {
-      Authorization: `Bearer ${env.STRIPE_API_KEY}`,
-      "Stripe-Version": "2026-10-28.endive",
-    },
+    headers,
     body: data ? new URLSearchParams(data) : undefined,
     signal: AbortSignal.timeout(10000),
   }));
@@ -86,7 +99,20 @@ export function paidStripeSession(session, order, live) {
     session.metadata?.sku === SKU && session.livemode === live &&
     session.mode === "payment" && session.status === "complete" &&
     session.payment_status === "paid" && session.currency === "usd" &&
-    session.amount_subtotal === order.cents && /^pi_[a-zA-Z0-9]+$/.test(session.payment_intent);
+    session.amount_subtotal === order.cents && /^pi_[a-zA-Z0-9]+$/.test(session.payment_intent) &&
+    (session.metadata.tax_required !== "true" ||
+      (session.automatic_tax?.enabled === true && session.automatic_tax.status === "complete"));
+}
+
+export function paypalAmountMatches(amount, order) {
+  return amount?.currency_code === "USD" &&
+    amount.value === decimalPrice(order.cents + order.tax_cents);
+}
+
+export function approvedPayPalOrderMatches(orderData, order) {
+  const units = orderData?.purchase_units;
+  return orderData?.id === order.provider_id && units?.length === 1 &&
+    units[0].custom_id === order.access_hash && paypalAmountMatches(units[0].amount, order);
 }
 
 export function paidPayPalCapture(orderData, order) {
@@ -96,8 +122,7 @@ export function paidPayPalCapture(orderData, order) {
   const capture = captures?.[0];
   if (orderData?.id !== order.provider_id || orderData?.status !== "COMPLETED" ||
       items?.length !== 1 || unit.custom_id !== order.access_hash || captures?.length !== 1 ||
-      capture.status !== "COMPLETED" || capture.amount?.currency_code !== "USD" ||
-      capture.amount?.value !== decimalPrice(order.cents) ||
+      capture.status !== "COMPLETED" || !paypalAmountMatches(capture.amount, order) ||
       !/^[A-Z0-9]{1,36}$/.test(capture.id)) return null;
   return capture.id;
 }

@@ -1,6 +1,7 @@
 import {
-  billingMode, checkoutRedirect, checkStripeSignature, decimalPrice, paidPayPalCapture,
-  paidStripeSession, paypal, paypalAccess, paypalReady, SKU, stripe, stripeReady,
+  approvedPayPalOrderMatches, billingMode, checkoutRedirect, checkStripeSignature,
+  decimalPrice, paidPayPalCapture, paidStripeSession, paypal, paypalAccess,
+  paypalAmountMatches, paypalReady, SKU, stripe, stripeReady, taxEnabled,
 } from "./payments.mjs";
 
 const NO_STORE = "private, no-store, no-transform";
@@ -80,7 +81,10 @@ async function home(request, env) {
   } else {
     page = page.replace('data-free href="#editions">Download Free', 'data-free href="#editions">See Free');
   }
-  if (cents) page = page.replace("$29 <small>", `$${Number(decimalPrice(cents))} <small>`);
+  if (cents) {
+    page = page.replace("$29 <small>", `$${Number(decimalPrice(cents))} <small>`);
+    if (taxEnabled(env)) page = page.replace("USD · one-time", "USD · one-time, plus applicable tax");
+  }
   if (buttons.length) page = page.replace('<span class="small">Checkout temporarily unavailable.</span>', buttons.join(""));
   if (/^https:\/\/apps\.apple\.com\/[a-z/]+\/id\d+$/.test(env.APP_STORE_URL ?? "")) {
     page = page.replace('<span class="small">Waiting for Apple review.</span>',
@@ -117,18 +121,112 @@ async function reversePayment(env, paymentId) {
   ]);
 }
 
+function taxAddressPage(provider, status = 200) {
+  const message = status === 400
+    ? "<p>Enter a valid address so we can calculate sales tax.</p>"
+    : "<p>Enter your billing address to calculate any sales tax on the download.</p>";
+  return orderPage("Billing address", message +
+    `<form class="address-form" method="post" action="/checkout">
+      <input type="hidden" name="provider" value="${provider}">
+      <input type="hidden" name="address_submitted" value="1">
+      <label>Street address <input name="line1" autocomplete="address-line1" maxlength="200" required></label>
+      <label>City <input name="city" autocomplete="address-level2" maxlength="100" required></label>
+      <label>State or province <input name="state" autocomplete="address-level1" placeholder="NC" maxlength="100"></label>
+      <label>Postal code <input name="postal_code" autocomplete="postal-code" maxlength="20"></label>
+      <label>Country code <input name="country" autocomplete="country" value="US" maxlength="2" pattern="[A-Za-z]{2}" required></label>
+      <button class="button primary" type="submit">Continue to ${provider === "paypal" ? "PayPal" : "Venmo"}</button>
+    </form>`, status);
+}
+
+function billingAddress(fields) {
+  const address = Object.fromEntries(["line1", "city", "state", "postal_code", "country"].map(
+    (name) => [name, String(fields.get(name) ?? "").trim()],
+  ));
+  address.country = address.country.toUpperCase();
+  if (address.country === "US") address.state = address.state.toUpperCase();
+  if (!address.line1 || address.line1.length > 200 || !address.city || address.city.length > 100 ||
+      address.state.length > 100 || address.postal_code.length > 20 ||
+      !/^[A-Z]{2}$/.test(address.country)) return null;
+  if (address.country === "US" &&
+      (!/^[A-Z]{2}$/.test(address.state) || !/^\d{5}(-\d{4})?$/.test(address.postal_code))) return null;
+  return address;
+}
+
+async function paypalTaxQuote(address, cents, env, fetcher) {
+  const data = {
+    currency: "usd",
+    "line_items[0][amount]": cents,
+    "line_items[0][reference]": SKU,
+    "line_items[0][tax_code]": env.STRIPE_TAX_CODE,
+    "line_items[0][tax_behavior]": "exclusive",
+    "customer_details[address_source]": "billing",
+  };
+  for (const [name, value] of Object.entries(address)) {
+    if (value) data[`customer_details[address][${name}]`] = value;
+  }
+  const quote = await stripe("tax/calculations", env, data, fetcher);
+  const breaks = quote.tax_breakdown ?? [];
+  const nc = quote.customer_details?.address?.state === "NC" || address.state === "NC";
+  if (address.country === "US" && nc &&
+      (!breaks.length || breaks.some((part) => part.taxability_reason === "not_collecting"))) {
+    throw new Error("North Carolina is not ready for tax collection");
+  }
+  if (!/^taxcalc_[a-zA-Z0-9]+$/.test(quote.id ?? "") || quote.currency !== "usd" ||
+      quote.livemode !== (billingMode(env) === "live") ||
+      !Number.isSafeInteger(quote.tax_amount_exclusive) || quote.tax_amount_exclusive < 0 ||
+      quote.amount_total !== cents + quote.tax_amount_exclusive ||
+      !Number.isSafeInteger(quote.expires_at) || quote.expires_at <= Date.now() / 1000) {
+    throw new Error("Invalid tax calculation");
+  }
+  return { cents: quote.tax_amount_exclusive, id: quote.id, expiresAt: quote.expires_at };
+}
+
+export async function recordPayPalTaxes(env, fetcher = fetch) {
+  if (!env.STRIPE_API_KEY) return;
+  const { results } = await env.ORDERS.prepare(
+    "SELECT access_hash, provider_id, tax_calculation_id FROM orders " +
+    "WHERE state = 'paid' AND tax_calculation_id IS NOT NULL AND tax_transaction_id IS NULL " +
+    "AND tax_quote_expires_at > unixepoch() ORDER BY tax_quote_expires_at LIMIT 10",
+  ).bind().all();
+  let failed = 0;
+  for (const order of results) {
+    try {
+      const reference = `netdns-paypal-${order.provider_id}`;
+      const transaction = await stripe("tax/transactions/create_from_calculation", env, {
+        calculation: order.tax_calculation_id, reference,
+      }, fetcher, reference);
+      if (!/^tax_[a-zA-Z0-9]+$/.test(transaction.id ?? "") || transaction.reference !== reference ||
+          transaction.livemode !== (billingMode(env) === "live")) throw new Error("Invalid tax transaction");
+      await env.ORDERS.prepare(
+        "UPDATE orders SET tax_transaction_id = ? WHERE access_hash = ? AND tax_transaction_id IS NULL",
+      ).bind(transaction.id, order.access_hash).run();
+    } catch {
+      failed += 1;
+    }
+  }
+  if (failed) throw new Error(`Could not record ${failed} PayPal tax transactions`);
+}
+
 async function checkout(request, env, fetcher) {
   const ip = request.headers.get("CF-Connecting-IP");
   if (ip && !(await env.CHECKOUT_LIMIT.limit({ key: ip })).success) {
     return text("Please wait before starting another checkout", 429);
   }
-  const provider = (await request.formData()).get("provider");
+  const fields = await request.formData();
+  const provider = fields.get("provider");
   const cents = centsFor(env);
   const key = await artifact(env, "premium");
   const stripeCheckout = provider === "stripe" && stripeReady(env);
   const paypalCheckout = (provider === "paypal" || provider === "venmo") && paypalReady(env, provider);
   if (!cents || !key || !(stripeCheckout || paypalCheckout)) {
     return orderPage("Checkout unavailable", "<p>Try again later.</p>", 503);
+  }
+  let tax = { cents: 0, id: null, expiresAt: null };
+  if (paypalCheckout && taxEnabled(env)) {
+    if (fields.get("address_submitted") !== "1") return taxAddressPage(provider);
+    const address = billingAddress(fields);
+    if (!address) return taxAddressPage(provider, 400);
+    tax = await paypalTaxQuote(address, cents, env, fetcher);
   }
   const token = hex(crypto.getRandomValues(new Uint8Array(32)));
   const hash = await accessHash(token);
@@ -149,7 +247,11 @@ async function checkout(request, env, fetcher) {
       cancel_url: cancelURL,
       integration_identifier: "netdns-monitor-ntmcpqkr",
     };
-    if (env.STRIPE_AUTOMATIC_TAX === "true") params["automatic_tax[enabled]"] = "true";
+    if (taxEnabled(env)) {
+      params["automatic_tax[enabled]"] = "true";
+      params["metadata[tax_required]"] = "true";
+      params.billing_address_collection = "required";
+    }
     const session = await stripe("checkout/sessions", env, params, fetcher);
     if (session.amount_subtotal !== cents || session.currency !== "usd" ||
         session.livemode !== (billingMode(env) === "live")) throw new Error("Unexpected Checkout price");
@@ -162,7 +264,21 @@ async function checkout(request, env, fetcher) {
       purchase_units: [{
         description: "Net DNS Monitor Premium",
         custom_id: hash,
-        amount: { currency_code: "USD", value: decimalPrice(cents) },
+        amount: {
+          currency_code: "USD",
+          value: decimalPrice(cents + tax.cents),
+          breakdown: {
+            item_total: { currency_code: "USD", value: decimalPrice(cents) },
+            tax_total: { currency_code: "USD", value: decimalPrice(tax.cents) },
+          },
+        },
+        items: [{
+          name: "Net DNS Monitor Premium",
+          quantity: "1",
+          unit_amount: { currency_code: "USD", value: decimalPrice(cents) },
+          tax: { currency_code: "USD", value: decimalPrice(tax.cents) },
+          category: "DIGITAL_GOODS",
+        }],
       }],
       payment_source: {
         [provider]: {
@@ -181,8 +297,9 @@ async function checkout(request, env, fetcher) {
   }
   const url = checkoutRedirect(destination, provider);
   await env.ORDERS.prepare(
-    "INSERT INTO orders (access_hash, provider, provider_id, cents, release_key) VALUES (?, ?, ?, ?, ?)",
-  ).bind(hash, provider, checkoutId, cents, key).run();
+    "INSERT INTO orders (access_hash, provider, provider_id, cents, release_key, tax_cents, " +
+    "tax_calculation_id, tax_quote_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(hash, provider, checkoutId, cents, key, tax.cents, tax.id, tax.expiresAt).run();
   return new Response(null, { status: 303, headers: { ...SECURITY, Location: url, "Cache-Control": NO_STORE } });
 }
 
@@ -224,7 +341,11 @@ function showOrder(key, order, approved = false) {
   }
   if (order.state === "revoked") return orderPage("Download unavailable", "<p>This payment was reversed.</p>", 403);
   if (approved) {
-    return orderPage("Confirm your purchase", `<p>Net DNS Monitor Premium · $${decimalPrice(order.cents)} USD</p>` +
+    const taxLine = order.tax_calculation_id
+      ? `<p>Subtotal $${decimalPrice(order.cents)} · Sales tax $${decimalPrice(order.tax_cents)}</p>`
+      : "";
+    return orderPage("Confirm your purchase", taxLine +
+      `<p>Net DNS Monitor Premium · $${decimalPrice(order.cents + order.tax_cents)} USD total</p>` +
       form("/order/capture", "key", key, "Confirm payment"));
   }
   return orderPage("Payment pending", `<p>Once the payment provider confirms your payment, your download will appear here.</p><p><a href="/order?key=${key}">Check again</a></p>`);
@@ -249,6 +370,14 @@ async function readOrder(env, fetcher, key, capture = false) {
   const access = await paypalAccess(env, fetcher);
   const path = `v2/checkout/orders/${order.provider_id}`;
   let remote = await paypal(path, env, access, fetcher);
+  if (remote.status === "APPROVED") {
+    if (!approvedPayPalOrderMatches(remote, order)) {
+      return orderPage("Order amount changed", "<p>Start a new checkout to verify the total.</p>", 409);
+    }
+    if (order.tax_quote_expires_at !== null && order.tax_quote_expires_at <= Date.now() / 1000) {
+      return orderPage("Sales tax quote expired", "<p>Start a new checkout to get an updated total.</p>", 409);
+    }
+  }
   if (capture && remote.status === "APPROVED") {
     try {
       remote = await paypal(`${path}/capture`, env, access, fetcher, {}, order.access_hash.slice(0, 38));
@@ -291,7 +420,9 @@ async function premiumDownload(request, env, fetcher) {
   if (order.provider !== "stripe") {
     const access = await paypalAccess(env, fetcher);
     const capture = await paypal(`v2/payments/captures/${order.payment_id}`, env, access, fetcher);
-    if (capture.status !== "COMPLETED") return text("Payment required", 403);
+    if (capture.status !== "COMPLETED" || !paypalAmountMatches(capture.amount, order)) {
+      return text("Payment required", 403);
+    }
   }
   return download(request, env, releaseKey(order.release_key, "premium"), true);
 }
@@ -355,4 +486,9 @@ export function handler(fetcher = fetch) {
   };
 }
 
-export default { fetch: handler() };
+export default {
+  fetch: handler(),
+  scheduled(_controller, env, ctx) {
+    ctx.waitUntil(recordPayPalTaxes(env));
+  },
+};

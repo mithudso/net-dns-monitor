@@ -223,3 +223,9 @@ Prompt:
 Delta: 1
 
 I just purchased the domain netdnsmonitor.com on cloudflare, create a webpage solely focused on promoting and selling the netdnsmonitor as a software package. on the website have the full version available. There will be a free version which does all the auto-logging, but the premium version has the auto-remediation, so this means there will be 3 versions of the product, 1 for apple, 1 free, 1 premium. Do a web lookup for other softare similar to this and use the most successful one as a basic template for how to do a software sales site. Connect in through Stripe, but include paypal, apple pay, venmo, cash app, as payment options. Use cloudflare to make the website and make it run end to end. /goal a customer can go to the website, download a free version, and purchase the full version.
+
+## v28 - 2026-11-18 - North Carolina checkout setup
+
+Delta: 1
+
+I have paypal business credentials, I have my sales and use tax licence in North Carolina.
