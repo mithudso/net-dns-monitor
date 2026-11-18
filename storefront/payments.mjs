@@ -12,7 +12,7 @@ export function stripeReady(env) {
 }
 
 export function paypalReady(env, provider) {
-  return Boolean(env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET &&
+  return Boolean(env.ENABLE_PAYPAL === "true" && env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET &&
     env.STRIPE_AUTOMATIC_TAX !== "true" &&
     (provider === "paypal" || env.ENABLE_VENMO === "true"));
 }

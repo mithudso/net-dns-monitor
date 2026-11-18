@@ -151,6 +151,7 @@ test("PayPal creates, approves, captures and confirms a download by server data"
     assert.ok(url.endsWith(`/orders/${orderId}`));
     return order();
   });
+  env.ENABLE_PAYPAL = "true";
   env.PAYPAL_CLIENT_ID = "example";
   env.PAYPAL_CLIENT_SECRET = "example";
   const page = await (await hit("/")).text();

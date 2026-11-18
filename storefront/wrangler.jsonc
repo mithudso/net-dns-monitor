@@ -36,6 +36,7 @@
     "APP_STORE_URL": "",
     "STRIPE_PRICE_ID": "",
     "STRIPE_AUTOMATIC_TAX": "false",
+    "ENABLE_PAYPAL": "false",
     "ENABLE_VENMO": "false"
   }
 }
