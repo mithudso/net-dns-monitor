@@ -229,3 +229,101 @@ I just purchased the domain netdnsmonitor.com on cloudflare, create a webpage so
 Delta: 1
 
 I have paypal business credentials, I have my sales and use tax licence in North Carolina.
+
+## v29 - 2026-11-18 - Stripe Managed Payments blueprint
+
+Delta: 1
+
+.1. done. 2. Both. Also ## Stripe integration task
+
+### Objective
+Implement this Stripe integration using the blueprint below. The blueprint describes the required API operations, parameters, and sequencing. Adapt the implementation to your architecture, data models, and tech stack.
+
+### How to use the resources
+- Treat the blueprint as the source of truth for required API operations and parameters.
+- Prefer reusing outputs from earlier steps as inputs to later ones (e.g., use the created customer ID when creating a subscription).
+- Persist and retrieve required Stripe resource identifiers in your datastore (e.g., customer_id, subscription_id) and associate them with existing domain models.
+- Do NOT use chapter numbers as names in your code. Name all functions, routes, CLI commands, variables, and files after the domain action they perform (e.g., `create_account`, `/create-checkout-session`, `onboard`) rather than the step they came from (e.g., avoid `chapter1`, `step2`, `/chapter1/create-account`).
+- Template variables like ${node...} represent outputs from earlier steps that should be used as inputs to later ones. For example, ${node.createProduct.createProductRequest:default_price} refers to the default_price field from the response of the createProductRequest fixture within the createProduct node.
+- If connected to the Stripe MCP server, use tool calls as much as possible to create dependent resources (such as products and prices) if they don't exist already.
+- Do not guess as to what the required Stripe API version should be. Leave the API version argument empty when initializing the Stripe client unless the blueprint specifies otherwise.
+- When populating .env files or constructing commands for the CLI, use environment variable placeholders for API keys (STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY) and instruct the user to obtain them from the Stripe Dashboard.
+
+## Blueprint representation
+```toon
+blueprint:
+  id: managed-payments
+  title: Set up Managed Payments
+  description: "Use Managed Payments to accept global payments for digital products while Stripe takes on the responsibility for indirect tax compliance (such as sales tax, VAT, GST), fraud prevention, customer transaction support and order management for you. Learn how it works in the docs."
+steps[4]:
+  - step_key: create-product-chapter
+    title: Create a product
+    description: Create a digital product with an eligible tax code. View eligibility requirements
+    nodes[1]:
+      - node_key: create-one-time-product
+        title: API request
+        type: api_request
+        request:
+          method: POST
+          endpoint: /v1/products
+          headers:
+          api_version: 2026-02-25.preview
+          params:
+            "default_price_data[currency]":
+              check: equals
+              value: usd
+            "default_price_data[unit_amount]":
+              check: equals
+              value: 1000
+            name:
+              check: equals
+              value: Hamlet (e-book)
+            tax_code:
+              check: equals
+              value: txcd_10103100
+  - step_key: create-checkout-session-chapter
+    title: Create a Checkout Session
+    nodes[1]:
+      - node_key: create-checkout-session
+        title: API request
+        description: "Set the managed_payments[enabled] parameter to true and use 2026.02-25.preview or above as your version header."
+        type: api_request
+        request:
+          method: POST
+          endpoint: /v1/checkout/sessions
+          headers:
+          api_version: 2026-02-25.preview
+          params:
+            line_items:
+              check: equals
+              value[1]{price,quantity}:
+                "${node.create-product-chapter.create-one-time-product.create-one-time-product-request:default_price}",1
+            "managed_payments[enabled]":
+              check: equals
+              value: true
+            mode:
+              check: equals
+              value: payment
+            success_url:
+              check: application_url
+  - step_key: complete-checkout-chapter
+    title: Test your checkout
+    nodes[1]:
+      - node_key: complete-checkout
+        title: Complete a test payment
+        description: "Try different billing addresses to see how tax is calculated for customers in different locations. Then, process a test payment using this test card information."
+        type: browser_interaction
+        component_type: hosted
+        browser_interactions[1]{type,link}:
+          hosted,"${node.create-checkout-session-chapter.create-checkout-session.create-checkout-session-request:url}"
+  - step_key: handle-webhooks-chapter
+    title: Set up webhooks
+    description: Monitor successful payments instantly.
+    nodes[1]:
+      - node_key: wait-for-checkout-completed
+        title: Listen for checkout.session.completed
+        description: We’ll send this event every time a customer successfully checks out. API docs
+        type: event_handler
+        events[1]{event_type,event_payload_type,object_id}:
+          checkout.session.completed,snapshot,"${node.create-checkout-session-chapter.create-checkout-session.create-checkout-session-request:id}"
+``` 3. Just use stripe. paypal is being a pain.

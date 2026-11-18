@@ -1,7 +1,7 @@
 # net-dns-monitor — bounded static facts
-> Source: repository worktree · remote URL omitted @ c8173ad dirty
+> Source: repository worktree · remote URL omitted @ 870e5cf dirty
 > Generated: 2026-11-18 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 294 enumerated / 0 deep-read / 294 shallow · partial: census only; no deep cards or executable inventory
+> Census: 295 enumerated / 0 deep-read / 295 shallow · partial: census only; no deep cards or executable inventory
 
 CI runs Ruff and the offline pytest suite, then the static documentation check. [src: .github/workflows/ci.yml#jobs]
 The shipped defaults are checked against DEFAULT_CONFIG. [src: tests/test_config.py, asserted-by-test]

@@ -1,7 +1,7 @@
 # net-dns-monitor — complete source census with shallow cards
-> Source: repository worktree · remote URL omitted @ c8173ad dirty
+> Source: repository worktree · remote URL omitted @ 870e5cf dirty
 > Generated: 2026-11-18 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 294 enumerated / 0 deep-read / 294 shallow · partial: census only; no deep cards or executable inventory
+> Census: 295 enumerated / 0 deep-read / 295 shallow · partial: census only; no deep cards or executable inventory
 
 - ".editorconfig" | source | ordinary | shallow. [src: ".editorconfig"#L1] Role and importance are retrieval hints. [asserted]
 - ".env.example" | source | ordinary | shallow. [src: ".env.example"#L1] Role and importance are retrieval hints. [asserted]
@@ -192,6 +192,7 @@
 - "storefront/README.md" | docs | ordinary | shallow. [src: "storefront/README.md"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/migrations/0001_orders.sql" | source | ordinary | shallow. [src: "storefront/migrations/0001_orders.sql"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/migrations/0002_paypal_tax.sql" | source | ordinary | shallow. [src: "storefront/migrations/0002_paypal_tax.sql"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/migrations/0003_managed_payments.sql" | source | ordinary | shallow. [src: "storefront/migrations/0003_managed_payments.sql"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/payments.mjs" | source | ordinary | shallow. [src: "storefront/payments.mjs"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/public/favicon.png" | source | ordinary | shallow. [src: "storefront/public/favicon.png"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/public/index.html" | source | ordinary | shallow. [src: "storefront/public/index.html"#L1] Role and importance are retrieval hints. [asserted]
