@@ -1504,6 +1504,14 @@
     "provenance": "[src: \"storefront/migrations/0001_orders.sql\"#L1]"
   },
   {
+    "path": "storefront/migrations/0002_paypal_tax.sql",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/migrations/0002_paypal_tax.sql\"#L1]"
+  },
+  {
     "path": "storefront/payments.mjs",
     "role": "source",
     "importance": "ordinary",

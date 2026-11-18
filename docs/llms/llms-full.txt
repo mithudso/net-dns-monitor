@@ -1,7 +1,7 @@
 # net-dns-monitor — bounded guide, not concatenated source
-> Source: repository worktree · remote URL omitted @ 8be0662 dirty
+> Source: repository worktree · remote URL omitted @ c8173ad dirty
 > Generated: 2026-11-18 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 293 enumerated / 0 deep-read / 293 shallow · partial: census only; no deep cards or executable inventory
+> Census: 294 enumerated / 0 deep-read / 294 shallow · partial: census only; no deep cards or executable inventory
 
 - Product/setup: README.md. [src: README.md#L1]
 - Agent constraints and verification: CLAUDE.md. [src: CLAUDE.md#L1]

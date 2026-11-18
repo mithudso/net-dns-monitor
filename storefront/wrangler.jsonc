@@ -27,6 +27,7 @@
   "ratelimits": [
     { "name": "CHECKOUT_LIMIT", "namespace_id": "48191072", "simple": { "limit": 12, "period": 60 } }
   ],
+  "triggers": { "crons": ["*/10 * * * *"] },
   "vars": {
     "STORE_URL": "https://netdnsmonitor.com",
     "PREMIUM_CENTS": "2900",
@@ -36,6 +37,7 @@
     "APP_STORE_URL": "",
     "STRIPE_PRICE_ID": "",
     "STRIPE_AUTOMATIC_TAX": "false",
+    "STRIPE_TAX_CODE": "",
     "ENABLE_PAYPAL": "false",
     "ENABLE_VENMO": "false"
   }
