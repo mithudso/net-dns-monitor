@@ -521,3 +521,13 @@ Codex and Claude Code reported that sign-in was pending.
 Remaining: approve Todoist access in the clients that will use it, then verify
 authenticated tool discovery. VS Code runtime discovery remains unverified.
 Stele tracks configuration in TASK-451 and verification in TASK-449.
+
+## v27 - 2026-11-18 - Storefront implementation
+
+Delta: 1
+
+Task TASK-454 covers the public Cloudflare site, three editions, checkout, and delivery acceptance. The site will compare Free automatic logging with Premium opt-in remediation and show the Apple edition's actual availability. Preserve the MIT license and the App Store release worktree. Reject unpaid download requests. Verify Cloudflare routing and package integrity before enabling checkout. Stripe setup awaits the owner's selection of a live merchant account. This storefront changes no existing App Store release.
+
+The Cloudflare Worker is live on both hostnames. The Free and Premium 1.0 source ZIPs are built, verified on Apple silicon, and uploaded to private R2. The public Free download matched SHA-256 87200f63af0cf2bbaf7f35d1397b9d9a608bba7225588a7146422ca9d5e419cc. Premium SHA-256 is 00e4224429c4c5f9f9f974f1320313571a9696199a492c0fc6b3bb4ab64f5025. D1 migration applied. Live Free delivery and unpaid Premium denial passed. Stripe's webhook is configured. Production Stripe checkout still needs the merchant's restricted key and tax instructions before creation of the USD price. PayPal Business credentials and Venmo eligibility still need confirmation. Apple build 1.0 (5) was Waiting for Review, and the public listing lookup returned no results on November 18.
+
+Tests passed for the simulated Stripe and PayPal purchase paths. The live storefront component can ship separately while the purchase goal remains open. Do not enable payment until the proper merchant configuration is present and the delivery path is verified.

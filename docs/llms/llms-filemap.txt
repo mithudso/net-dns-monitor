@@ -1,7 +1,7 @@
 # net-dns-monitor — complete source census with shallow cards
-> Source: repository worktree · remote URL omitted @ cff5ff0 dirty
-> Generated: 2026-11-17 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 281 enumerated / 0 deep-read / 281 shallow · partial: census only; no deep cards or executable inventory
+> Source: repository worktree · remote URL omitted @ 8be0662 dirty
+> Generated: 2026-11-18 by crawl-repo-to-llms v1.2.0 (partial static adapter)
+> Census: 293 enumerated / 0 deep-read / 293 shallow · partial: census only; no deep cards or executable inventory
 
 - ".editorconfig" | source | ordinary | shallow. [src: ".editorconfig"#L1] Role and importance are retrieval hints. [asserted]
 - ".env.example" | source | ordinary | shallow. [src: ".env.example"#L1] Role and importance are retrieval hints. [asserted]
@@ -79,6 +79,7 @@
 - "llms.txt" | docs | ordinary | shallow. [src: "llms.txt"#L1] Role and importance are retrieval hints. [asserted]
 - "memory.md" | docs | ordinary | shallow. [src: "memory.md"#L1] Role and importance are retrieval hints. [asserted]
 - "netdnsmonitor/__init__.py" | source | peripheral | shallow. [src: git] Role and importance are retrieval hints. [asserted]
+- "netdnsmonitor/_direct_edition.py" | source | ordinary | shallow. [src: "netdnsmonitor/_direct_edition.py"#L1] Role and importance are retrieval hints. [asserted]
 - "netdnsmonitor/ai_consent.py" | source | high | shallow. [src: "netdnsmonitor/ai_consent.py"#L1] Role and importance are retrieval hints. [asserted]
 - "netdnsmonitor/alert.py" | source | normal | shallow. [src: "netdnsmonitor/alert.py"#L1] Role and importance are retrieval hints. [asserted]
 - "netdnsmonitor/anthropic_escalator.py" | source | high | shallow. [src: "netdnsmonitor/anthropic_escalator.py"#L1] Role and importance are retrieval hints. [asserted]
@@ -174,6 +175,7 @@
 - "scripts/appstore/record_demo.py" | tooling | high | shallow. [src: "scripts/appstore/record_demo.py"#L1] Role and importance are retrieval hints. [asserted]
 - "scripts/appstore/sandbox_probe.py" | tooling | ordinary | shallow. [src: "scripts/appstore/sandbox_probe.py"#L1] Role and importance are retrieval hints. [asserted]
 - "scripts/appstore/shoot_screenshots.py" | tooling | high | shallow. [src: "scripts/appstore/shoot_screenshots.py"#L1] Role and importance are retrieval hints. [asserted]
+- "scripts/build_direct_release.py" | tooling | ordinary | shallow. [src: "scripts/build_direct_release.py"#L1] Role and importance are retrieval hints. [asserted]
 - "scripts/check_docs.py" | tooling | high | shallow. [src: "scripts/check_docs.py"#L1] Role and importance are retrieval hints. [asserted]
 - "scripts/com.mitchhudson.net-dns-monitor.plist" | tooling | ordinary | shallow. [src: "scripts/com.mitchhudson.net-dns-monitor.plist"#L1] Role and importance are retrieval hints. [asserted]
 - "scripts/generate_static_dossier.py" | tooling | high | shallow. [src: "scripts/generate_static_dossier.py"#L1] Role and importance are retrieval hints. [asserted]
@@ -187,6 +189,16 @@
 - "scripts/start.sh" | tooling | critical | shallow. [src: "scripts/start.sh"#L1] Role and importance are retrieval hints. [asserted]
 - "scripts/watch_and_index.py" | tooling | high | shallow. [src: "scripts/watch_and_index.py"#L1] Role and importance are retrieval hints. [asserted]
 - "setup.py" | source | critical | shallow. [src: "setup.py"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/README.md" | docs | ordinary | shallow. [src: "storefront/README.md"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/migrations/0001_orders.sql" | source | ordinary | shallow. [src: "storefront/migrations/0001_orders.sql"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/payments.mjs" | source | ordinary | shallow. [src: "storefront/payments.mjs"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/favicon.png" | source | ordinary | shallow. [src: "storefront/public/favicon.png"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/index.html" | source | ordinary | shallow. [src: "storefront/public/index.html"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/privacy.html" | source | ordinary | shallow. [src: "storefront/public/privacy.html"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/site.css" | source | ordinary | shallow. [src: "storefront/public/site.css"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/worker.mjs" | source | ordinary | shallow. [src: "storefront/worker.mjs"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/worker.test.mjs" | source | ordinary | shallow. [src: "storefront/worker.test.mjs"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/wrangler.jsonc" | source | ordinary | shallow. [src: "storefront/wrangler.jsonc"#L1] Role and importance are retrieval hints. [asserted]
 - "tests/__init__.py" | test | ordinary | shallow. [src: git] Role and importance are retrieval hints. [asserted]
 - "tests/conftest.py" | test | high | shallow. [src: "tests/conftest.py"#L1] Role and importance are retrieval hints. [asserted]
 - "tests/test_ai_consent.py" | test | ordinary | shallow. [src: "tests/test_ai_consent.py"#L1] Role and importance are retrieval hints. [asserted]

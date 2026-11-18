@@ -114,11 +114,14 @@ def make_repair_executor(
     covered_interfaces_fn: Optional[Callable[[], list]] = None,
     store: Optional[ScriptStore] = None,
     script_timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    repairs_unavailable: Optional[str] = None,
 ):
     """`unavailable_fn(what)` marks the privileged repairs as not part of this
     build (the Mac App Store edition may not ask for root). When it is set, those
     steps run nothing and return its text, which never reads as ok, failed or
     NEEDS_PRIVILEGE -- the grant hint would point at a button that build lacks.
+    `repairs_unavailable` skips every repair-kind step while leaving diagnostics
+    active in the Free edition.
 
     `store` supplies the scripts. The default is the built-ins only, so a caller
     that does not opt in (every test, the CLI) never runs a user's file.
@@ -211,6 +214,8 @@ def make_repair_executor(
         return execute(name, source, build_context(name, classification), script_timeout)
 
     def executor(step: LadderStep, classification: Optional[str] = None) -> str:
+        if repairs_unavailable is not None and step.kind != "check":
+            return repairs_unavailable
         info = store.info(step.name)
         if info is None:
             return f"unknown step: {step.name}"

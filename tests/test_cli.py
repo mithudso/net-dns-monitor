@@ -54,6 +54,20 @@ def collect():
     return lines, lines.append
 
 
+def test_free_edition_cli_refuses_network_writes(monkeypatch):
+    monkeypatch.setenv("NETDNS_DISTRIBUTION", "free")
+    for args in (
+        ["failover", "backup"],
+        ["priority", "--promote", "Wi-Fi"],
+        ["ladder", "dns", "--repair"],
+        ["run", "flush-dns", "--yes"],
+        ["console"],
+    ):
+        lines, out = collect()
+        assert main(args, out, load_config_fn=lambda _path: dict(DEFAULT_CONFIG)) == 2
+        assert lines[0].startswith("UNAVAILABLE_IN_FREE_EDITION:")
+
+
 def fake_run(returncode=0, stdout="", stderr=""):
     calls = []
 
