@@ -1672,6 +1672,18 @@ def test_the_incident_path_ends_a_pause_left_on_the_preferred_side(store):
     assert store.failback_paused is False
 
 
+def test_temporarily_disabled_backup_keeps_the_manual_failback_pause(store):
+    runner, failover = on_backup_by_hand(store, [1_000_000.0], [])
+    runner.disabled.add("Wi-Fi")
+
+    assert failover.attempt_failover("dns").startswith("no switch:")
+    assert store.failback_paused is True
+
+    runner.disabled.remove("Wi-Fi")
+    assert [failover.attempt_failback() for _ in range(3)] == [None, None, None]
+    assert runner.order[0] == "Wi-Fi"
+
+
 def test_snapshot_reports_the_pause_only_while_on_a_backup(store):
     now, probes = [1_000_000.0], []
     runner, failover = on_backup_by_hand(store, now, probes)
@@ -1809,6 +1821,20 @@ def test_exact_failback_restore_reports_third_head_honestly(store):
     assert "restored the original service order" in outcome
     assert "failed back to preferred 'AX88179B'" not in outcome
     assert "Thunderbolt Bridge" in outcome
+
+
+def test_restore_promotes_preferred_if_a_backup_would_lead_enabled_services(store):
+    runner = FakeRunner(order=["M3100", "Wi-Fi", "AX88179B", "iPhone USB"])
+    failover = build(store, runner, prober=lambda _: True, backup_services=["Wi-Fi", "iPhone USB"])
+    original = list(runner.order)
+    assert failover.switch_now("backup", service="iPhone USB").startswith("ok:")
+    assert store.original_order == original
+
+    outcome = failover.switch_now("preferred")
+
+    assert runner.order[0] == "AX88179B"
+    assert "preferred link was promoted instead of an exact restore" in outcome
+    assert store.original_order is None
 
 
 # --- audit regressions -------------------------------------------------------

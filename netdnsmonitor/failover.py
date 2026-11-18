@@ -1061,8 +1061,12 @@ class NetworkFailover:
         matches = (
             bool(recorded) and set(recorded) == current_names and len(recorded) == len(services)
         )
+        enabled = {service.name for service in services if service.enabled}
+        recorded_first_enabled = (
+            next((name for name in recorded if name in enabled), None) if matches else None
+        )
         note = ""
-        if matches and recorded[0] not in self.backup_services:
+        if matches and recorded_first_enabled not in self.backup_services:
             new_order = recorded
         else:
             # A stale record cannot be applied without dropping or inventing a
@@ -1073,7 +1077,8 @@ class NetworkFailover:
             new_order = promote(services, self.preferred_service)
             if matches:
                 note = (
-                    " (the recorded pre-failover order starts with a backup, so the "
+                    " (the recorded pre-failover order would put a backup first among "
+                    "enabled services, so the "
                     "preferred link was promoted instead of an exact restore)"
                 )
             elif recorded:
@@ -1103,20 +1108,20 @@ class NetworkFailover:
         )
 
     def _end_stale_pause(self, services) -> None:
-        """End the manual-switch pause once the live order starts with the
-        preferred service again, for example after the user reordered by hand.
-        The backup the user chose no longer heads the service order, so the
-        pause has nothing left to hold.
+        """Clear the pause after the enabled preferred service leads the raw order.
+
+        A disabled backup can still lead the raw order and resume when enabled.
+        Skipping over it for routing priority does not end the user's pause.
 
         Called only where the order has already been listed for another
         reason. attempt_failback cannot list it while paused without spending
         the subprocess the pause exists to save.
         """
-        first_enabled = self._active_service(services)
         if (
             self.store.failback_paused
-            and first_enabled is not None
-            and first_enabled.name == self.preferred_service
+            and services
+            and services[0].enabled
+            and services[0].name == self.preferred_service
         ):
             self.store.failback_paused = False
             self.store.save()

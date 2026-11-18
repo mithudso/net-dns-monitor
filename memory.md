@@ -467,7 +467,7 @@ Fresh source-equivalent macOS CI on 911bfc7 passed 3191 cases with two headless 
 
 ## v25 - 2026-11-17 - Application deep optimizer
 
-Delta: 3
+Delta: 4
 
 TASK-429 covers the menu bar, CLI, incident handoffs, App Store, headless and
 fleet workflows, the router boundary, and the fresh checkout and deployment
@@ -489,7 +489,13 @@ Independent source review of `50da7fa` caught five further defects in
 headless heartbeat, install/uninstall, supervised login status, and disabled
 preferred service handling. Eight focused cases reproduced these defects on
 that candidate and passed after the repairs. The fresh collection has
-3205 cases, including the optional parity comparison.
+3207 cases, including the optional parity comparison.
+
+The second source review caught a manual failback pause regression and a
+pre-existing exact-restore bug. A temporarily disabled raw-head backup
+keeps its pause. When an exact restoration would prioritize a backup,
+failback promotes the enabled preferred service. Two targeted tests now
+replay those cases against the candidate and the final source.
 
 The synchronous incident pipeline remains owner-deferred. The public privacy
 notice also needs a coordinated cross-repository update. Live GUI, privilege

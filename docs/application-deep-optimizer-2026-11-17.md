@@ -18,14 +18,17 @@ selected 211 of the application optimizer's 240 methods.
 | Headless install equated successful bootstrap with a running monitor. | Medium | The installer checks the job for a PID within a bounded interval. It reports an unconfirmed start separately from successful launch. |
 | Start at Login stayed checked after stopping supervision. | Medium | The menu uses the supervision flag and explains how to re-enable the existing job without creating a second agent. |
 | A disabled preferred service at the front of the raw order could be reported as already active. | Medium | No-op decisions use the first enabled service and report a refusal when no service is enabled or a third service leads. |
+| Restoring the saved order could leave a backup first among enabled services when a disabled entry led the list. | Medium | Failback promotes the preferred service if the saved order would still prioritize an enabled backup. |
 
 An injected regression run against the original source reproduced the two
 behavior defects. The same nine cases passed after the changes. The tests use
 synthetic LaunchAgent data and stubbed launchd queries. The optimizer retains
 the before/after receipts and source bindings in its local run record.
-An independent review of the first candidate found the five additional
-journey defects above. Eight further cases reproduced them against that
-candidate and passed on the repaired source.
+An independent review of the first candidate found five further journey
+defects. A second review found the saved-order failback defect and caught a
+regression that cleared a manual pause when the first-priority backup was
+temporarily disabled. Ten additional cases reproduced these findings against
+the corresponding candidates and passed on the repaired source.
 
 The synchronous menu-bar incident pipeline remains a High finding under the
 existing owner deferral. The ladder, unified log and escalation can still delay

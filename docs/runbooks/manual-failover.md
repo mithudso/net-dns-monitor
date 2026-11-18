@@ -88,11 +88,15 @@ python3 -m netdnsmonitor.cli failover preferred                 # back to the re
 | 0 | `status` printed, or the outcome starts with `ok:` or `no switch: already on`. `status` also exits 0 when it prints `Failover: could not read the network service order`. |
 | 1 | The outcome starts with `failed:` or `NEEDS_PRIVILEGE:`, or it is any other `no switch:`: a third service is at the head of the order, or another switch attempt is already in progress. |
 | 2 | Failover is not configured (`Failover: not configured ...`), the config file could not be loaded (`config error: ...` on stderr), or argparse rejected the command line. |
+| 130 | Interrupted with Ctrl-C. |
 
 A disabled preferred service at the front of the raw list cannot establish
 that the preferred service leads. The command uses the first enabled service
 when deciding whether the requested preferred switch is already in place.
-| 130 | Interrupted with Ctrl-C. |
+
+If restoring the saved order would put a backup first among enabled services,
+the command promotes the preferred service instead. Temporarily disabling the
+first-priority backup leaves a manual failback pause in place.
 
 ### From the menu bar
 

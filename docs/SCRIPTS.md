@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 3205 tests; the whole decision surface
+python3 -m pytest -q          # 3207 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 3205 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 3205 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 3207 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -875,7 +875,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 3205 tests collected, with skips reported separately
+python3 -m pytest -q            # 3207 tests collected, with skips reported separately
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -889,7 +889,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | Tests | File |
 |---|---|
 | 310 | `test_config.py` |
-| 134 | `test_failover.py` |
+| 136 | `test_failover.py` |
 | 117 | `test_fleet.py` |
 | 114 | `test_settings_window.py` |
 | 103 | `test_privileges.py` |
@@ -979,7 +979,7 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 2 | `test_app_report_storage_wiring.py` |
 | 2 | `test_maintenance_resume_safety.py` |
 | 1 | `test_launchd_supervisor_parity.py` |
-| **3205** | **total** |
+| **3207** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,
