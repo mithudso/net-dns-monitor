@@ -209,3 +209,11 @@ Delta: 1
 Prompt:
 
 > run the application deep optimizer on this repo
+
+## v26 - 2026-11-18 - Todoist Automations MCP
+
+Delta: 1
+
+Prompt:
+
+> Add the todoist mcp server to codex, claude, antigravity, and github copilot: https://ai.todoist.net/mcp/automations
