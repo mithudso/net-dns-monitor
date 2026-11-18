@@ -316,13 +316,19 @@ def test_a_third_service_at_the_head_is_not_called_the_preferred_link():
     """
     text = render_failover_status(failover_snapshot(active_service="Thunderbolt Bridge"))
     assert "on the preferred link" not in text
-    assert "on neither the preferred link nor a backup" in text
+    assert "First enabled in service order: Thunderbolt Bridge (unconfigured side)" in text
 
 
 def test_the_preferred_and_backup_sides_are_still_named():
-    assert "on the preferred link" in render_failover_status(failover_snapshot())
+    assert "AX88179B (configured preferred)" in render_failover_status(failover_snapshot())
     on_backup = failover_snapshot(active_side="backup", active_service="Wi-Fi")
-    assert "on the backup" in render_failover_status(on_backup)
+    assert "Wi-Fi (configured backup)" in render_failover_status(on_backup)
+
+
+def test_failover_status_with_no_enabled_services():
+    text = render_failover_status(failover_snapshot(active_service=None))
+    assert "First enabled in service order: none" in text
+    assert "unconfigured side" not in text
 
 
 def test_failover_status_says_failback_is_paused_and_how_to_end_it():

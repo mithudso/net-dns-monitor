@@ -667,8 +667,7 @@ class NetworkFailover:
         return outcome
 
     def snapshot(self) -> dict:
-        """What the menu bar shows: which side is live, and whether each side
-        can actually carry traffic right now.
+        """Read priority order and probe reachability for the configured services.
 
         Probes every configured interface at once, so this costs one probe
         deadline and a subprocess. Only ever called from an explicit user action

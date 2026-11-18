@@ -148,15 +148,15 @@ def render_failover_status(snapshot: Optional[dict]) -> str:
         return "Failover: not configured (set failover_preferred_service and at least one backup)."
     if snapshot.get("error"):
         return f"Failover: {snapshot['error']}"
-    if snapshot.get("active_side") == BACKUP:
-        where = "on the backup"
-    elif snapshot.get("active_service") == snapshot["preferred"].get("name"):
-        where = "on the preferred link"
+    first_enabled = snapshot.get("active_service")
+    if first_enabled is None:
+        service = "none"
+    elif snapshot.get("active_side") == BACKUP:
+        service = f"{first_enabled} (configured backup)"
+    elif first_enabled == snapshot["preferred"].get("name"):
+        service = f"{first_enabled} (configured preferred)"
     else:
-        # `active_side` reports "preferred" for any head of the order that is
-        # not a configured backup. Calling a Thunderbolt Bridge or a VPN
-        # service "the preferred link" tells the reader a switch-back happened.
-        where = "on neither the preferred link nor a backup"
+        service = f"{first_enabled} (unconfigured side)"
     automatic = "yes" if snapshot["auto_enabled"] else "no (manual only)"
     if snapshot["auto_enabled"] and snapshot.get("failback_paused"):
         # Names the way out as well as the state: while the machine stays on
@@ -165,7 +165,7 @@ def render_failover_status(snapshot: Optional[dict]) -> str:
             "yes (failback paused after a manual switch; `netdns failover preferred` ends it)"
         )
     lines = [
-        f"Active service : {snapshot['active_service']} ({where})",
+        f"First enabled in service order: {service}",
         f"Automatic      : {automatic}",
         "",
         render_interfaces([snapshot["preferred"]] + list(snapshot.get("backups") or [])),

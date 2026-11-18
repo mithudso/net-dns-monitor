@@ -830,6 +830,38 @@ def login_agent_plist(frozen: bool, executable: str, source_root: str) -> dict:
     return plist
 
 
+def _install_login_agent(path: str) -> None:
+    # Share the service installer's reservation so it cannot pass its legacy
+    # agent check while the menu writes another login item.
+    reservation = (
+        pathlib.Path.home()
+        / "Library"
+        / "Application Support"
+        / "net-dns-monitor"
+        / "service-install.lock"
+    )
+    reservation.parent.mkdir(parents=True, exist_ok=True)
+    reservation.mkdir()
+    try:
+        if login_item_installed():
+            return
+        frozen = bool(getattr(sys, "frozen", False))
+        executable = _bundle_executable() if frozen else sys.executable
+        source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        plist = login_agent_plist(frozen, executable, source_root)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        staged = path + ".tmp"
+        try:
+            with open(staged, "wb") as f:
+                plistlib.dump(plist, f)
+            os.replace(staged, path)
+        finally:
+            if os.path.exists(staged):
+                os.remove(staged)
+    finally:
+        reservation.rmdir()
+
+
 def _bundle_executable() -> str:
     try:
         from Foundation import NSBundle
@@ -3298,19 +3330,11 @@ class NetDnsMonitorApp(rumps.App):
         """
         try:
             snapshot = self.failover.snapshot() if self.failover else None
-            lines = build_failover_lines(snapshot)
+            lines = build_failover_lines(
+                snapshot, read_only=not self.capabilities.network_order_write
+            )
         except Exception as exc:  # noqa: BLE001 - an indicator is not worth a crash
             lines = [f"Failover: status unavailable ({type(exc).__name__})"]
-        if not self.capabilities.network_order_write and self.failover is None:
-            # build_failover_lines would say "set both service names in
-            # config.yaml", which sends someone to a setting that cannot help in
-            # a build that cannot write the order.
-            lines = ["Failover: not available in this build"]
-        elif (
-            not self.capabilities.network_order_write and lines and lines[0].startswith("Active: ")
-        ):
-            # "failover is automatic" would be false here: nothing can switch.
-            lines[0] = lines[0].split(" — ")[0] + " — read-only in this build"
         # strict=False: the padded list is longer than the rows on purpose.
         for row, text in zip(
             self.failover_rows, lines + [""] * len(self.failover_rows), strict=False
@@ -3607,19 +3631,7 @@ class NetDnsMonitorApp(rumps.App):
                         "Run `net-dns-monitor-service uninstall` to remove it.",
                     )
             else:
-                frozen = bool(getattr(sys, "frozen", False))
-                executable = _bundle_executable() if frozen else sys.executable
-                source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                plist = login_agent_plist(frozen, executable, source_root)
-                os.makedirs(os.path.dirname(own), exist_ok=True)
-                staged = own + ".tmp"
-                try:
-                    with open(staged, "wb") as f:
-                        plistlib.dump(plist, f)
-                    os.replace(staged, own)
-                finally:
-                    if os.path.exists(staged):
-                        os.remove(staged)
+                _install_login_agent(own)
         except OSError as exc:
             self._notify("Start at Login", f"Not changed ({type(exc).__name__}).")
         sender.state = login_item_installed()

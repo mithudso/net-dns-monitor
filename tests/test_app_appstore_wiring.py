@@ -372,12 +372,18 @@ def test_store_build_failover_rows_are_read_only(tmp_path):
     app = build_app(tmp_path)
     app.failover = RecordingFailover()
     app._refresh_failover_menu()
-    assert app.failover_rows[0].title == "Active: AX88179B — read-only in this build"
+    assert (
+        app.failover_rows[0].title
+        == "First enabled in service order: AX88179B — read-only in this build"
+    )
 
     direct = build_app(tmp_path, capabilities=DIRECT)
     direct.failover = RecordingFailover()
     direct._refresh_failover_menu()
-    assert direct.failover_rows[0].title == "Active: AX88179B — failover is automatic"
+    assert (
+        direct.failover_rows[0].title
+        == "First enabled in service order: AX88179B — failover is automatic"
+    )
 
 
 def test_store_build_unconfigured_failover_does_not_point_at_config_yaml(tmp_path):

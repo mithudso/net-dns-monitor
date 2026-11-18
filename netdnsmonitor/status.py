@@ -231,8 +231,8 @@ def _checked_suffix(taken_at) -> str:
         return ""
 
 
-def _describe_side(side: dict, label: str, is_active: bool, taken_at=None) -> str:
-    marker = "●" if is_active else "○"  # filled = carrying traffic
+def _describe_side(side: dict, label: str, leads_order: bool, taken_at=None) -> str:
+    marker = "●" if leads_order else "○"
     if not side.get("found"):
         return f"{marker} {label}: {side['name']} — NOT FOUND in the service order"
     device = side.get("device") or "?"
@@ -243,48 +243,45 @@ def _describe_side(side: dict, label: str, is_active: bool, taken_at=None) -> st
     )
 
 
-def build_failover_lines(snapshot: Optional[dict]) -> list[str]:
-    """The menu bar's failover indicator: three lines, always in the same
-    order, so the answer to "which one am I on" is in a fixed place.
-
-    Returns a single explanatory line instead when the feature is unconfigured
-    or the service order could not be read -- an indicator that silently shows
-    stale or invented state is worse than one that says it doesn't know.
-    """
+def build_failover_lines(snapshot: Optional[dict], *, read_only: bool = False) -> list[str]:
+    """Describe the first enabled service in priority order and each side's reachability."""
     if snapshot is None:
+        if read_only:
+            return ["Failover: not available in this build"]
         return ["Failover: not configured (set both service names in config.yaml)"]
     if snapshot.get("error"):
         return [f"Failover: {snapshot['error']}"]
 
     mode = "automatic" if snapshot.get("auto_enabled") else "manual only"
     if snapshot.get("auto_enabled") and snapshot.get("failback_paused"):
-        # Without this, "automatic" beside a preferred link that answers again
-        # gives no reason for the machine to stay on the backup. It goes in
-        # this row, not a new one: the menu has exactly three rows, and app.py
-        # cuts this row at its " — " in a build that cannot write the order.
+        # The menu reserves three rows, so keep the reason in the first row.
         mode = "automatic, failback paused after a manual switch"
-    active_service = snapshot.get("active_service")
+    mode_text = "read-only in this build" if read_only else f"failover is {mode}"
+    first_enabled = snapshot.get("active_service")
 
-    # Show the backup that is actually carrying traffic, not simply the first
-    # configured one. With several backups the filled marker would otherwise
-    # land on a service carrying nothing, which is the one thing this row is
-    # supposed to tell you.
     backups = list(snapshot.get("backups") or [])
     backup = next(
-        (b for b in backups if b.get("name") == active_service),
+        (b for b in backups if b.get("name") == first_enabled),
         None,
     ) or snapshot.get("backup")
 
-    # Both markers compare names. `active_side` reports "preferred" for any head
-    # of the order that is not a configured backup, so keying the preferred
-    # marker off it filled that row while a third service carried the traffic.
+    # A third service can lead the order. Only mark a row with a matching name.
     preferred = snapshot["preferred"]
     taken_at = snapshot.get("taken_at")
     lines = [
-        f"Active: {active_service} — failover is {mode}",
-        _describe_side(preferred, "Preferred", preferred.get("name") == active_service, taken_at),
+        f"First enabled in service order: {first_enabled or 'none'} — {mode_text}",
+        _describe_side(
+            preferred,
+            "Preferred",
+            bool(first_enabled) and preferred.get("name") == first_enabled,
+            taken_at,
+        ),
     ]
     if backup:
         label = "Backup" if len(backups) <= 1 else f"Backup (of {len(backups)})"
-        lines.append(_describe_side(backup, label, backup.get("name") == active_service, taken_at))
+        lines.append(
+            _describe_side(
+                backup, label, bool(first_enabled) and backup.get("name") == first_enabled, taken_at
+            )
+        )
     return lines

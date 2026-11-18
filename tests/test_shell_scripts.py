@@ -10,6 +10,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 START = ROOT / "scripts" / "start.sh"
 INSTALL = ROOT / "scripts" / "install.sh"
@@ -113,6 +115,42 @@ def test_service_install_dies_on_an_explicit_bundle_that_does_not_exist():
     branch = body[body.index("NDM_SOURCE_BUNDLE:-") :]
     assert branch.index("die ") < branch.index("keeping the already-installed bundle")
     assert body.index('elif [ -n "${NDM_SOURCE_BUNDLE:-}" ]') < body.index('elif [ -x "$EXEC" ]')
+
+
+@pytest.mark.parametrize("already_loaded", [False, True])
+def test_service_install_refuses_a_standalone_login_item_before_touching_the_bundle(
+    tmp_path, already_loaded
+):
+    home = tmp_path / "home"
+    legacy = home / "Library" / "LaunchAgents" / "com.netdnsmonitor.plist"
+    legacy.parent.mkdir(parents=True)
+    if not already_loaded:
+        legacy.write_text("existing login item")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _stub(
+        bin_dir,
+        "launchctl",
+        'case "$1:$2" in print:gui/*/com.netdnsmonitor) '
+        f"exit {0 if already_loaded else 1} ;; *) exit 97 ;; esac",
+    )
+    raw = tmp_path / "bundle"
+    raw.mkdir()
+    result = subprocess.run(
+        ["bash", str(SERVICE), "install"],
+        env={
+            "HOME": str(home),
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "NDM_SOURCE_BUNDLE": str(raw),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 1
+    assert "Turn off Start at Login" in result.stderr
+    assert not (home / "Applications").exists()
+    assert legacy.exists() == (not already_loaded)
 
 
 def test_service_update_restarts_only_when_supervised():

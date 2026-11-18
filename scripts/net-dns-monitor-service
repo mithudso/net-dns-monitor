@@ -360,7 +360,19 @@ record_source_bundle() {
 
 # --- commands --------------------------------------------------------------
 
+check_no_standalone_login_agent() {
+    local legacy="com.netdnsmonitor"
+    local legacy_target="gui/$(id -u)/$legacy"
+    if [ -e "$HOME/Library/LaunchAgents/$legacy.plist" ] ||
+        launchctl print "$legacy_target" >/dev/null 2>&1; then
+        die "the standalone Start at Login agent is still enabled.
+  Turn off Start at Login in the menu bar. If the old agent is loaded,
+  log out and back in before retrying the supervised install."
+    fi
+}
+
 cmd_install() {
+    check_no_standalone_login_agent
     mkdir -p "$SUPPORT_DIR" "$HOME/Applications" "$(dirname "$APP_LOG")"
 
     if [ -d "$SOURCE_BUNDLE" ]; then

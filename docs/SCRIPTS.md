@@ -33,7 +33,7 @@ configuration. It is off by default and reports
 One command is a gate rather than an experiment. Run it before trusting the rest:
 
 ```bash
-python3 -m pytest -q          # 3193 tests; the whole decision surface
+python3 -m pytest -q          # 3198 tests; the whole decision surface
 ```
 
 ## Quick reference
@@ -45,7 +45,7 @@ python3 -m pytest -q          # 3193 tests; the whole decision surface
 | `python3 -m netdnsmonitor.cli bench` | + measured throughput per interface | **yes** |
 | `python3 -m netdnsmonitor.cli console` | interactive diagnostics | **yes** |
 | `python3 -m netdnsmonitor.app` | the menu bar app — **blocks forever** | **yes** |
-| `python3 -m pytest` | **gate:** the full decision surface, 3193 tests | no |
+| `python3 -m pytest` | **gate:** the full decision surface, 3198 tests | no |
 | one-shot `prober` (below) | "is it up right now", scriptable | **yes** |
 | one-shot `ladder` + `repair_executor` | run the triage steps by hand | **yes** |
 | one-shot `log_watcher` | what log evidence a report would carry | no |
@@ -225,7 +225,7 @@ The item order below is the direct build's, taken from
 `NetDnsMonitorApp._menu_layout`; the indicator text is an example:
 
 ```
-Active: Wi-Fi — failover is automatic
+First enabled in service order: Wi-Fi — failover is automatic
 ○ Preferred: AX88179B (en6) — unreachable
 ● Backup: Wi-Fi (en0) — reachable
 ─────────────────────────
@@ -248,8 +248,8 @@ The Mac App Store build leaves out Open console, Router, Start at Login and the 
 Switch items, and adds "Allow Claude diagnosis…", "Withdraw Claude permission" and
 "Privacy Policy". See `docs/APP_STORE_SUBMISSION.md`.
 
-`●` marks the service at the head of the service order. That is not always the link
-carrying traffic: see `docs/known-issues.md` for an unplugged adapter at the head.
+`●` marks the first enabled service in the service order. Use the live default
+route to identify the interface carrying traffic.
 Reachability is tri-state and says `not probed` for an absent adapter rather than
 `unreachable`, because an unplugged cable is not a dead link.
 
@@ -875,7 +875,7 @@ exception class name.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 3193 passed
+python3 -m pytest -q            # 3198 tests collected, with skips reported separately
 python3 -m pytest -v            # per-test names
 python3 -m pytest tests/test_domain_learner.py -q
 ```
@@ -909,8 +909,8 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 51 | `test_system_log.py` |
 | 50 | `test_maintenance_resume_core.py` |
 | 47 | `test_maintenance_core_regressions.py` |
+| 46 | `test_cli.py` |
 | 46 | `test_router_window.py` |
-| 45 | `test_cli.py` |
 | 45 | `test_throughput.py` |
 | 43 | `test_maintenance_resume_tooling.py` |
 | 41 | `test_app_failover_wiring.py` |
@@ -920,20 +920,20 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 35 | `test_app_log_wiring.py` |
 | 33 | `test_ping.py` |
 | 33 | `test_remediation_editor.py` |
+| 33 | `test_shell_scripts.py` |
 | 32 | `test_interface_probe.py` |
 | 32 | `test_maintenance_resume_shell.py` |
 | 32 | `test_service_order.py` |
 | 31 | `test_forensic_log.py` |
-| 31 | `test_shell_scripts.py` |
 | 30 | `test_app_audit_fixes.py` |
 | 30 | `test_failover_policy.py` |
 | 29 | `test_app_ping_wiring.py` |
 | 29 | `test_notifications.py` |
 | 28 | `test_credentials.py` |
 | 27 | `test_indexer_scripts.py` |
+| 26 | `test_app_router_wiring.py` |
 | 26 | `test_graphs.py` |
 | 26 | `test_net_stats.py` |
-| 25 | `test_app_router_wiring.py` |
 | 25 | `test_history.py` |
 | 24 | `test_ping_monitor.py` |
 | 23 | `test_alert.py` |
@@ -978,7 +978,8 @@ in `docs/TESTING.md`. Do not edit the numbers by hand.
 | 3 | `test_record_demo.py` |
 | 2 | `test_app_report_storage_wiring.py` |
 | 2 | `test_maintenance_resume_safety.py` |
-| **3193** | **total** |
+| 1 | `test_launchd_supervisor_parity.py` |
+| **3198** | **total** |
 
 **What the suite does not cover.** `prober.default_resolve` and `prober.default_connect` are never
 exercised against a real socket — every prober test injects `resolve_fn`/`connect_fn`,

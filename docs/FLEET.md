@@ -176,7 +176,9 @@ from the Credentials menu or by `headless --install`. It is never in the config 
 - **Not encrypted.** The payload is a host name, a classification and step outcomes.
   The signature stops forgery, not eavesdropping on the local network.
 - **Redacted.** Step text is redacted with `sensitive_strings` before it leaves the
-  machine. Probe results, log excerpts, report paths and credentials are never sent.
+  machine. Incident messages include external reachability and DNS health
+  summaries. They omit detailed probe targets and domain results, log excerpts,
+  report paths and credentials.
 - **Rate-limited.** One machine name may log 30 events a minute; the server holds at
   most 1000 machines.
 - **Unsigned mode** (`fleet_allow_unsigned`) lets any host on the network claim any

@@ -266,7 +266,7 @@ def test_failover_status_lists_preferred_and_every_backup():
         ],
     }
     text = render_failover_status(snapshot)
-    assert "on the backup" in text
+    assert "First enabled in service order: M3100 (configured backup)" in text
     assert "USB 2.5G" in text and "M3100" in text and "Wi-Fi" in text
     assert "ok: switched" in text
 

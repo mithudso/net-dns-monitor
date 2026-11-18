@@ -844,6 +844,7 @@ APP_LOG="$HOME/Library/Logs/net-dns-monitor.launchd.log"
 FLAG="$SUPPORT_DIR/flag"; SOURCE_BUNDLE_ORIGIN=synthetic; RESPAWN_GRACE_SECONDS=0
 say() { printf '%s\\n' "$*"; }; warn() { :; }; die() { exit 99; }
 write_plist() { :; }; audit() { :; }; cmd_status() { echo STATUS; }
+check_no_standalone_login_agent() { :; }
 reload_agent() { [[ -d "$HOME/Library/Logs" ]] || exit 98; echo RELOADED; }
 wait_for_pid() { echo 42; }
 """

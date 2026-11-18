@@ -45,7 +45,7 @@ python3 -m netdnsmonitor.cli failover status
 `failover status` prints:
 
 ```
-Active service : <head of the order> (on the backup | on the preferred link | on neither the preferred link nor a backup)
+First enabled in service order: <service> (configured backup | configured preferred | unconfigured side)
 Automatic      : yes | yes (failback paused after a manual switch; `netdns failover preferred` ends it) | no (manual only)
 <table: SERVICE, DEVICE, SVC, REACHABLE, Mbps for the preferred service and each backup>
 ```
@@ -56,18 +56,18 @@ head of the order. See [Automatic failback after a manual switch](#automatic-fai
 `REACHABLE` is `reachable`, `unreachable`, or `not probed`. `not probed` means
 the interface is absent or has no device. It does not mean the link is dead.
 
-"Active service" is the head of the service order, not the live default route.
-An unplugged adapter at the head still shows as active.
+The priority row shows `none` when every service is disabled. To identify the
+live IPv4 default route, run `route -n get default` and read its `interface` field.
 
 In the menu bar, the three rows at the top show the same state:
 
 ```
-Active: <service> — failover is automatic | automatic, failback paused after a manual switch | manual only
+First enabled in service order: <service> — failover is automatic | automatic, failback paused after a manual switch | manual only
 ● Preferred: <name> (<device>) — reachable | unreachable | not probed
 ○ Backup: <name> (<device>) — ...
 ```
 
-A filled marker (`●`) marks the service at the head of the order. **Refresh network
+A filled marker (`●`) marks the first enabled service in the order. **Refresh network
 status** repaints the rows and posts a notification with the last attempt in this
 app session.
 

@@ -18,10 +18,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("launchd_supervisor")
-from launchd_supervisor import ServiceSpec  # noqa: E402
-from launchd_supervisor.plist import plist_dict  # noqa: E402
-
 SERVICE = Path(__file__).resolve().parent.parent / "scripts" / "net-dns-monitor-service"
 LABEL = "com.mitchhudson.net-dns-monitor"
 
@@ -51,10 +47,12 @@ def _script_plist(home: Path) -> dict:
 
 
 def test_library_renders_the_same_launchagent_as_the_service_script(tmp_path):
+    supervisor = pytest.importorskip("launchd_supervisor")
+    plist = pytest.importorskip("launchd_supervisor.plist")
     home = _fake_home(tmp_path)
     support = home / "Library" / "Application Support" / "net-dns-monitor"
     log = home / "Library" / "Logs" / "net-dns-monitor.launchd.log"
-    spec = ServiceSpec(
+    spec = supervisor.ServiceSpec(
         label=LABEL,
         program=str(home / "Applications" / "Net-DNS-Monitor.app"),
         supervise=True,
@@ -63,4 +61,4 @@ def test_library_renders_the_same_launchagent_as_the_service_script(tmp_path):
         stdout_path=str(log),
         stderr_path=str(log),
     )
-    assert plist_dict(spec, strict=True) == _script_plist(home)
+    assert plist.plist_dict(spec, strict=True) == _script_plist(home)

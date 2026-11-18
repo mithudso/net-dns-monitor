@@ -267,8 +267,9 @@ on `fleet_port`. Both are off by default (`fleet_reporting_enabled`,
   event ids per machine are acknowledged but not logged twice.
 - **Flood.** Datagrams over 4096 bytes are dropped unparsed; 30 events a minute per
   machine name; 1000 machines. Refusals are counted by reason, never logged per packet.
-- **Content.** Step text is redacted with `sensitive_strings`. No probe results, log
-  excerpts, paths or credentials are sent.
+- **Content.** Step text is redacted with `sensitive_strings`. Incident messages
+  include external reachability and DNS health summaries. They omit detailed
+  probe targets and domain results, log excerpts, paths and credentials.
 - **Residual.** Not encrypted (host name, classification and step outcomes are
   readable on the LAN). The server holds every machine's key (symmetric HMAC, not a key pair), so a
   compromised server exposes them all; a compromised machine exposes only its own. The

@@ -12,6 +12,7 @@ import plistlib
 import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -508,6 +509,21 @@ def test_turning_login_off_removes_the_agent(tmp_path):
 
     assert not os.path.exists(login_agent_path(LOGIN_AGENT_LABEL))
     assert sender.state is False
+
+
+def test_start_at_login_does_not_create_an_agent_during_service_install(tmp_path):
+    support = Path.home() / "Library" / "Application Support" / "net-dns-monitor"
+    reservation = support / "service-install.lock"
+    reservation.mkdir(parents=True)
+    app = build_app(tmp_path)
+    sender = Sender()
+
+    app.toggle_login(sender)
+
+    assert not os.path.exists(login_agent_path(LOGIN_AGENT_LABEL))
+    assert reservation.is_dir()
+    assert sender.state is False
+    assert any("Not changed" in message for _, message in app.notes)
 
 
 def test_a_failed_write_leaves_the_item_unchecked_and_says_why(tmp_path):
