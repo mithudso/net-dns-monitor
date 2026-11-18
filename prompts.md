@@ -327,3 +327,9 @@ steps[4]:
         events[1]{event_type,event_payload_type,object_id}:
           checkout.session.completed,snapshot,"${node.create-checkout-session-chapter.create-checkout-session.create-checkout-session-request:id}"
 ``` 3. Just use stripe. paypal is being a pain.
+
+## v30 - 2026-11-18 - Stripe key confirmation
+
+Delta: 1
+
+It's set
