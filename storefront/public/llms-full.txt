@@ -1,0 +1,29 @@
+# Net DNS Monitor
+
+> Net DNS Monitor watches connectivity and DNS from the macOS menu bar and records local incident reports when a connection fails.
+
+## Product overview
+
+Source: https://netdnsmonitor.com/
+
+The monitor checks DNS and network connectivity separately to help explain what failed. When a connection drops, it captures available probe results and log evidence in a local incident report. You can share the report with your IT team.
+
+Free includes DNS and connection monitoring, automatic logging and local incident reports, and read-only diagnosis. Premium adds automatic attempts at supported local repairs and records their outcomes. A DNS-cache flush is one example. Some repairs require administrator permissions, and backup-network failover requires a working, previously configured backup connection.
+
+## Installation and support
+
+Source: https://netdnsmonitor.com/#faq
+
+Direct downloads require an Apple silicon Mac and Python 3.13. Unpack the source archive and follow the installation guide it includes. The sandboxed Mac App Store edition uses Apple's installer when available and provides menu-bar checks and local incident reports. The home page shows current edition availability and pricing.
+
+Keep your private order link after completing a Premium purchase. It provides access to the archive. Use the storefront's Support link if you need help.
+
+## Privacy
+
+Source: https://netdnsmonitor.com/privacy/
+
+Cloudflare serves the website and processes connection information such as IP addresses. Stripe Managed Payments processes Premium payments and billing addresses under Stripe's privacy policy. Net DNS Monitor does not receive the full card number or billing address. The store retains transaction references, selected use, order amount and status, and a hash of the private key used for the order link.
+
+The home page uses Google AdSense. Google and advertising partners may use cookies, web beacons, IP addresses, and similar identifiers. The privacy page links to Google's policy and to the Mac app's privacy policy.
+
+The app stores incident reports and logs on your Mac. Optional alerting and diagnostic integrations can send information to the services you configure.

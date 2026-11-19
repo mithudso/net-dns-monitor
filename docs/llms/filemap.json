@@ -1552,6 +1552,22 @@
     "provenance": "[src: \"storefront/public/index.html\"#L1]"
   },
   {
+    "path": "storefront/public/llms-full.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/llms-full.txt\"#L1]"
+  },
+  {
+    "path": "storefront/public/llms.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/llms.txt\"#L1]"
+  },
+  {
     "path": "storefront/public/privacy.html",
     "role": "source",
     "importance": "ordinary",
@@ -1560,12 +1576,28 @@
     "provenance": "[src: \"storefront/public/privacy.html\"#L1]"
   },
   {
+    "path": "storefront/public/robots.txt",
+    "role": "docs",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based docs retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/robots.txt\"#L1]"
+  },
+  {
     "path": "storefront/public/site.css",
     "role": "source",
     "importance": "ordinary",
     "read_depth": "shallow",
     "purpose": "Filename-based source retrieval entry. [asserted]",
     "provenance": "[src: \"storefront/public/site.css\"#L1]"
+  },
+  {
+    "path": "storefront/public/sitemap.xml",
+    "role": "source",
+    "importance": "ordinary",
+    "read_depth": "shallow",
+    "purpose": "Filename-based source retrieval entry. [asserted]",
+    "provenance": "[src: \"storefront/public/sitemap.xml\"#L1]"
   },
   {
     "path": "storefront/worker.mjs",

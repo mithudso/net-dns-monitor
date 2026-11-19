@@ -339,3 +339,13 @@ It's set
 Delta: 1
 
 Add these adsense code pieces to the site: "/Users/mitch/Library/Containers/com.wiheads.paste/Data/tmp/images/Google Chrome Beta 2026-11-18 17.30.24.heic" "/Users/mitch/Library/Containers/com.wiheads.paste/Data/tmp/images/Google Chrome Beta 2026-11-18 17.30.19.heic" "/Users/mitch/Library/Containers/com.wiheads.paste/Data/tmp/images/Google Chrome Beta 2026-11-18 17.30.12.heic"
+
+## v32 - 2026-11-19 - Fleet search discovery
+
+Delta: 1
+
+Prompt:
+
+> Also add to each to create a full sitemap for each site, as well as a llms-full.txt and  llms.txt files for each.
+
+This storefront portion also covers the commissioned deep SEO pass, site readiness and scoped repairs. The fleet operations record holds the cross-site request and any private configuration.
