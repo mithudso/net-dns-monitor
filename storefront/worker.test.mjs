@@ -12,6 +12,9 @@ const release = new Map([[free, "free archive"], [premium, "premium archive"]]);
 const index = await readFile(new URL("./public/index.html", import.meta.url), "utf8");
 const privacy = await readFile(new URL("./public/privacy.html", import.meta.url), "utf8");
 const ads = await readFile(new URL("./public/ads.txt", import.meta.url), "utf8");
+const discovery = new Map(await Promise.all(["robots.txt", "sitemap.xml", "llms.txt", "llms-full.txt"].map(async (file) => [
+  `/${file}`, await readFile(new URL(`./public/${file}`, import.meta.url), "utf8"),
+])));
 const migrations = await Promise.all(["0001_orders.sql", "0002_paypal_tax.sql", "0003_managed_payments.sql"].map(
   (file) => readFile(new URL(`./migrations/${file}`, import.meta.url), "utf8"),
 ));
@@ -39,6 +42,12 @@ function setup(t, simulation) {
         if (path === "/ads.txt") {
           return new Response(request.method === "HEAD" ? null : ads, {
             headers: { "Content-Type": "text/plain; charset=utf-8" },
+          });
+        }
+        if (discovery.has(path)) {
+          const type = path.endsWith(".xml") ? "application/xml" : "text/plain";
+          return new Response(request.method === "HEAD" ? null : discovery.get(path), {
+            headers: { "Content-Type": `${type}; charset=utf-8` },
           });
         }
         return new Response(path === "/privacy/" ? privacy : index);
@@ -100,6 +109,35 @@ test("AdSense verification is public and its script runs only on the homepage", 
     assert.doesNotMatch(response.headers.get("Content-Security-Policy"), /googlesyndication/);
     assert.doesNotMatch(await response.text(), /adsbygoogle\.js/);
   }
+});
+
+test("search discovery serves only canonical public pages and preserves private routes", async (t) => {
+  const { hit } = setup(t, () => assert.fail("Discovery should not call the payment provider"));
+  for (const [path, expected] of discovery) {
+    const response = await hit(path);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("Content-Type"), path.endsWith(".xml") ? /^application\/xml\b/ : /^text\/plain\b/);
+    assert.equal(await response.text(), expected);
+    assert.equal(await (await hit(path, { method: "HEAD" })).text(), "");
+    const alternate = await hit(`https://www.netdnsmonitor.com${path}`);
+    assert.equal(alternate.status, 308);
+    assert.equal(alternate.headers.get("Location"), origin + path);
+    assert.doesNotMatch(expected, /https:\/\/netdnsmonitor\.com\/(?:order|checkout|download\/premium|webhooks)/);
+  }
+  const locations = [...discovery.get("/sitemap.xml").matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
+  assert.deepEqual(locations, [origin + "/", origin + "/privacy/"]);
+  for (const location of locations) {
+    const destination = await hit(location);
+    assert.equal(destination.status, 200);
+    assert.ok((await destination.text()).includes(`rel="canonical" href="${location}"`));
+  }
+  const privacyAlias = await hit("https://www.netdnsmonitor.com/privacy?ref=store");
+  assert.equal(privacyAlias.headers.get("Location"), origin + "/privacy/?ref=store");
+  const privateOrder = await hit("/order");
+  assert.equal(privateOrder.status, 404);
+  assert.match(await privateOrder.text(), /noindex,nofollow/);
+  assert.equal((await hit("/download/premium")).status, 405);
+  assert.equal((await hit("/not-a-real-page")).status, 404);
 });
 
 test("free delivery works and unavailable checkout is hidden", async (t) => {

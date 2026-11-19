@@ -13,6 +13,8 @@ const HOME_CSP = SECURITY["Content-Security-Policy"] +
   "; script-src https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";
 const ORDER_KEY = /^[0-9a-f]{64}$/;
 const PACKAGE_KEY = /^(free|premium)\/Net-DNS-Monitor-[A-Za-z0-9.-]+\.zip$/;
+const PUBLIC_DISCOVERY = new Set(["/robots.txt", "/sitemap.xml", "/llms.txt", "/llms-full.txt"]);
+const WWW_ALIASES = new Set(["/", "/ads.txt", "/privacy", "/privacy/", ...PUBLIC_DISCOVERY]);
 
 function escape(text) {
   return String(text).replace(/[&<>"']/g, (char) => ({
@@ -251,9 +253,9 @@ export function handler(fetcher = fetch) {
     const { method } = request;
     const read = method === "GET" || method === "HEAD";
     if (url.origin !== origin) {
-      if (read && url.hostname === `www.${new URL(origin).hostname}` &&
-          ["/", "/ads.txt", "/privacy", "/privacy/"].includes(url.pathname)) {
-        return Response.redirect(`${origin}${url.pathname}`, 308);
+      if (read && url.hostname === `www.${new URL(origin).hostname}` && WWW_ALIASES.has(url.pathname)) {
+        const path = url.pathname === "/privacy" ? "/privacy/" : url.pathname;
+        return Response.redirect(`${origin}${path}${url.search}`, 308);
       }
       return text("Not found", 404);
     }
@@ -270,10 +272,14 @@ export function handler(fetcher = fetch) {
           if (read) return await home(request, env);
           break;
         case "/privacy":
-          if (read) return Response.redirect(`${origin}/privacy/`, 308);
+          if (read) return Response.redirect(`${origin}/privacy/${url.search}`, 308);
           break;
         case "/privacy/":
         case "/ads.txt":
+        case "/robots.txt":
+        case "/sitemap.xml":
+        case "/llms.txt":
+        case "/llms-full.txt":
         case "/site.css":
         case "/favicon.png":
           if (read) {

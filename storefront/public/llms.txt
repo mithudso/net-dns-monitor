@@ -1,0 +1,9 @@
+# Net DNS Monitor
+
+> Net DNS Monitor watches connectivity and DNS from the macOS menu bar and records local incident reports when a connection fails.
+
+## Product and support
+
+- [Net DNS Monitor](https://netdnsmonitor.com/): How the monitor diagnoses dropped connections, what the editions include, and how to install the app.
+- [Privacy](https://netdnsmonitor.com/privacy/): How the website, purchases, advertising, and Mac app handle data.
+- [Full site text](https://netdnsmonitor.com/llms-full.txt): A plain-text reference for the product, installation, support, and privacy.

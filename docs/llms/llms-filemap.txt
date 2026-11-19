@@ -1,7 +1,7 @@
 # net-dns-monitor — complete source census with shallow cards
-> Source: repository worktree · remote URL omitted @ b0ec7b8 dirty
-> Generated: 2026-11-18 by crawl-repo-to-llms v1.2.0 (partial static adapter)
-> Census: 296 enumerated / 0 deep-read / 296 shallow · partial: census only; no deep cards or executable inventory
+> Source: repository worktree · remote URL omitted @ 12caa17 dirty
+> Generated: 2026-11-19 by crawl-repo-to-llms v1.2.0 (partial static adapter)
+> Census: 300 enumerated / 0 deep-read / 300 shallow · partial: census only; no deep cards or executable inventory
 
 - ".editorconfig" | source | ordinary | shallow. [src: ".editorconfig"#L1] Role and importance are retrieval hints. [asserted]
 - ".env.example" | source | ordinary | shallow. [src: ".env.example"#L1] Role and importance are retrieval hints. [asserted]
@@ -197,8 +197,12 @@
 - "storefront/public/ads.txt" | docs | ordinary | shallow. [src: "storefront/public/ads.txt"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/public/favicon.png" | source | ordinary | shallow. [src: "storefront/public/favicon.png"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/public/index.html" | source | ordinary | shallow. [src: "storefront/public/index.html"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/llms-full.txt" | docs | ordinary | shallow. [src: "storefront/public/llms-full.txt"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/llms.txt" | docs | ordinary | shallow. [src: "storefront/public/llms.txt"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/public/privacy.html" | source | ordinary | shallow. [src: "storefront/public/privacy.html"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/robots.txt" | docs | ordinary | shallow. [src: "storefront/public/robots.txt"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/public/site.css" | source | ordinary | shallow. [src: "storefront/public/site.css"#L1] Role and importance are retrieval hints. [asserted]
+- "storefront/public/sitemap.xml" | source | ordinary | shallow. [src: "storefront/public/sitemap.xml"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/worker.mjs" | source | ordinary | shallow. [src: "storefront/worker.mjs"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/worker.test.mjs" | source | ordinary | shallow. [src: "storefront/worker.test.mjs"#L1] Role and importance are retrieval hints. [asserted]
 - "storefront/wrangler.jsonc" | source | ordinary | shallow. [src: "storefront/wrangler.jsonc"#L1] Role and importance are retrieval hints. [asserted]

@@ -567,3 +567,13 @@ Delta: 1
 TASK-457 publishes three supplied Google AdSense ownership verification methods for the storefront. All three screenshots use publisher ID 1706083044457708. Put the asynchronous loader and publisher meta tag in the public homepage head. Serve the exact seller record as plain text at the root ads.txt URL. Limit the homepage script policy to the supplied loader URL path and keep private order and checkout responses on the existing policy. Document the Google request in the website privacy notice. Verify the exact text, CSP isolation, asset serving, and live Stripe and Free availability before delivery. Google must verify the site separately and control its review and ad serving.
 
 Local verification passed four storefront tests, 3,209 application tests with one optional skip, Ruff, the static documentation census, and the Worker packaging dry run. The existing Cloudflare version has both Stripe secret names. Continue from the merged revision. Upload a candidate, verify its public verification files and checkout controls at zero traffic, then promote and recheck the public domain.
+
+## v32 - 2026-11-19 - Fleet search discovery
+
+Delta: 1
+
+The Net DNS Monitor storefront discovery work is tracked as Stele TASK-459. On the canonical website the home and privacy pages are reachable, and the sitemap and two LLM discovery paths returned 404 at baseline. The sitemap should cover both canonical HTML pages. The protected order, checkout, webhook and archive routes stay outside discovery. Use the isolated storefront branch and verify the Worker against its normal asset binding before deployment.
+
+Implemented four public files in the storefront asset binding, including discovery through robots.txt. The sitemap lists only the canonical product and privacy HTML pages. Privacy now declares its own canonical URL and title description, and home links directly to it. Scoped Worker tests passed 5/5. The pinned Mac app suite passed 3,209 tests with one existing skip. Ruff lint and format passed, and the Wrangler dry-run produced the asset and Worker bundle. The required static source census now includes the four new public files.
+
+After GitHub checks and merge, deploy the reviewed Worker revision with existing configuration preserved. Verify the live asset bodies, canonical links, redirect aliases, free-download HEAD and protected paths. Search engine inclusion and field metrics require provider data.
