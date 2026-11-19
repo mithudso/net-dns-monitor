@@ -577,3 +577,9 @@ The Net DNS Monitor storefront discovery work is tracked as Stele TASK-459. On t
 Implemented four public files in the storefront asset binding, including discovery through robots.txt. The sitemap lists only the canonical product and privacy HTML pages. Privacy now declares its own canonical URL and title description, and home links directly to it. Scoped Worker tests passed 5/5. The pinned Mac app suite passed 3,209 tests with one existing skip. Ruff lint and format passed, and the Wrangler dry-run produced the asset and Worker bundle. The required static source census now includes the four new public files.
 
 After GitHub checks and merge, deploy the reviewed Worker revision with existing configuration preserved. Verify the live asset bodies, canonical links, redirect aliases, free-download HEAD and protected paths. Search engine inclusion and field metrics require provider data.
+
+## v33 - 2026-11-19 - Canonical HTTPS storefront aliases
+
+Delta: 1
+
+The public discovery release merged under PR 49 and deployed. Its first post-deploy edge sweep found that cleartext HTTP reads to the apex delivered 404 while the matching HTTPS storefront was healthy. The follow-up sends safe public GET and HEAD aliases to canonical HTTPS with the same path and query. Unsupported hosts, private order paths, and checkout writes retain their existing handling. The Worker suite passed all 5 tests. Pinned Ruff, 3,209 Python tests, the existing one skip and the documentation census passed again. Complete the checked GitHub merge, deploy the reviewed follow-up, and repeat the HTTPS, alias, order and R2 controls.
