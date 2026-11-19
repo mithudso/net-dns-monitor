@@ -133,6 +133,19 @@ test("search discovery serves only canonical public pages and preserves private 
   }
   const privacyAlias = await hit("https://www.netdnsmonitor.com/privacy?ref=store");
   assert.equal(privacyAlias.headers.get("Location"), origin + "/privacy/?ref=store");
+  for (const publicAlias of [
+    "http://netdnsmonitor.com/privacy?ref=store",
+    "http://www.netdnsmonitor.com/privacy?ref=store",
+  ]) {
+    const redirect = await hit(publicAlias);
+    assert.equal(redirect.status, 308);
+    assert.equal(redirect.headers.get("Location"), origin + "/privacy/?ref=store");
+  }
+  const freeAlias = await hit("http://netdnsmonitor.com/download/free", { method: "HEAD" });
+  assert.equal(freeAlias.headers.get("Location"), origin + "/download/free");
+  assert.equal((await hit("http://netdnsmonitor.com/order")).status, 404);
+  assert.equal((await hit("http://www.netdnsmonitor.com/checkout", { method: "POST" })).status, 404);
+  assert.equal((await hit("https://example.com/sitemap.xml")).status, 404);
   const privateOrder = await hit("/order");
   assert.equal(privateOrder.status, 404);
   assert.match(await privateOrder.text(), /noindex,nofollow/);

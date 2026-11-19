@@ -13,8 +13,10 @@ const HOME_CSP = SECURITY["Content-Security-Policy"] +
   "; script-src https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";
 const ORDER_KEY = /^[0-9a-f]{64}$/;
 const PACKAGE_KEY = /^(free|premium)\/Net-DNS-Monitor-[A-Za-z0-9.-]+\.zip$/;
-const PUBLIC_DISCOVERY = new Set(["/robots.txt", "/sitemap.xml", "/llms.txt", "/llms-full.txt"]);
-const WWW_ALIASES = new Set(["/", "/ads.txt", "/privacy", "/privacy/", ...PUBLIC_DISCOVERY]);
+const PUBLIC_ALIASES = new Set([
+  "/", "/ads.txt", "/privacy", "/privacy/", "/site.css", "/favicon.png", "/download/free",
+  "/robots.txt", "/sitemap.xml", "/llms.txt", "/llms-full.txt",
+]);
 
 function escape(text) {
   return String(text).replace(/[&<>"']/g, (char) => ({
@@ -249,11 +251,13 @@ async function premiumDownload(request, env) {
 export function handler(fetcher = fetch) {
   return async (request, env) => {
     const url = new URL(request.url);
-    const origin = new URL(env.STORE_URL).origin;
+    const canonical = new URL(env.STORE_URL);
+    const origin = canonical.origin;
     const { method } = request;
     const read = method === "GET" || method === "HEAD";
     if (url.origin !== origin) {
-      if (read && url.hostname === `www.${new URL(origin).hostname}` && WWW_ALIASES.has(url.pathname)) {
+      const publicHost = url.hostname === canonical.hostname || url.hostname === `www.${canonical.hostname}`;
+      if (read && publicHost && PUBLIC_ALIASES.has(url.pathname)) {
         const path = url.pathname === "/privacy" ? "/privacy/" : url.pathname;
         return Response.redirect(`${origin}${path}${url.search}`, 308);
       }
